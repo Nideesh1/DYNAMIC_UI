@@ -2,6 +2,13 @@
  * Every scene calls useSceneSetup() once: it connects the shared world to a data source and returns the
  * graph sample ("galaxy") the scene draws as its memory/graph backdrop.
  *
+ * No fake graph: the galaxy is EMPTY until the session has a real one (world.hasGraph). Sources, in order:
+ *   - sim mode: a generated sample (the simulator emits graph reads/writes against it)
+ *   - live: the `/live/graph` sample when the server has a graph DB (FalkorDB provider)
+ *   - live without a sample: a small galaxy grown from the node names seen in `graph` events, so reads/writes
+ *     still light something (nodes appear as they are touched)
+ * Scenes render their graph centerpiece only when `galaxy.nodes.length > 0`; agents take the center otherwise.
+ *
  * Source (see config.tsx): `${source}/live/stream` (SSE world events), `/live/graph` (optional sample),
  * `/live/health` (reachability), `/live/run` (optional "Run agents" button). `sim` forces the simulator;
  * an unreachable server falls back to it automatically.
@@ -12,7 +19,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useSceneConfig } from "./config";
 import { runWorldSimulator } from "./sim";
-import { apply, setGraphLabel, setMode, type WorldEvent } from "./world";
+import { apply, hash01, setGraphLabel, setHasGraph, setMode, type WorldEvent } from "./world";
 
 export type GalaxyNode = { id: string; name: string; kind: string };
 export type Galaxy = { nodes: GalaxyNode[]; links: { source: string; target: string }[] };
@@ -38,8 +45,58 @@ function fakeGalaxy(n = 320): Galaxy {
   return { nodes, links };
 }
 
+const EMPTY: Galaxy = { nodes: [], links: [] };
+const EVENT_GALAXY_MAX = 400;
 
-type Conn = { key: string; source: string; refs: number; stop?: () => void; dead: boolean; galaxy: Galaxy | null };
+/** Galaxy grown from node names seen in live `graph` events (no /live/graph sample available). */
+class EventGalaxy {
+  nodes: GalaxyNode[] = [];
+  links: { source: string; target: string }[] = [];
+  private seen = new Set<string>();
+  private linkSeen = new Set<string>();
+  /** add the event's nodes (+ chain links between them); true when anything new was added */
+  add(names: string[]): boolean {
+    let changed = false;
+    const ids: string[] = [];
+    for (const raw of names) {
+      const name = String(raw).trim();
+      if (!name) continue;
+      const id = name.toLowerCase();
+      ids.push(id);
+      if (this.seen.has(id) || this.nodes.length >= EVENT_GALAXY_MAX) continue;
+      this.seen.add(id);
+      this.nodes.push({ id, name, kind: KINDS[Math.floor(hash01(id, 3) * KINDS.length)] });
+      changed = true;
+    }
+    for (let k = 1; k < ids.length; k++) {
+      const a = ids[k - 1], b = ids[k];
+      if (a === b || !this.seen.has(a) || !this.seen.has(b)) continue;
+      const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+      if (this.linkSeen.has(key)) continue;
+      this.linkSeen.add(key);
+      this.links.push({ source: a, target: b });
+      changed = true;
+    }
+    return changed;
+  }
+  snapshot(): Galaxy {
+    return { nodes: [...this.nodes], links: [...this.links] };
+  }
+}
+
+type Conn = {
+  key: string;
+  source: string;
+  refs: number;
+  stop?: () => void;
+  dead: boolean;
+  /** what scenes draw (EMPTY until the session has a graph) */
+  galaxy: Galaxy;
+  /** true once /live/graph served a sample (then event names no longer reshape the galaxy) */
+  served: boolean;
+  events: EventGalaxy;
+  growTimer: number;
+};
 let conn: Conn | null = null;
 let runAvailable = false;
 const subs = new Set<() => void>();
@@ -89,10 +146,30 @@ function start(c: Conn, sim: boolean) {
     c.stop = runWorldSimulator();
   };
   if (sim) return useSim();
+  // live graph events with no served sample: grow a galaxy from the touched node names (throttled re-emit)
+  const grow = (names: string[]) => {
+    if (c.served || !c.events.add(names)) return;
+    if (!c.galaxy.nodes.length) {
+      // first nodes: publish synchronously so the graph appears in the same render as hasGraph flipping
+      c.galaxy = c.events.snapshot();
+      emit();
+      return;
+    }
+    if (c.growTimer) return;
+    c.growTimer = window.setTimeout(() => {
+      c.growTimer = 0;
+      if (c.dead || c.served) return;
+      c.galaxy = c.events.snapshot();
+      emit();
+    }, 700);
+  };
   (async () => {
     const h = await health(c.source);
     if (c.dead) return;
-    if (!h) return useSim();
+    if (!h) {
+      c.galaxy = fakeGalaxy();
+      return useSim();
+    }
     setMode("live");
     probeRun(c.source, h).then((ok) => !c.dead && setRunAvailable(ok));
     fetch(`${c.source}/live/graph`)
@@ -100,8 +177,10 @@ function start(c: Conn, sim: boolean) {
       .then((g: Galaxy | null) => {
         if (!c.dead && g?.nodes?.length) {
           c.galaxy = g;
+          c.served = true;
           // the server only serves /live/graph when a real graph DB is configured (FalkorDB provider)
           setGraphLabel((g as Galaxy & { label?: string }).label ?? "FalkorDB · knowledge graph");
+          setHasGraph(true);
           emit();
         }
       })
@@ -109,7 +188,9 @@ function start(c: Conn, sim: boolean) {
     const es = new EventSource(`${c.source}/live/stream`);
     es.onmessage = (m) => {
       try {
-        apply(JSON.parse(m.data) as WorldEvent);
+        const ev = JSON.parse(m.data) as WorldEvent;
+        if (ev.type === "graph" && Array.isArray(ev.nodes)) grow(ev.nodes);
+        apply(ev);
       } catch {
         /* ignore malformed */
       }
@@ -121,6 +202,7 @@ function start(c: Conn, sim: boolean) {
 function teardown(c: Conn) {
   c.dead = true;
   c.stop?.();
+  if (c.growTimer) window.clearTimeout(c.growTimer);
   if (conn === c) {
     conn = null;
     setRunAvailable(false);
@@ -137,7 +219,7 @@ function acquire(source: string, sim: boolean): Conn {
     console.warn(`[agentglow] one data source per page: switching from "${conn.key}" to "${key}"`);
     teardown(conn);
   }
-  const c: Conn = { key, source, refs: 1, dead: false, galaxy: null };
+  const c: Conn = { key, source, refs: 1, dead: false, galaxy: sim ? fakeGalaxy() : EMPTY, served: false, events: new EventGalaxy(), growTimer: 0 };
   conn = c;
   start(c, sim);
   return c;
@@ -162,20 +244,21 @@ export async function startLiveRun(topic: string): Promise<string | null> {
 
 export function useSceneSetup(): Galaxy {
   const { source, sim } = useSceneConfig();
-  const [fallback] = useState(fakeGalaxy);
-  const [galaxy, setGalaxy] = useState<Galaxy>(fallback);
+  const [galaxy, setGalaxy] = useState<Galaxy>(EMPTY);
   useEffect(() => {
     const c = acquire(source, sim);
-    const sync = () => setGalaxy(c.galaxy ?? fallback);
+    const sync = () => setGalaxy(c.galaxy);
     sync();
     subs.add(sync);
     return () => {
       subs.delete(sync);
       release(c);
     };
-  }, [source, sim, fallback]);
+  }, [source, sim]);
   return galaxy;
 }
+
+export { useHasGraph } from "./world";
 
 /** Deterministic node index for a name (so the same entity always flares in the same spot). */
 export function nodeIndex(g: Galaxy, name: string): number {
@@ -183,5 +266,5 @@ export function nodeIndex(g: Galaxy, name: string): number {
   if (i >= 0) return i;
   let h = 7;
   for (const ch of name.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return h % g.nodes.length;
+  return g.nodes.length ? h % g.nodes.length : 0;
 }

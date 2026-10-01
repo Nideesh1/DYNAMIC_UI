@@ -155,6 +155,14 @@ export const world = {
   mode: "connecting" as "connecting" | "sim" | "live",
   /** label for the graph/memory structure: names the DB only when the server provides a real graph */
   graphLabel: "knowledge graph",
+  /**
+   * True once this session has a knowledge graph to draw: /live/graph served nodes, a `graph` read/write event
+   * arrived, or sim mode (the simulator emits graph events). Sticky for the session. When false, scenes draw
+   * no graph centerpiece and let the agents take the center. Use `graphMix()` in useFrame for a smooth 0..1.
+   */
+  hasGraph: false,
+  /** performance.now() when hasGraph flipped true (drives the fade-in / layout ease) */
+  hasGraphAt: 0,
   focus: null as string | null, // instance id most recently active
   focusAt: 0,
   /** exited instances kept for the agent panel after their shape fades (newest last, capped) */
@@ -316,6 +324,7 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "graph":
+      setHasGraph(true, false);
       world.instances.get(ev.id)?.nodes && ev.nodes.forEach((n) => world.instances.get(ev.id)!.nodes.add(n));
       for (const n of ev.nodes.slice(0, 20)) world.flares.push({ id: ++seq, run: ev.run_id, instance: ev.id, node: n, op: ev.op, start: now });
       if (ev.op === "read") world.stats.graphReads += ev.nodes.length;
@@ -474,5 +483,50 @@ export function setGraphLabel(label: string) {
 export function setMode(m: "sim" | "live") {
   world.mode = m;
   world.simulated = m === "sim";
+  if (m === "sim") setHasGraph(true, false);
   notify();
+}
+
+/** Mark that this session has a knowledge graph (sticky: once true it stays true). */
+export function setHasGraph(v: boolean, doNotify = true) {
+  if (!v || world.hasGraph) return;
+  world.hasGraph = true;
+  // sim starts with a graph: no fade, it is simply there from the first frame
+  world.hasGraphAt = world.mode === "sim" ? -1e9 : performance.now();
+  if (doNotify) notify();
+}
+
+/** How long the graph fades in / agents ease outward after hasGraph flips true (ms). */
+export const GRAPH_FADE_MS = 1800;
+
+/**
+ * 0..1 graph presence for useFrame: 0 = no graph (agents take the center), 1 = graph fully shown.
+ * Eases (smoothstep) over GRAPH_FADE_MS after hasGraph flips, so layouts can lerp `noGraph -> withGraph` with it.
+ */
+export function graphMix(now = performance.now()): number {
+  if (!world.hasGraph) return 0;
+  const t = Math.min(1, Math.max(0, (now - world.hasGraphAt) / GRAPH_FADE_MS));
+  return t * t * (3 - 2 * t);
+}
+
+/** Lerp helper for layouts: value when there is no graph -> value with the graph, by graphMix(). */
+export function byGraph(noGraph: number, withGraph: number, now = performance.now()): number {
+  return noGraph + (withGraph - noGraph) * graphMix(now);
+}
+
+/** React hook: does this session have a knowledge graph? (re-renders when it flips true) */
+export function useHasGraph(): boolean {
+  return useSyncExternalStore(
+    (f) => (subs.add(f), () => subs.delete(f)),
+    () => world.hasGraph,
+    () => false,
+  );
+}
+
+/**
+ * Agent size boost while there is no graph: agents take the center and read bigger (k, e.g. 1.5), easing back
+ * to 1 as the graph fades in. Multiply on top of roleScale()/lodScale.
+ */
+export function agentBoost(k = 1.5, now = performance.now()): number {
+  return byGraph(k, 1, now);
 }
