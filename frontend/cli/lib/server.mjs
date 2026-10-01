@@ -20,7 +20,10 @@ export function pySpecs(version, env = process.env) {
 }
 
 export function serveArgv(runner, spec, port) {
-  return [...runner.args, "--from", spec, "agentglow", "serve", "--host", "127.0.0.1", "--port", String(port)];
+  // a local checkout (AGENTGLOW_PY_SPEC=/path/to/backend): run it editable, uvx otherwise serves a stale cached build
+  const local = /^(\/|\.|~|[A-Za-z]:[\\/])/.test(spec);
+  return [...runner.args, ...(local ? ["--with-editable", spec] : []), "--from", spec,
+    "agentglow", "serve", "--host", "127.0.0.1", "--port", String(port)];
 }
 
 export function alive(pid) {

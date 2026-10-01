@@ -7,6 +7,8 @@ put identity data, raw user prompts or secrets into world events. See docs/SPEC.
   `enduser.*`, and any key containing "email".
 - Raw user prompt keys are dropped: `user_prompt*`, `gen_ai.prompt*`, hook `prompt`/`user_message`, and
   `llm_request.context` unless it is a short label (Claude Code sends "interaction"/"tool").
+- A skill name (`agentglow.skill`) is reduced to `[A-Za-z0-9:_.-]`, max 64 chars (`skill_name`); nothing else
+  about a skill use (args, prompt text) is ever carried in the skill event.
 - Secret-looking substrings are replaced with `[redacted]` in every remaining string value (API keys, tokens,
   `Bearer ...`), including the agent-level text the product shows (input.value, output.value, final text).
 """
@@ -31,6 +33,16 @@ SECRET_RE = re.compile(
     re.I,
 )
 HOOK_PROMPT_KEYS = {"prompt", "user_message"}
+SKILL_KEY = "agentglow.skill"
+SKILL_BAD_RE = re.compile(r"[^A-Za-z0-9:_.-]+")
+
+
+def skill_name(v: object) -> str:
+    """Skill name → safe label: disallowed runs become `-`, max 64 chars, leading `/` dropped. Empty if nothing left."""
+    if v is None or isinstance(v, bool) or not isinstance(v, (str, int, float)):
+        return ""
+    s = SKILL_BAD_RE.sub("-", redact(str(v).strip().lstrip("/"))).strip("-")
+    return s[:64]
 
 
 def redact(s: str) -> str:
@@ -59,7 +71,7 @@ def scrub_attrs(attrs: dict | None) -> dict:
             continue
         if k == "llm_request.context" and not (isinstance(v, str) and LABEL_RE.match(v)):
             continue
-        out[k] = _value(v)
+        out[k] = skill_name(v) if k == SKILL_KEY else _value(v)
     return out
 
 

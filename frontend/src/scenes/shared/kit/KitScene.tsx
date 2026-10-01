@@ -16,6 +16,7 @@ import { applyDim } from "./dim";
 import { FitCamera, setFitProfile, type FitProfile } from "./fit";
 import { LabelScope, labels, labelTick, type LabelScopeValue } from "./labels";
 import { config, kitExtents, kitTick } from "./layout";
+import { SkillSigil } from "./SkillSigil";
 import { PRESETS, type LayoutPreset, type PresetName } from "./presets";
 import { kit, type KitAgent, type KitBackend, type KitMcp, type KitRun, type Plane } from "./state";
 
@@ -163,7 +164,7 @@ function Dim({ agent, children }: { agent: KitAgent; children: ReactNode }) {
   return <group ref={g}>{children}</group>;
 }
 
-function Agents({ Agent, Edge, selected, onSelect }: { Agent: ComponentType<AgentSlotProps>; Edge?: ComponentType<EdgeSlotProps>; selected: string | null; onSelect: (id: string) => void }) {
+function Agents({ Agent, Edge, selected, onSelect, radius, height }: { Agent: ComponentType<AgentSlotProps>; Edge?: ComponentType<EdgeSlotProps>; selected: string | null; onSelect: (id: string) => void; radius: number; height: number }) {
   const list = useKitAgents();
   return (
     <>
@@ -173,6 +174,7 @@ function Agents({ Agent, Edge, selected, onSelect }: { Agent: ComponentType<Agen
             {Edge && a.inst.parent && <Edge child={a} />}
             <Agent agent={a} selected={selected === a.id} onSelect={onSelect} />
           </Dim>
+          <SkillSigil agent={a} radius={radius} height={height} />
         </AgentScope>
       ))}
     </>
@@ -362,7 +364,7 @@ export function KitScene(p: KitSceneProps) {
             {p.RunMarker && <Runs RunMarker={p.RunMarker} />}
             {p.GraphResource && <SideGraph galaxy={galaxy} Graph={p.GraphResource} />}
             <Mcp McpServer={p.McpServer} Backend={p.Backend} />
-            <Agents Agent={p.Agent} Edge={p.Edge} selected={selected} onSelect={setSelected} />
+            <Agents Agent={p.Agent} Edge={p.Edge} selected={selected} onSelect={setSelected} radius={agentRadius} height={p.plane === "xz" ? agentHeight : 0} />
             <LabelScope.Provider value={SCOPE_CLUSTER}>
               <Clusters cluster={p.cluster} Cluster={p.Cluster} offset={p.clusterOffset} />
             </LabelScope.Provider>

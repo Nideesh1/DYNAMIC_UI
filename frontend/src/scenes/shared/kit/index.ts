@@ -40,6 +40,8 @@
  *  dim.ts       finished look: done/failed agents stay at their spot DIMMED (agent.dim) until their run ends,
  *               then the whole run fades out together (world.ts isDone / isLive).
  *  labels.ts    label registry + declutter pass (LabelScope context, priorities, framed label rects).
+ *  SkillSigil.tsx  amber ring + skill name around an agent using a skill (world `skill` events), all themes;
+ *               shown >= SKILL_MIN_MS after a start, lazily mounted, billboarded, sized from the agent.
  *  KitScene.tsx <KitScene> + slot prop types + useKitAgents / useKitRuns / useKitMcp / useKitList,
  *               <GraphStageSpace> (stage-space drawing inside the side graph), `hudInset` (HUD dock).
  *

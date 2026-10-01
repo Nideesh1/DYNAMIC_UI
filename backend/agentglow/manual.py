@@ -201,6 +201,9 @@ class Agent(_Span):
     def graph(self, op: str = "read", nodes: list | None = None, system: str = "graph") -> _Span:
         return graph(op, nodes, system, parent=self)
 
+    def skill(self, name: str) -> "Tool":
+        return skill(name, parent=self)
+
     def agent(self, name: str, final: bool | None = None, task: str | None = None) -> "Agent":
         return Agent(name, final=final, task=task, parent=self)
 
@@ -261,6 +264,12 @@ def graph(op: str = "read", nodes: list | None = None, system: str = "graph", pa
     """`with agentglow.graph("write", nodes=["Patient", "Appointment"]):` - a knowledge-graph / DB read or write."""
     return _Span(f"db {op}", {"db.system": system, "agentglow.db.op": op,
                               "agentglow.graph.nodes": [str(n) for n in (nodes or [])] or None}, parent=parent)
+
+
+def skill(name: str, parent: _Span | None = None) -> Tool:
+    """`with agentglow.skill("summarize"):` - the current agent uses a skill (a tool span with `agentglow.skill`:
+    a skill badge on the agent while the block runs). Only the name is recorded."""
+    return Tool(name, None, parent=parent, extra={"agentglow.skill": name})
 
 
 def current_agent() -> Agent | None:

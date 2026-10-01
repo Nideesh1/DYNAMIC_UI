@@ -31,6 +31,8 @@ export type WorldEvent =
   | { type: "tool"; run_id: string; id: string; tool: string; args_preview: string; ts: number }
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
   | { type: "final"; run_id: string; text: string; ts: number }
+  // an agent instance started / finished using a SKILL (e.g. "pptx"); the same call also arrives as a `tool` event
+  | { type: "skill"; run_id: string; id: string; name: string; status: "start" | "end"; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
   // topology: an MCP server and the backends behind it (sent at worker startup and to every new viewer)
   | { type: "mcp_register"; run_id?: string; server: string; resources: { name: string; kind: ResourceKind }[]; ts: number }
@@ -97,7 +99,43 @@ export type Instance = {
   toolCalls: number;
   mcpCalls: number;
   nodes: Set<string>; // FalkorDB nodes this agent read/wrote
+  /** skills this agent used: name -> active now, times started, performance.now() of the last start/end */
+  skills: Map<string, SkillUse>;
+  /** newest started skill ("" = none yet) and when the last active one ended (0 while one is active) */
+  skill: string;
+  skillEndAt: number;
 };
+/** one skill on one agent; startAt / endAt (performance.now()) drive its sigil ring (endAt 0 while active) */
+export type SkillUse = { active: boolean; count: number; last: number; startAt: number; endAt: number };
+/** Skill sigil timing (ms): fade in, minimum time shown after a start (Claude Code skills are instantaneous tool
+ *  calls, start and end arrive ms apart), fade out after the (effective) end. */
+export const SKILL_IN_MS = 450;
+export const SKILL_MIN_MS = 4000;
+export const SKILL_OUT_MS = 1100;
+/** a skill that never reports an end (crashed tool, lost event) is treated as ended after this long */
+export const SKILL_MAX_MS = 60_000;
+/** when a skill's sigil starts fading out: its end, but never before SKILL_MIN_MS after its start (0 = active) */
+export function skillOffAt(u: SkillUse): number {
+  return u.endAt ? Math.max(u.endAt, u.startAt + SKILL_MIN_MS) : 0;
+}
+/** 0..1 visibility of one skill's sigil: eases in after a start, holds while active (>= SKILL_MIN_MS), then fades. */
+export function skillUseMix(u: SkillUse, now = performance.now()): number {
+  const t = Math.min(1, Math.max(0, (now - u.startAt) / SKILL_IN_MS));
+  const off = skillOffAt(u);
+  const o = off ? Math.min(1, Math.max(0, 1 - (now - off) / SKILL_OUT_MS)) : 1;
+  return t * (2 - t) * o * o * (3 - 2 * o);
+}
+let mixNow = 0;
+let mixMax = 0;
+const mixVisit = (u: SkillUse) => void (mixMax = Math.max(mixMax, skillUseMix(u, mixNow)));
+/** 0..1: the strongest skill sigil on this agent (0 = none shown) */
+export function skillMix(i: Instance, now = performance.now()): number {
+  if (!i.skill) return 0;
+  mixNow = now;
+  mixMax = 0;
+  i.skills.forEach(mixVisit);
+  return mixMax;
+}
 export type Run = {
   id: string;
   topic: string;
@@ -302,6 +340,9 @@ export function apply(ev: WorldEvent) {
         toolCalls: 0,
         mcpCalls: 0,
         nodes: new Set(),
+        skills: new Map(),
+        skill: "",
+        skillEndAt: 0,
       });
       world.stats.spawned++;
       world.focus = ev.id;
@@ -322,6 +363,11 @@ export function apply(ev: WorldEvent) {
         if (!r || r.endedAt || staleReplay) i.exitAt = now;
       }
       for (const [k, p] of world.mcpPending) if (p.instance === ev.id) world.mcpPending.delete(k);
+      if (i && i.skill && !i.skillEndAt) {
+        // finished without a skill "end": close its skills so their sigils fade with it
+        for (const u of i.skills.values()) if (u.active) (u.active = false), (u.endAt = now);
+        i.skillEndAt = now;
+      }
       break;
     }
     case "agent": {
@@ -358,6 +404,32 @@ export function apply(ev: WorldEvent) {
         i.pulse = Math.max(i.pulse, 0.5);
         i.pulseAt = now;
         i.toolCalls++;
+      }
+      break;
+    }
+    case "skill": {
+      const i = world.instances.get(ev.id);
+      if (!i) break;
+      let u = i.skills.get(ev.name);
+      if (!u) i.skills.set(ev.name, (u = { active: false, count: 0, last: now, startAt: 0, endAt: 0 }));
+      u.last = now;
+      if (ev.status === "start") {
+        // a start while its sigil is still up keeps it up (no second fade-in), else it eases in
+        const shown = u.count > 0 && (!u.endAt || now < skillOffAt(u) + SKILL_OUT_MS);
+        u.startAt = shown ? now - Math.min(SKILL_IN_MS, now - u.startAt) : now;
+        u.endAt = 0;
+        u.active = true;
+        u.count++;
+        i.skill = ev.name;
+        i.skillEndAt = 0;
+      } else if (u.active) {
+        u.active = false;
+        u.endAt = now;
+        // another skill still running: `skill` switches to the newest one, else all ended now
+        let other = "";
+        for (const [n, v] of i.skills) if (v.active && (!other || v.startAt > i.skills.get(other)!.startAt)) other = n;
+        if (other) i.skill = other;
+        else i.skillEndAt = now;
       }
       break;
     }
@@ -431,6 +503,17 @@ export function apply(ev: WorldEvent) {
 const runsWithInstances = new Set<string>();
 const runsWorking = new Set<string>();
 const runLastDone = new Map<string, number>();
+/** end skills that have been "active" for longer than SKILL_MAX_MS without an end event, so rings never get stuck */
+function expireSkills(i: Instance, now: number) {
+  let open = false;
+  for (const u of i.skills.values()) {
+    if (!u.active) continue;
+    if (now - u.startAt > SKILL_MAX_MS) (u.active = false), (u.endAt = now);
+    else open = true;
+  }
+  if (!open) i.skillEndAt = now;
+}
+
 export function tick(now = performance.now()) {
   let changed = false;
   runsWithInstances.clear();
@@ -438,6 +521,7 @@ export function tick(now = performance.now()) {
   runLastDone.clear();
   for (const [id, i] of world.instances) {
     runsWithInstances.add(i.run);
+    if (i.skill && !i.skillEndAt) expireSkills(i, now);
     if (!i.exitAt) {
       if (!i.doneAt) runsWorking.add(i.run);
       else {
