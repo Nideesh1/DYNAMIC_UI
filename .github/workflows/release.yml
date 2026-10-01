@@ -64,6 +64,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: python-dist, path: dist/ }
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true   # re-running a release must not fail on an already-published version
 
   npm:
     needs: build
@@ -79,6 +81,6 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Publish
         working-directory: pkg
-        run: npm publish --access public --provenance
+        run: npm publish --access public --provenance --ignore-scripts   # dist/ is already built in the build job
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
