@@ -113,10 +113,10 @@ function Orb({ id, selected, onSelect }: { id: string; selected: boolean; onSele
       const m2 = i.exitAt ? (i.status === "failed" ? "failed" : "done") : age < 2.4 ? "born" : "";
       if (m2 !== mode.current) {
         mode.current = m2;
-        label.current.textContent = m2 === "born" ? `+ ${TYPE_LABEL[type]}` : m2 === "done" ? `✓ ${TYPE_LABEL[type]} done` : m2 === "failed" ? `✕ ${TYPE_LABEL[type]}` : "";
+        label.current.textContent = m2 === "born" ? `+ ${i.name}` : m2 === "done" ? `✓ ${i.name} done` : m2 === "failed" ? `✕ ${i.name}` : "";
       }
       const o = m2 === "born" ? Math.min(1, (2.4 - age) / 0.6) : m2 ? Math.max(0, 1 - exitT * 1.6) : selected ? 1 : 0;
-      if (!m2 && selected) label.current.textContent = TYPE_LABEL[type];
+      if (!m2 && selected) label.current.textContent = i.name;
       label.current.style.opacity = String(o);
     }
   });

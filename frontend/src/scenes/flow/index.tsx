@@ -162,7 +162,7 @@ function FocusLabel({ engine }: { engine: FlowEngine }) {
     if (el.current) el.current.style.opacity = show ? "1" : "0";
     if (!s || !s.inst || !g.current || !el.current) return;
     g.current.position.set(s.x, s.y + 1.25, s.z);
-    const txt = `${TYPE_LABEL[s.inst.type]} · ${s.inst.status}`;
+    const txt = `${s.inst.name} · ${s.inst.status}`;
     if (txt !== last.current) {
       last.current = txt;
       el.current.textContent = txt;

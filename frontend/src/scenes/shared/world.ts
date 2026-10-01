@@ -23,7 +23,7 @@ export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "fai
 export type WorldEvent =
   | { type: "run"; run_id: string; status: "started" | "completed" | "failed"; topic: string; workflow: string; ts: number }
   | { type: "step"; run_id: string; step: StepName; status: "running" | "done" | "failed"; ts: number }
-  | { type: "spawn"; run_id: string; id: string; agent: AgentType; parent_id: string | null; subagent?: boolean; ts: number }
+  | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; ts: number }
   | { type: "exit"; run_id: string; id: string; status: "done" | "failed"; ts: number }
   | { type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; ts: number }
   | { type: "llm"; run_id: string; id: string; tokens_in: number; tokens_out: number; latency_ms: number; ts: number }
@@ -74,7 +74,9 @@ export const KIND_COLOR: Record<string, string> = {
 export type Instance = {
   id: string;
   run: string;
-  type: AgentType;
+  type: AgentType; // visual role (layout + color) mapped from the real agent name
+  /** real agent name from the trace (e.g. "researcher", "web_scout", "report_writer") */
+  name: string;
   parent: string | null;
   status: InstanceStatus;
   /** spawned by a parent agent via the deepagents `task` tool (vs a top-level workflow-step agent) */
@@ -222,14 +224,16 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "spawn": {
+      const subagent = ev.subagent ?? ev.agent.endsWith("_scout");
       const index = [...world.instances.values()].filter((i) => i.run === ev.run_id).length;
       world.instances.set(ev.id, {
         id: ev.id,
         run: ev.run_id,
-        type: ev.agent,
+        type: roleOf(ev.agent, subagent),
+        name: ev.agent,
         parent: ev.parent_id,
         status: "spawning",
-        subagent: ev.subagent ?? ev.agent.endsWith("_scout"),
+        subagent,
         bornAt: now,
         exitAt: 0,
         pulse: 0.8,
@@ -402,6 +406,17 @@ export function energy(i: Instance, now = performance.now()) {
 /** Seconds an MCP call has been waiting (for tether intensity / color: amber → red past ~2s). */
 export function waitSeconds(p: McpPending, now = performance.now()) {
   return (now - p.since) / 1000;
+}
+
+const KNOWN = new Set(["planner", "researcher", "graph_scout", "records_scout", "data_scout", "writer"]);
+/** Map any real agent name onto a visual role the scenes know (layout + color). */
+export function roleOf(name: string, subagent: boolean): AgentType {
+  if (KNOWN.has(name)) return name as AgentType;
+  const n = name.toLowerCase();
+  if (/plan|orchestr|router|supervis|manager|coordinat/.test(n)) return "planner";
+  if (/writ|report|summar|answer|final|compose|draft/.test(n)) return "writer";
+  if (subagent) return /graph|kg|memory|retriev|search|web/.test(n) ? "graph_scout" : /record|doc|file/.test(n) ? "records_scout" : "data_scout";
+  return "researcher";
 }
 
 /** Visual size multiplier by role: parent agents read bigger, their subagents smaller. */

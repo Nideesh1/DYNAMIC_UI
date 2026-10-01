@@ -12,8 +12,10 @@ export function shortRun(run: string) {
 }
 
 function short(id: string) {
+  const inst = world.instances.get(id) ?? world.archive.get(id);
+  if (inst) return `${inst.name} · ${shortRun(inst.run)}`;
   const [run, type, k] = id.split(":");
-  return `${type}${k !== undefined ? `#${Number(k) + 1}` : ""} · ${shortRun(run)}`;
+  return `${type ?? id.slice(0, 6)}${k !== undefined ? `#${Number(k) + 1}` : ""} · ${shortRun(run)}`;
 }
 
 export function describe(e: WorldEvent): string {
@@ -300,7 +302,7 @@ function AgentDetail({ i }: { i: Instance }) {
   return (
     <div className="ap-detail" style={{ ["--c" as string]: TYPE_COLOR[i.type] }}>
       <h3>
-        <i /> {TYPE_LABEL[i.type]} <small>{short(i.id)}</small>
+        <i /> {i.name} <small>{TYPE_LABEL[i.type]} · {shortRun(i.run)}</small>
       </h3>
       <div className="ap-status" data-status={i.exitAt ? "done" : i.status}>
         {i.exitAt ? `finished (${i.status})` : i.status} · alive {age(i)}

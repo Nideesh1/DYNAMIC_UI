@@ -459,6 +459,8 @@ class Mapper:
         if nodes is None and isinstance(raw, str):
             nodes = [x.strip() for x in raw.split(",") if x.strip()]
         nodes = [str(n) for n in (nodes or [])][:50]
+        if not nodes and op == "read":
+            return  # empty read: nothing to light up
         out.append({"type": "graph", "run_id": s.run, "id": self._owner(s, out), "op": op, "nodes": nodes, "ts": ts})
 
     def _final(self, run_id: str, text: Any, out: list, ts: int) -> None:
@@ -484,4 +486,8 @@ class Mapper:
 
     def _workflow(self, s: Span) -> str:
         a = s.attrs
-        return str(a.get("hatchet.workflow_name") or a.get("agentglow.run.workflow") or s.name)
+        name = a.get("hatchet.workflow_name") or a.get("agentglow.run.workflow")
+        if name:
+            return str(name)
+        # a Hatchet step span's own name is the step ("plan"), not the workflow
+        return "hatchet" if a.get("hatchet.step_name") or s.name.startswith("hatchet.") else s.name

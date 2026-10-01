@@ -57,6 +57,7 @@ def step_span(topic: str):
     """The Hatchet task span (current inside a task) — tag it with the run topic."""
     span = trace.get_current_span()
     span.set_attribute("agentglow.run.topic", topic)
+    span.set_attribute("agentglow.run.workflow", WORKFLOW)
     return span
 
 
