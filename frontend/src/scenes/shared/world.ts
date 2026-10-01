@@ -112,6 +112,8 @@ export type SkillUse = { active: boolean; count: number; last: number; startAt: 
 export const SKILL_IN_MS = 450;
 export const SKILL_MIN_MS = 4000;
 export const SKILL_OUT_MS = 1100;
+/** a skill that never reports an end (crashed tool, lost event) is treated as ended after this long */
+export const SKILL_MAX_MS = 60_000;
 /** when a skill's sigil starts fading out: its end, but never before SKILL_MIN_MS after its start (0 = active) */
 export function skillOffAt(u: SkillUse): number {
   return u.endAt ? Math.max(u.endAt, u.startAt + SKILL_MIN_MS) : 0;
@@ -501,6 +503,17 @@ export function apply(ev: WorldEvent) {
 const runsWithInstances = new Set<string>();
 const runsWorking = new Set<string>();
 const runLastDone = new Map<string, number>();
+/** end skills that have been "active" for longer than SKILL_MAX_MS without an end event, so rings never get stuck */
+function expireSkills(i: Instance, now: number) {
+  let open = false;
+  for (const u of i.skills.values()) {
+    if (!u.active) continue;
+    if (now - u.startAt > SKILL_MAX_MS) (u.active = false), (u.endAt = now);
+    else open = true;
+  }
+  if (!open) i.skillEndAt = now;
+}
+
 export function tick(now = performance.now()) {
   let changed = false;
   runsWithInstances.clear();
@@ -508,6 +521,7 @@ export function tick(now = performance.now()) {
   runLastDone.clear();
   for (const [id, i] of world.instances) {
     runsWithInstances.add(i.run);
+    if (i.skill && !i.skillEndAt) expireSkills(i, now);
     if (!i.exitAt) {
       if (!i.doneAt) runsWorking.add(i.run);
       else {
