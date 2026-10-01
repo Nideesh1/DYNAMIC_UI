@@ -13,6 +13,7 @@ import { LOD_LANES, lod, lodTick, type LodCluster } from "../lod";
 import { useSceneSetup, type Galaxy } from "../useSceneSetup";
 import { tick, useHasGraph } from "../world";
 import { FitCamera, setFitProfile, type FitProfile } from "./fit";
+import { LabelScope, labels, labelTick, type LabelScopeValue } from "./labels";
 import { config, kitExtents, kitTick } from "./layout";
 import { PRESETS, type LayoutPreset, type PresetName } from "./presets";
 import { kit, type KitAgent, type KitBackend, type KitMcp, type KitRun, type Plane } from "./state";
@@ -119,13 +120,30 @@ export const useKitMcp = () => useKitList(mcpV, mcpList);
 // ------------------------------------------------------------------ pieces
 
 function Ticker() {
-  useFrame(() => {
+  useEffect(() => {
+    labels.active++;
+    return () => void labels.active--;
+  }, []);
+  useFrame(({ size }) => {
     const now = performance.now();
     tick(now);
     lodTick(now);
     kitTick(now);
+    labelTick(now, size.width, size.height);
   });
   return null;
+}
+
+// label declutter classes per slot (see labels.ts)
+const SCOPE_RUN: LabelScopeValue = { kind: "run" };
+const SCOPE_MCP: LabelScopeValue = { kind: "mcp" };
+const SCOPE_BACKEND: LabelScopeValue = { kind: "backend" };
+const SCOPE_GRAPH: LabelScopeValue = { kind: "graph" };
+const SCOPE_CLUSTER: LabelScopeValue = { kind: "cluster" };
+
+function AgentScope({ agent, children }: { agent: KitAgent; children: ReactNode }) {
+  const v = useMemo<LabelScopeValue>(() => ({ kind: agent.depth > 0 ? "sub" : "agent", agent }), [agent]);
+  return <LabelScope.Provider value={v}>{children}</LabelScope.Provider>;
 }
 
 function Agents({ Agent, Edge, selected, onSelect }: { Agent: ComponentType<AgentSlotProps>; Edge?: ComponentType<EdgeSlotProps>; selected: string | null; onSelect: (id: string) => void }) {
@@ -133,10 +151,10 @@ function Agents({ Agent, Edge, selected, onSelect }: { Agent: ComponentType<Agen
   return (
     <>
       {list.map((a) => (
-        <Fragment key={a.uid}>
+        <AgentScope key={a.uid} agent={a}>
           {Edge && a.inst.parent && <Edge child={a} />}
           <Agent agent={a} selected={selected === a.id} onSelect={onSelect} />
-        </Fragment>
+        </AgentScope>
       ))}
     </>
   );
@@ -145,11 +163,11 @@ function Agents({ Agent, Edge, selected, onSelect }: { Agent: ComponentType<Agen
 function Runs({ RunMarker }: { RunMarker: ComponentType<RunSlotProps> }) {
   const list = useKitRuns();
   return (
-    <>
+    <LabelScope.Provider value={SCOPE_RUN}>
       {list.map((r) => (
         <RunMarker key={r.uid} run={r} />
       ))}
-    </>
+    </LabelScope.Provider>
   );
 }
 
@@ -159,8 +177,8 @@ function Mcp({ McpServer, Backend }: { McpServer?: ComponentType<McpServerSlotPr
     <>
       {list.map((m) => (
         <Fragment key={m.uid}>
-          {McpServer && <McpServer mcp={m} />}
-          {Backend && [...m.backends.values()].map((b) => <Backend key={b.uid} mcp={m} backend={b} />)}
+          <LabelScope.Provider value={SCOPE_MCP}>{McpServer && <McpServer mcp={m} />}</LabelScope.Provider>
+          <LabelScope.Provider value={SCOPE_BACKEND}>{Backend && [...m.backends.values()].map((b) => <Backend key={b.uid} mcp={m} backend={b} />)}</LabelScope.Provider>
         </Fragment>
       ))}
     </>
@@ -209,7 +227,9 @@ function SideGraph({ galaxy, Graph }: { galaxy: Galaxy; Graph: ComponentType<Gra
   if (!on) return null;
   return (
     <group ref={g} scale={0.0001} visible={false}>
-      <Graph galaxy={galaxy} />
+      <LabelScope.Provider value={SCOPE_GRAPH}>
+        <Graph galaxy={galaxy} />
+      </LabelScope.Provider>
     </group>
   );
 }
@@ -269,7 +289,9 @@ export function KitScene(p: KitSceneProps) {
             {p.GraphResource && <SideGraph galaxy={galaxy} Graph={p.GraphResource} />}
             <Mcp McpServer={p.McpServer} Backend={p.Backend} />
             <Agents Agent={p.Agent} Edge={p.Edge} selected={selected} onSelect={setSelected} />
-            <Clusters cluster={p.cluster} Cluster={p.Cluster} offset={p.clusterOffset} />
+            <LabelScope.Provider value={SCOPE_CLUSTER}>
+              <Clusters cluster={p.cluster} Cluster={p.Cluster} offset={p.clusterOffset} />
+            </LabelScope.Provider>
             {p.children}
           </group>
         </GalaxyCtx.Provider>
