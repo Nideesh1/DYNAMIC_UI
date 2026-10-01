@@ -11,7 +11,7 @@ import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { TYPE_COLOR, TYPE_LABEL, energy, presence, world, type Comet, type Instance } from "../shared/world";
+import { TYPE_COLOR, TYPE_LABEL, energy, presence, roleScale, world, type Comet, type Instance } from "../shared/world";
 import {
   CONE_GEO,
   SPHERE_GEO,
@@ -70,7 +70,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       spike: additiveBasic(color),
       ring: additiveBasic(AMBER),
       halo: glowSpriteMaterial(color),
-      syn: tubeMaterial(color, isScout(inst.type) ? 0.045 : 0.06, 0.55),
+      syn: tubeMaterial(color, isScout(inst.type) ? 0.08 : 0.11, 0.8),
     }),
     [color, inst.type],
   );
@@ -131,7 +131,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       else root.current.position.copy(s.live);
     }
     const seedScale = grow < 1 ? 0.18 : 0;
-    const sc = Math.max(seedScale, 0.18 + 0.82 * swell) * (1 - wither * wither * 0.95);
+    const sc = Math.max(seedScale, 0.18 + 0.82 * swell) * (1 - wither * wither * 0.95) * roleScale(inst);
     body.current?.scale.setScalar(Math.max(0.0001, sc * (0.55 + e * 0.06 + (thinking ? pulse * 0.05 : breath * 0.04))));
     spikesG.current?.scale.setScalar(Math.max(0.0001, s.spik * (0.85 + pulse * 0.15)));
 
@@ -156,7 +156,8 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     if (label.current) label.current.style.opacity = String(clamp01(swell) * (1 - wither) * 0.95);
 
     // synapse: visible while both ends live; grows on birth, retracts on exit
-    s.parentK += ((parent && !parent.exitAt ? 1 : 0) - s.parentK) * 0.03;
+    // lineage link stays while the CHILD is alive (parent may already be done)
+    s.parentK += ((inst.parent && !inst.exitAt ? 1 : 0) - s.parentK) * 0.05;
     const u = m.syn.uniforms;
     u.uP0.value.copy(s.p0);
     u.uP1.value.copy(s.p1);
@@ -167,7 +168,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     u.uHead.value = grow < 1 ? grow : -1;
     u.uTail.value = 0.1;
     u.uHeadColor.value.copy(color).multiplyScalar(1.5);
-    u.uOpacity.value = (thinking ? 0.55 : 0.32) * Math.max(0.0, Math.min(s.parentK, pres > 0 ? 1 : 0)) + (grow < 1 ? 0.3 : 0);
+    u.uOpacity.value = (thinking ? 1.1 : 0.75) * Math.max(0.0, Math.min(s.parentK, pres > 0 ? 1 : 0)) + (grow < 1 ? 0.4 : 0);
   });
 
   const select = (ev: { stopPropagation: () => void }) => {
@@ -190,8 +191,8 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
         </group>
         <mesh ref={ring} geometry={ringGeo} material={m.ring} visible={false} />
         <sprite ref={halo} material={m.halo} />
-        <Html center position={[0, -1.05, 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-          <div ref={label} className="scene-label" style={{ ["--c" as string]: TYPE_COLOR[inst.type], fontSize: 10, padding: "1px 6px", opacity: 0 }}>
+        <Html center position={[0, -1.05 * roleScale(inst), 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+          <div ref={label} className="scene-label" style={{ ["--c" as string]: TYPE_COLOR[inst.type], fontSize: inst.subagent ? 9 : 12, padding: "1px 6px", opacity: 0 }}>
             {TYPE_LABEL[inst.type]}
             {k !== undefined ? ` ${Number(k) + 1}` : ""}
           </div>

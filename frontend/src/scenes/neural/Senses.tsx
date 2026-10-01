@@ -56,19 +56,41 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
   }, [srv.color, sp, pos, col]);
   const g = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
+  const label = useRef<HTMLDivElement>(null);
+  const lastText = useRef("");
   useFrame(({ clock }) => {
     const now = performance.now();
     const busy = res.inflight > 0;
     const act = Math.exp(-((now - res.activeAt) / 1000) * 1.5);
-    const k2 = (busy ? 0.8 : 0.22) + act * 0.5;
+    // idle = dim; the backend being queried lights up hard and pulses
+    const beat = busy ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 5) : 0;
+    const k2 = busy ? 1.6 + beat * 0.9 : 0.12 + act * 0.9;
     m.fill.color.copy(col).multiplyScalar(k2 * 0.55);
     m.line.color.copy(col).multiplyScalar(k2 * 1.6);
-    m.halo.color.copy(col).multiplyScalar(busy ? 0.18 : 0.04 + act * 0.1);
-    halo.current?.scale.setScalar(2.6);
+    m.halo.color.copy(col).multiplyScalar(busy ? 0.45 + beat * 0.25 : 0.02 + act * 0.25);
+    halo.current?.scale.setScalar(busy ? 4.2 + beat * 0.8 : 2.4 + act * 1.2);
+    if (g.current) g.current.scale.setScalar(busy ? 1.2 + beat * 0.08 : 1 + act * 0.1);
+    // label shows the live tool call while busy, "✓ returned" briefly after
+    let txt = res.name;
+    let call: McpCall | null = null;
+    for (const c of world.mcpCalls) if (c.server === srv.name && c.resource === res.name && (!call || c.start > call.start)) call = c;
+    if (busy) {
+      let tool = "";
+      for (const p of world.mcpPending.values()) if (p.server === srv.name && p.resource === res.name) tool = p.tool;
+      txt = `${res.name} ▶ ${tool || "query"}()`;
+    } else if (call && call.phase === "result" && now - call.start < 1800) txt = `${res.name} ✓ returned`;
+    if (label.current) {
+      if (txt !== lastText.current) {
+        label.current.textContent = txt;
+        lastText.current = txt;
+      }
+      label.current.style.opacity = busy ? "1" : String(0.55 + act * 0.45);
+      label.current.style.fontWeight = busy ? "700" : "500";
+    }
     if (g.current) g.current.rotation.y = res.kind === "spark" || res.kind === "api" ? clock.elapsedTime * (busy ? 0.6 : 0.15) : Math.sin(clock.elapsedTime * 0.2) * 0.25;
     // edge lights up while the backend is busy; pulse travels server → backend (call) / backend → server (result)
     const u = m.edge.uniforms;
-    u.uOpacity.value = busy ? 0.7 : 0.2 + act * 0.3;
+    u.uOpacity.value = busy ? 1.4 : 0.15 + act * 0.5;
     let latest: McpCall | null = null;
     for (const c of world.mcpCalls) if (c.server === srv.name && c.resource === res.name && (!latest || c.start > latest.start)) latest = c;
     if (latest && now - latest.start < latest.dur) {
@@ -92,7 +114,7 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
           ))}
         </group>
         <Html center position={[0, -0.95, 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-          <div className="scene-label" style={{ ["--c" as string]: srv.color, fontSize: 10, fontWeight: 500, padding: "1px 6px", opacity: 0.85 }}>
+          <div ref={label} className="scene-label" style={{ ["--c" as string]: srv.color, fontSize: 10, fontWeight: 500, padding: "1px 6px", opacity: 0.55 }}>
             {res.name}
           </div>
         </Html>

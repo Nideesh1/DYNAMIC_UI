@@ -111,7 +111,7 @@ class Tap(AsyncCallbackHandler):
             sub = f"{self.run}:{stype}:{self.n_sub - 1}"
             self.sub_of_task[run_id] = sub
             self._emit({"type": "tool", "id": who, "tool": "task", "args_preview": _preview(f"{stype}: {a.get('description', '')}")})
-            self._emit({"type": "spawn", "id": sub, "agent": stype, "parent_id": who})
+            self._emit({"type": "spawn", "id": sub, "agent": stype, "parent_id": who, "subagent": True})
             self._emit({"type": "message", "from_id": who, "to_id": sub, "text": _preview(a.get("description", "delegated task"), 160)})
             self._emit({"type": "agent", "id": who, "status": "waiting"})
             self.thinking.discard(who)

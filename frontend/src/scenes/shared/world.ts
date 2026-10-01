@@ -23,7 +23,7 @@ export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "fai
 export type WorldEvent =
   | { type: "run"; run_id: string; status: "started" | "completed" | "failed"; topic: string; workflow: string; ts: number }
   | { type: "step"; run_id: string; step: StepName; status: "running" | "done" | "failed"; ts: number }
-  | { type: "spawn"; run_id: string; id: string; agent: AgentType; parent_id: string | null; ts: number }
+  | { type: "spawn"; run_id: string; id: string; agent: AgentType; parent_id: string | null; subagent?: boolean; ts: number }
   | { type: "exit"; run_id: string; id: string; status: "done" | "failed"; ts: number }
   | { type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; ts: number }
   | { type: "llm"; run_id: string; id: string; tokens_in: number; tokens_out: number; latency_ms: number; ts: number }
@@ -67,6 +67,8 @@ export type Instance = {
   type: AgentType;
   parent: string | null;
   status: InstanceStatus;
+  /** spawned by a parent agent via the deepagents `task` tool (vs a top-level workflow-step agent) */
+  subagent: boolean;
   bornAt: number; // performance.now()
   exitAt: number; // 0 while alive
   pulse: number; // last LLM pulse strength 0..2.5
@@ -217,6 +219,7 @@ export function apply(ev: WorldEvent) {
         type: ev.agent,
         parent: ev.parent_id,
         status: "spawning",
+        subagent: ev.subagent ?? ev.agent.endsWith("_scout"),
         bornAt: now,
         exitAt: 0,
         pulse: 0.8,
@@ -380,6 +383,11 @@ export function energy(i: Instance, now = performance.now()) {
 /** Seconds an MCP call has been waiting (for tether intensity / color: amber → red past ~2s). */
 export function waitSeconds(p: McpPending, now = performance.now()) {
   return (now - p.since) / 1000;
+}
+
+/** Visual size multiplier by role: parent agents read bigger, their subagents smaller. */
+export function roleScale(i: Instance): number {
+  return i.subagent ? 0.6 : 1.35;
 }
 
 /** Look up a live or archived (exited) instance. */
