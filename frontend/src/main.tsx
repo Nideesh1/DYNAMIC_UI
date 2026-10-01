@@ -1,12 +1,20 @@
 import "./disable-devtools";
 import "@openuidev/react-ui/styles/index.css";
-import { StrictMode } from "react";
+import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+
+const Observatory = lazy(() => import("./observatory/Observatory"));
 import "./app.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    {location.pathname.replace(/\/$/, "") === "/live" ? (
+      <Suspense fallback={null}>
+        <Observatory />
+      </Suspense>
+    ) : (
+      <App />
+    )}
   </StrictMode>,
 );
