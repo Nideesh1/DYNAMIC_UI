@@ -2,33 +2,55 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
 
+from .claude_code import ClaudeCodeAdapter
 from .mapper import Mapper
+from .scrub import scrub_span
 
 
 class Hub:
     def __init__(self, buffer: int = 5000) -> None:
         self.mapper = Mapper()
+        self.claude_code = ClaudeCodeAdapter()
         self.buffer: deque[dict] = deque(maxlen=buffer)
         self.topology: dict[str, dict] = {}  # server -> merged mcp_register event
         self.subs: set[asyncio.Queue] = set()
 
-    # ---- ingest
+    # ---- ingest (every path scrubs spans here: identity keys, raw prompts and secrets never reach events)
     def ingest_live(self, items: list[dict]) -> int:
         n = 0
         for it in items:
             if isinstance(it, dict) and isinstance(it.get("span"), dict):
-                self.publish(self.mapper.feed(it.get("kind", "end"), it["span"]))
+                self.publish(self.mapper.feed(it.get("kind", "end"), scrub_span(it["span"])))
                 n += 1
         return n
 
-    def ingest_ended(self, spans: list[dict]) -> int:
-        self.publish(self.mapper.feed_ended(spans))
+    def _ingest_cc(self, items: list[dict]) -> int:
+        """Claude Code adapter output: live span items, plus ready `llm` events (trace tokens on hooks agents)."""
+        for it in items:
+            if "kind" in it:
+                self.ingest_live([it])
+            else:
+                self.publish([it])
+        return len(items)
+
+    def ingest_ended(self, spans: list[dict], now_ms: int | None = None) -> int:
+        spans = [scrub_span(s) for s in spans]
+        cc = [s for s in spans if str(s.get("name") or "").startswith("claude_code.")]
+        if cc:  # Claude Code OTel traces: merged with its hooks, or translated into live spans
+            self._ingest_cc(self.claude_code.traces(cc, now_ms or int(time.time() * 1000)))
+        self.publish(self.mapper.feed_ended([s for s in spans if not str(s.get("name") or "").startswith("claude_code.")]))
         return len(spans)
+
+    def ingest_hook(self, payload: dict, now_ms: int) -> int:
+        """Claude Code hook payload (scrubbed by the adapter before it builds spans)."""
+        return self._ingest_cc(self.claude_code.handle(payload, now_ms))
 
     def tick(self, now_ms: int) -> None:
         self.publish(self.mapper.tick(now_ms))
+        self._ingest_cc(self.claude_code.tick(now_ms))
 
     def register_mcp(self, server: str, resources: list[dict], ts: int) -> dict:
         ev = {"type": "mcp_register", "server": server, "resources": resources, "ts": ts}

@@ -31,6 +31,7 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
 - Endpoints:
   - `POST /v1/live` - JSON batch `[{"kind":"start"|"end","span":{...}}]` from `watch()` (real-time starts).
   - `POST /v1/traces` - standard OTLP/HTTP (protobuf + JSON), ended spans from any OTel SDK/collector.
+  - `POST /v1/claude-code` - Claude Code `"type": "http"` hook payloads (examples/claude-code/) → synthetic live spans.
   - `GET /live/stream` - SSE world events. On connect: replay MCP topology + events of runs still in progress. Keepalive 15s.
   - `POST /live/topology` - `{server, resources:[{name, kind}]}` → `mcp_register` (also `agentglow.register_mcp(...)`).
   - `GET /live/graph` - optional graph sample `{nodes:[{id,name,kind}],links:[{source,target}]}`; FalkorDB provider when `AGENTGLOW_FALKOR_URL`/`--falkor` set, else 404 → UI uses its built-in sample.
@@ -60,11 +61,28 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 | MCP | span with `mcp.server.name` or `agentglow.mcp.server` (+ `agentglow.mcp.resource`, `agentglow.mcp.resource_kind` ∈ db,warehouse,spark,api,storage,queue) | `mcp call` (start, pending) / `mcp result` (end); auto `mcp_register` of server+resource |
 | Graph/DB | `db.system` set | `graph` read/write (`agentglow.db.op` or inferred from query text); node names from `agentglow.graph.nodes` (list or JSON string) |
 | Final | `agentglow.final` attr on any span | `final` text |
+| Claude Code hooks | `POST /v1/claude-code` (`claude_code.py`) | one prompt = one run (topic `Claude Code · <cwd basename>`); main agent `claude`; `Agent` tool → `task` + subagent named after its type; tools; 0-token thinking pulses |
+| Claude Code traces | `claude_code.*` spans on `/v1/traces` (`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`) | `interaction` = run + `claude`; each `agent_id` = subagent (`subagent: true`, parent `claude`, linked via its `Agent` tool's `tool.execution` span; named from `query_source_safe` `agent.<kind>.<type>`, else `subagent <id>`); `llm_request` = `llm` with `tokens_in` = input + cache_creation, `tokens_out`, `tokens_cached` = cache_read; `tool` = tool event (`tool.blocked_on_user`/`tool.execution` skipped). Merged with hooks when `session.id` is a hooks session: no new agents/tools, token `llm` events go to the hooks agents (by `agent_id`), hook pulses muted, exits wait up to 15 s for the agent's trace spans |
 Unknown spans are kept only for tree/ownership. Ids: agent instance id = span id (stable string).
+
+## Privacy
+One scrub (`backend/agentglow/scrub.py`) runs at the Hub ingestion boundary for every path (`/v1/live`, `/v1/traces`
+JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload before building spans):
+- Dropped identity keys: `user.email`, `user.id`, `user.account_id`, `user.account_uuid`, `organization.id`,
+  `enduser.*`, any key containing `email`.
+- Dropped raw user prompts: `user_prompt*` (Claude Code traces), `gen_ai.prompt*`, `llm_request.context` unless it is
+  a short label, hook `prompt` / `user_message` (a `<task-notification>` keeps only its `<summary>`). Claude Code run
+  topics are `Claude Code · <cwd basename>` (hooks) / `Claude Code` (traces only), never the prompt.
+- Redacted to `[redacted]` in every remaining string (span names, attributes, hook fields, incl. the agent-level
+  text the UI shows: `input.value`, `output.value`, tool args, final text): `sk-ant-…`, `sk-…`, `npm_…`, `AIza…`,
+  `ghp_…`/`github_pat_…`, `xox?-…`, `AKIA…`, `Bearer …`.
+- Kept (scrubbed): agent-level content (delegation text, tool args, results, final answer). Tool args can contain
+  file paths.
 
 ## World events (backend → frontend)
 Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
 `run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final`. `ts` = epoch ms.
+`llm` may carry an extra `tokens_cached` (prompt-cache reads) when known.
 
 ## Frontend (`frontend/`, npm `agentglow`)
 - App build: gallery at `/`, `/<theme>`; data source = same origin `/live/stream` (`?source=<url>` override, `?sim=1` simulator, `?hud=0` hide HUD). Output copied to `backend/agentglow/static/`.

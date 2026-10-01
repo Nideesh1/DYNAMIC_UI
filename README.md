@@ -92,7 +92,7 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [langgraph](examples/langgraph) | LangGraph supervisor with worker agents (`langgraph-supervisor` works too) |
 | [openai-agents](examples/openai-agents) | OpenAI Agents SDK: handoffs + agent-as-tool |
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
-| [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks - no code |
+| [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts) - no code |
 | [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |
 
 Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
@@ -127,5 +127,8 @@ uv build --package agentglow --out-dir dist         # sdist + wheel
 | `backend/` | Python package `agentglow`: server, `watch()`, OTel → agent mapping, Claude Code hooks |
 | `frontend/` | the 3D scenes; npm package `agentglow` + the app bundled into the Python package |
 | `examples/` | real agent stacks instrumented with one line |
+
+Privacy: every ingestion path drops identity attributes (emails, user/account/org ids) and raw user prompts and
+redacts secret-looking values before anything reaches the stream (see [docs/SPEC.md](docs/SPEC.md#privacy)).
 
 MIT licensed.

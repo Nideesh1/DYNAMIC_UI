@@ -1,4 +1,13 @@
 {
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+    "OTEL_TRACES_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://localhost:8100/v1/traces",
+    "OTEL_TRACES_EXPORT_INTERVAL": "1000",
+    "OTEL_LOG_USER_PROMPTS": "0"
+  },
   "hooks": {
     "SessionStart": [
       {

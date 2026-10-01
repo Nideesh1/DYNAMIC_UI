@@ -293,7 +293,12 @@ class Mapper:
             owner = self._owner(s, out)
             tin = int(a.get("gen_ai.usage.input_tokens") or a.get("llm.token_count.prompt") or a.get("gen_ai.usage.prompt_tokens") or 0)
             tout = int(a.get("gen_ai.usage.output_tokens") or a.get("llm.token_count.completion") or a.get("gen_ai.usage.completion_tokens") or 0)
-            out.append({"type": "llm", "run_id": s.run, "id": owner, "tokens_in": tin, "tokens_out": tout, "latency_ms": max(0, s.end - s.start), "ts": ts})
+            if a.get("agentglow.llm.pulse") is not False:  # False: tokens come from elsewhere (Claude Code traces)
+                ev = {"type": "llm", "run_id": s.run, "id": owner, "tokens_in": tin, "tokens_out": tout, "latency_ms": max(0, s.end - s.start), "ts": ts}
+                cached = int(a.get("gen_ai.usage.cache_read_input_tokens") or 0)
+                if cached:
+                    ev["tokens_cached"] = cached
+                out.append(ev)
             self._remember_tool_calls(owner, a)
             ag = self.agents.get(owner)
             text = self._llm_text(a)

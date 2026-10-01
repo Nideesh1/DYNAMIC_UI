@@ -15,7 +15,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from . import __version__
-from .claude_code import ClaudeCodeAdapter
 from .state import Hub
 
 STATIC = Path(__file__).parent / "static"
@@ -135,8 +134,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
         async def ticker():  # completes idle Hatchet runs (no span marks a whole workflow run's end)
             while True:
                 await asyncio.sleep(1)
-                hub.tick(now_ms())
-                hub.ingest_live(claude_code.tick(now_ms()))  # end idle Claude Code sessions' dangling spans
+                hub.tick(now_ms())  # also ends idle Claude Code sessions' dangling spans
 
         task = asyncio.create_task(ticker())
         yield
@@ -144,7 +142,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
 
     app = FastAPI(title="agentglow", version=__version__, lifespan=lifespan)
     app.state.hub = hub
-    claude_code = app.state.claude_code = ClaudeCodeAdapter()
+    app.state.claude_code = hub.claude_code
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
     async def body_of(request: Request) -> bytes:
@@ -161,7 +159,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
         """Claude Code `"type": "http"` hook target (examples/claude-code/). Always 200 with `{}` (= no decision), so a
         bad payload or an unknown event never affects the Claude Code session."""
         try:
-            hub.ingest_live(claude_code.handle(json.loads(await body_of(request) or b"{}"), now_ms()))
+            hub.ingest_hook(json.loads(await body_of(request) or b"{}"), now_ms())
         except Exception:
             import logging
 
@@ -176,7 +174,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
             spans = otlp_json_spans(json.loads(body)) if "json" in ctype else otlp_proto_spans(body)
         except Exception as e:
             raise HTTPException(400, f"bad OTLP payload: {e}")
-        hub.ingest_ended(spans)
+        hub.ingest_ended(spans, now_ms())
         if "json" in ctype:
             return JSONResponse({"partialSuccess": {}})
         from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse

@@ -21,6 +21,7 @@ def tool(event, name, tid, agent=None, **inp):
 EXP = ("agent-exp-1", "Explore")
 GEN = ("agent-gen-2", "general-purpose")
 PROMPT = "Count files in backend/ and frontend/src in parallel"
+LABEL = "Claude Code · repo"  # neutral run topic (cwd basename), never the prompt
 
 SEQUENCE = [
     hook("SessionStart", source="startup", model="claude-haiku-4-5"),
@@ -57,7 +58,7 @@ def replay(seq=SEQUENCE):
 def test_full_session_maps_to_spawns_tools_and_exits():
     evs, c = replay()
     run_id = f"{SID}:1"
-    assert evs[0] == {**evs[0], "type": "run", "status": "started", "topic": PROMPT, "workflow": "claude-code", "run_id": run_id}
+    assert evs[0] == {**evs[0], "type": "run", "status": "started", "topic": LABEL, "workflow": "claude-code", "run_id": run_id}
     assert evs[-1]["type"] == "run" and evs[-1]["status"] == "completed"
     assert all(e.get("run_id") in (run_id, None) for e in evs)
 
@@ -103,8 +104,8 @@ def test_each_prompt_is_its_own_run():
            hook("UserPromptSubmit", prompt="two"), hook("Stop")]
     evs, _ = replay(seq)
     runs = [(e["run_id"], e["status"], e["topic"]) for e in evs if e["type"] == "run"]
-    assert runs == [(f"{SID}:1", "started", "one"), (f"{SID}:1", "completed", "one"),
-                    (f"{SID}:2", "started", "two"), (f"{SID}:2", "completed", "two")]
+    assert runs == [(f"{SID}:1", "started", LABEL), (f"{SID}:1", "completed", LABEL),
+                    (f"{SID}:2", "started", LABEL), (f"{SID}:2", "completed", LABEL)]
 
 
 def test_out_of_order_async_hooks_and_unknown_events():
@@ -162,7 +163,7 @@ def test_background_subagents_keep_the_run_and_main_agent_alive():
     ]
     evs, c = replay(seq)
     assert [e["agent"] for e in evs if e["type"] == "spawn"] == ["claude", "Explore"]
-    assert [(e["status"], e["topic"]) for e in evs if e["type"] == "run"] == [("started", "fan out"), ("completed", "fan out")]
+    assert [(e["status"], e["topic"]) for e in evs if e["type"] == "run"] == [("started", LABEL), ("completed", LABEL)]
     assert [e["text"] for e in evs if e["type"] == "final"] == ["All done: 3"]
     ids = {e["agent"]: e["id"] for e in evs if e["type"] == "spawn"}
     assert [e["id"] for e in evs if e["type"] == "exit"] == [ids["Explore"], ids["claude"]]

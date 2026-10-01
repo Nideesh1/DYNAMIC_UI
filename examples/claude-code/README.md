@@ -17,14 +17,40 @@ To make it permanent for a project, copy the `"hooks"` block of [settings.json](
 
 | Claude Code | AgentGlow |
 |---|---|
-| each prompt you submit | a run (topic = your prompt) |
+| each prompt you submit | a run (topic = `Claude Code · <folder>`, never your prompt) |
 | main session | agent `claude`: thinking between tool calls, waiting while subagents work |
 | `Agent` tool call → subagent | `task` tool + spawned subagent (named after its type) with the delegation text |
 | any tool (`Bash`, `Read`, `Glob`, …) | tool event on the agent that called it |
 | `mcp__<server>__<tool>` | MCP call/result to `<server>` |
 | subagent / turn finishes | exit + result message; `Stop` text = run final |
 
-Hooks carry no token counts, so LLM pulses show `0→0 tok`. Background subagents keep the run open until they report back.
+Background subagents keep the run open until they report back.
+
+## Token-sized pulses (optional OTel traces)
+
+Hooks carry no token counts (LLM pulses show `0→0 tok`). Claude Code's OTel traces beta does: the `"env"` block in
+[settings.json](settings.json) turns it on and points it at AgentGlow's `POST /v1/traces`:
+
+| Variable | Value |
+|---|---|
+| `CLAUDE_CODE_ENABLE_TELEMETRY` | `1` |
+| `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA` | `1` (traces) |
+| `OTEL_TRACES_EXPORTER` | `otlp` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/json` |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | `http://localhost:8100/v1/traces` |
+| `OTEL_TRACES_EXPORT_INTERVAL` | `1000` (ms; default 5000, lower = token pulses arrive sooner) |
+| `OTEL_LOG_USER_PROMPTS` | `0` (AgentGlow drops prompts anyway) |
+
+With hooks and traces both on, AgentGlow merges them by session id: hooks still drive live spawns, names and tools;
+traces add one `llm` pulse per model call with real tokens (`input + cache creation` in, output out, cache reads as
+`tokens_cached`) on the same agents. No duplicate agents; a finished agent waits up to 15 s for its last trace spans.
+Traces alone also work (agents appear when spans are exported, subagents named from their type).
+
+Claude Code only honours telemetry variables from `--settings`, `~/.claude/settings.json`, managed settings or your
+shell, not from a project's `.claude/settings.json`. To keep hooks only, delete the `"env"` block.
+
+Privacy: AgentGlow drops identity attributes (email, account/org ids) and prompts and redacts secret-looking values
+from every payload before it reaches the stream (docs/SPEC.md, "Privacy").
 
 The hooks are `"async": true` (fire-and-forget, 2 s timeout), so they never slow Claude Code down, and if AgentGlow
 isn't running Claude Code just carries on. Async hooks can arrive slightly out of order; AgentGlow reorders them, and
