@@ -2,12 +2,12 @@
 #
 #   cp .env.example .env   # + one LLM key (GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY, AGENT_MODEL to match)
 #   docker compose up -d --build                                  # agentglow, falkordb, hatchet, mcp, worker, trigger
-#   open http://localhost:8100                                    # 3D scenes
+#   open http://localhost:8101                                    # 3D scenes
 #   docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 #   ./scripts/gen-obs-env.sh   # only for the langfuse profile: generates its local secrets into .env
 #   LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d     # + Langfuse at :3100 (same spans, side by side)
 #
-# Ports avoid the BOOKIE stack: agentglow :8100, Hatchet UI :8180, Hatchet gRPC :7177, Langfuse :3100.
+# Ports avoid the BOOKIE stack: agentglow :8101, Hatchet UI :8180, Hatchet gRPC :7177, Langfuse :3100.
 
 services:
   # ------------------------------------------------------------------ visualizer
@@ -15,7 +15,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    ports: ["8100:8100"]
+    ports: ["8101:8100"]   # host 8101: 8100 is left for `npx agentglow setup` (Claude Code)
     environment:
       AGENTGLOW_FALKOR_URL: redis://falkordb:6379
       AGENTGLOW_RUN_WEBHOOK: http://trigger:8300/run   # "▶ Run agents" in the UI → the example's trigger service

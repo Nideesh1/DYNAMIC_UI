@@ -39,7 +39,7 @@ to the same TracerProvider that `watch()` reuses.
 ```bash
 cp .env.example .env            # set one LLM key (+ AGENT_MODEL if not Gemini; see "LLM provider" below)
 docker compose up -d --build    # agentglow, falkordb, hatchet, mcp, worker, trigger
-open http://localhost:8100      # scenes - press ▶ Run agents, or:
+open http://localhost:8101      # scenes - press ▶ Run agents, or:
 docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
 

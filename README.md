@@ -67,7 +67,7 @@ Nested `agentglow.agent(...)` = subagent; also `agentglow.mcp(...)`, `agentglow.
 ### 4. The full demo stack (Hatchet + deepagents + MCP + FalkorDB)
 ```bash
 cp .env.example .env                 # add one LLM key (OpenAI, Anthropic or Gemini) - that's all the setup
-docker compose up                    # then open http://localhost:8100 and press ▶ Run agents
+docker compose up                    # then open http://localhost:8101 and press ▶ Run agents
 ```
 Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d`.
 
