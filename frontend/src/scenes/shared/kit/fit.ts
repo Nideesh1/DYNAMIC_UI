@@ -93,7 +93,7 @@ export function fitTick(now: number, weightedN: number) {
 // ------------------------------------------------------------------ HUD insets
 
 type Rect = { left: number; top: number; right: number; bottom: number };
-const PANELS = [".hud-agents", ".hud-top", ".hud-ticker", ".hud-counts", ".hud-lod"];
+const PANELS = [".hud-agents", ".hud-top", ".hud-ticker", ".hud-counts", ".hud-dock"];
 
 /**
  * Measure the HUD panels overlapping the canvas: each panel is excluded by cutting the free rect from whichever

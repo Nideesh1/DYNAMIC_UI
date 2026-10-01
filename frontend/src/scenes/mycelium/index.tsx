@@ -7,10 +7,7 @@
  * cover the floor. Bioluminescent violet/teal - a sibling to /neural.
  */
 import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
-import { useCallback } from "react";
-import * as THREE from "three";
-import { ClusterBall } from "../shared/ClusterBall";
-import { KitScene, kit, type ClusterSlotProps } from "../shared/kit";
+import { KitScene } from "../shared/kit";
 import { Edge, McpBackend, McpStore } from "./Edge";
 import { MAT_R } from "./fx";
 import { Ground } from "./Ground";
@@ -21,15 +18,8 @@ import { Spores } from "./Spores";
 
 /** grouped mode: churning spore swarms, alternating violet / teal by lane, hovering over the floor */
 const SWARM_COLORS = ["#a855f7", "#2dd4bf"];
-const SWARM_Y = 1.6;
-function SporeSwarm({ lane, cluster }: ClusterSlotProps) {
-  const place = useCallback((l: number, out: THREE.Vector3) => {
-    const p = kit.clusterPos[l];
-    if (p) out.set(p.x, SWARM_Y, p.z);
-    else out.set(0, SWARM_Y, 0);
-  }, []);
-  return <ClusterBall cluster={cluster} place={place} radius={1.4} variant="swarm" color={SWARM_COLORS[lane % 2]} />;
-}
+const SWARM = { radius: 1.4, variant: "swarm" as const, color: (lane: number) => SWARM_COLORS[lane % 2] };
+const SWARM_LIFT: [number, number, number] = [0, 1.6, 0];
 
 const Background = (
   <>
@@ -58,7 +48,8 @@ export default function Scene() {
       McpServer={McpStore}
       Backend={McpBackend}
       GraphResource={Mat}
-      Cluster={SporeSwarm}
+      cluster={SWARM}
+      clusterOffset={SWARM_LIFT}
       extents={ringExtents}
       PostFX={
         <EffectComposer multisampling={0}>

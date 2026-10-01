@@ -237,7 +237,7 @@ export function Molecule({ galaxy: full }: GraphSlotProps) {
     const cam = camera as THREE.PerspectiveCamera;
     const dist = Math.max(1, cam.position.distanceTo(kit.graph.pos));
     const step = ((15 * 2 * dist * Math.tan((cam.fov * Math.PI) / 360)) / Math.max(1, size.height)) / Math.max(0.05, kit.graph.scale);
-    const out = kit.graph.target.x < -0.5 ? "right" : kit.graph.target.x > 0.5 ? "left" : nameSide;
+    const out = kit.graph.out.x < -0.5 ? "right" : kit.graph.out.x > 0.5 ? "left" : nameSide;
     if (out !== nameSide) setNameSide(out);
     const nx = (out === "right" ? -1 : 1) * (MOL_R + 0.3);
     let shown = 0;

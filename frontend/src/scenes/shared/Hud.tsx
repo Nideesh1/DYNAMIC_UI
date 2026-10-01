@@ -58,7 +58,7 @@ function colorOf(e: WorldEvent) {
   return e.type === "run" || e.type === "step" ? "#fde68a" : "#c7d2fe";
 }
 
-export function Hud(props: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; children?: ReactNode }) {
+export function Hud(props: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; inset?: ReactNode; children?: ReactNode }) {
   const { hud } = useSceneConfig();
   // selection from 3D clicks must still reach the world even with the HUD hidden
   useEffect(() => {
@@ -67,7 +67,7 @@ export function Hud(props: { title: string; subtitle: string; selected?: string 
   return hud ? <HudPanels {...props} /> : <>{props.children}</>;
 }
 
-function HudPanels({ title, subtitle, onClose, children }: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; children?: ReactNode }) {
+function HudPanels({ title, subtitle, onClose, inset, children }: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; inset?: ReactNode; children?: ReactNode }) {
   const { embedded } = useSceneConfig();
   const canRun = useRunAvailable();
   const w = useWorld();
@@ -132,7 +132,11 @@ function HudPanels({ title, subtitle, onClose, children }: { title: string; subt
         </div>
       </aside>
 
-      <LodHint />
+      {/* the dock: LOD chip + theme buttons (KitScene `hudInset`) side by side, never on top of each other */}
+      <div className="hud-dock">
+        <LodHint />
+        {inset}
+      </div>
 
       <AgentPanel onClose={close} />
 

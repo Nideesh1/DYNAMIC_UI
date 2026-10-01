@@ -7,7 +7,7 @@ import { Stars } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
-import { kit } from "../shared/kit";
+import { fit, kit } from "../shared/kit";
 import { PAL, groundGlowMaterial, glowTexture, mistTexture, PLANE_FLAT, reduced } from "./fx";
 
 /** radius the static tree line / mist were authored for (open ground inside it) */
@@ -155,7 +155,7 @@ function FogFit() {
   useFrame(({ scene, camera }) => {
     const f = scene.fog as THREE.FogExp2 | null;
     if (!f || !("density" in f)) return;
-    const d = camera.position.length();
+    const d = fit.cam.dist || camera.position.length();
     f.density = 0.016 * Math.min(1, 36 / Math.max(1, d));
   });
   return null;

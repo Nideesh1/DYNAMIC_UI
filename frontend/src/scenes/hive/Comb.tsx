@@ -433,7 +433,7 @@ export function HoneyStore({ galaxy }: GraphSlotProps) {
   useMemo(() => st.idx.clear(), [data, st]);
 
   useFrame(({ clock }) => {
-    const wantAnchor = kit.graph.target.x < -0.5 ? "left" : "center";
+    const wantAnchor = kit.graph.out.x < -0.5 ? "left" : "center";
     if (wantAnchor !== anchor) setAnchor(wantAnchor);
     const now = performance.now();
     const t = reduced ? 0 : clock.elapsedTime;

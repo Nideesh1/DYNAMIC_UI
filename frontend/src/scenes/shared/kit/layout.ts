@@ -410,6 +410,7 @@ function layoutPeriphery() {
     column(RIGHT, 1, hw + gap, 0);
     column(LEFT, -1, hw + gap, graphOn && wide ? R * 2 + 3.5 : 0);
   }
+  if (graphOn && g.target.lengthSq() > 1e-6) g.out.copy(g.target).normalize();
 }
 const SERVERS: KitMcp[] = [];
 const LEFT: KitMcp[] = [];

@@ -180,7 +180,7 @@ export function Pond({ galaxy: full }: GraphSlotProps) {
   };
 
   useFrame(({ clock }, dt) => {
-    const wantAnchor = kit.graph.target.x < -0.5 ? "left" : "center";
+    const wantAnchor = kit.graph.out.x < -0.5 ? "left" : "center";
     if (wantAnchor !== anchor) setAnchor(wantAnchor);
     const now = performance.now();
     const time = reduced ? 0 : clock.elapsedTime;

@@ -10,7 +10,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { useMemo } from "react";
 import * as THREE from "three";
-import { KitScene, kit, kitActiveLanes } from "../shared/kit";
+import { fit, KitScene, kit, kitActiveLanes } from "../shared/kit";
 import { Belt, Crates } from "./Belts";
 import { Backend, Dock, Traffic } from "./Docks";
 import { Floor, Lights } from "./Floor";
@@ -40,16 +40,13 @@ function extents(visit: (p: THREE.Vector3, r: number) => void) {
 }
 
 
-const _t = new THREE.Vector3();
 /** fog follows the camera distance the kit picked, so a big floor doesn't vanish into it */
 function FogFollow() {
-  const camera = useThree((s) => s.camera);
-  const controls = useThree((s) => s.controls) as unknown as { target?: THREE.Vector3 } | null;
   const scene = useThree((s) => s.scene);
   useFrame(() => {
     const f = scene.fog as THREE.Fog | null;
     if (!f) return;
-    const d = camera.position.distanceTo(controls?.target ?? _t.set(0, 0, 0));
+    const d = fit.cam.dist || 40;
     f.near = d * 1.1;
     f.far = d * 2.9;
   });

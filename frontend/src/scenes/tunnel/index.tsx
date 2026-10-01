@@ -83,7 +83,7 @@ export default function Scene() {
           <Noise opacity={0.03} />
         </EffectComposer>
       }
-      hudChildren={
+      hudInset={
         <button className="hud tunnel-pause" onClick={() => setPaused((p) => !p)} title="Space">
           {paused ? "▶ resume warp" : "❚❚ pause warp"}
         </button>

@@ -7,7 +7,7 @@ import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import * as THREE from "three";
-import { ClusterBalls, type ClusterBallProps } from "../ClusterBall";
+import { ClusterBalls, type ClusterBallProps, type ClusterColor } from "../ClusterBall";
 import { Hud } from "../Hud";
 import { LOD_LANES, lod, lodTick, type LodCluster } from "../lod";
 import { useSceneSetup, type Galaxy } from "../useSceneSetup";
@@ -67,8 +67,8 @@ export type KitSceneProps = {
   McpServer?: ComponentType<McpServerSlotProps>;
   Backend?: ComponentType<BackendSlotProps>;
   GraphResource?: ComponentType<GraphSlotProps>;
-  /** stock ClusterBall look (variant/radius/color...) */
-  cluster?: Omit<ClusterBallProps, "cluster" | "position" | "place">;
+  /** stock ClusterBall look (variant/radius...); `color` may be a function of the lane */
+  cluster?: Omit<ClusterBallProps, "cluster" | "position" | "place" | "color"> & { color?: ClusterColor };
   /** stage offset added to cluster ball positions (e.g. lift above a ground plane) */
   clusterOffset?: [number, number, number];
   /** or a fully custom cluster */
@@ -83,6 +83,8 @@ export type KitSceneProps = {
   children?: ReactNode;
   /** extra DOM over the canvas (inside the HUD layer) */
   hudChildren?: ReactNode;
+  /** small theme controls (buttons, chips) for the HUD dock: placed beside the LOD chip, never under it */
+  hudInset?: ReactNode;
 };
 
 const GalaxyCtx = createContext<Galaxy>({ nodes: [], links: [] });
@@ -236,6 +238,22 @@ function SideGraph({ galaxy, Graph }: { galaxy: Galaxy; Graph: ComponentType<Gra
   );
 }
 
+/**
+ * Inside a GraphResource: children are drawn in STAGE space (the side graph's position/scale is undone), so beams,
+ * sparks and arrows keep their stage size and can be positioned with graphToStage() / agentLive() directly.
+ */
+export function GraphStageSpace({ children }: { children?: ReactNode }) {
+  const g = useRef<THREE.Group>(null);
+  useFrame(() => {
+    const o = g.current;
+    if (!o) return;
+    const gs = Math.max(1e-4, kit.graph.scale);
+    o.scale.setScalar(1 / gs);
+    o.position.copy(kit.graph.pos).multiplyScalar(-1 / gs);
+  });
+  return <group ref={g}>{children}</group>;
+}
+
 const ORIGIN = new THREE.Vector3();
 
 // ------------------------------------------------------------------ the scene
@@ -311,7 +329,7 @@ export function KitScene(p: KitSceneProps) {
         <FitCamera points={points} origin={ORIGIN} />
         {p.PostFX}
       </Canvas>
-      <Hud title={p.title} subtitle={p.subtitle} selected={selected} onClose={() => setSelected(null)}>
+      <Hud title={p.title} subtitle={p.subtitle} selected={selected} onClose={() => setSelected(null)} inset={p.hudInset}>
         {p.hudChildren}
       </Hud>
     </div>

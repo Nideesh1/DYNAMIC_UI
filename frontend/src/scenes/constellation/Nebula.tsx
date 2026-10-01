@@ -9,7 +9,7 @@ import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { nodeIndex } from "../shared/useSceneSetup";
-import { agentLive, graphToStage, kit, type GraphSlotProps } from "../shared/kit";
+import { agentLive, GraphStageSpace, graphToStage, kit, type GraphSlotProps } from "../shared/kit";
 import { KIND_COLOR, hash01, world } from "../shared/world";
 import { ArrowPool, CurvePool, ICE, NEBULA_RX, NEBULA_RY, STAR_C, SparkPool, WHITE, bezier, bow, clamp01, reduced, ringTexture, spriteMat } from "./fx";
 
@@ -66,7 +66,6 @@ export function Nebula({ galaxy: full }: GraphSlotProps) {
   const nameGroups = useRef<(THREE.Group | null)[]>([]);
   const nameShown = useRef<string[]>(Array(MAX_NAMES).fill(""));
   const ripples = useRef<(THREE.Sprite | null)[]>([]);
-  const stage = useRef<THREE.Group>(null);
 
   const data = useMemo(() => {
     const pos = new Float32Array(n * 3);
@@ -144,10 +143,6 @@ export function Nebula({ galaxy: full }: GraphSlotProps) {
   useFrame(({ clock }) => {
     const now = performance.now();
     const gs = Math.max(1e-4, kit.graph.scale);
-    if (stage.current) {
-      stage.current.scale.setScalar(1 / gs);
-      stage.current.position.copy(kit.graph.pos).multiplyScalar(-1 / gs);
-    }
     const time = reduced ? 0 : clock.elapsedTime;
     const fov = (camera as THREE.PerspectiveCamera).fov;
     const dpr = gl.getPixelRatio();
@@ -286,12 +281,12 @@ export function Nebula({ galaxy: full }: GraphSlotProps) {
       {mats.ripples.map((m, k) => (
         <sprite key={k} ref={(x) => void (ripples.current[k] = x)} material={m} visible={false} />
       ))}
-      {/* stage-space group (undoes the side-graph transform): beams/sparks/arrows keep their stage size */}
-      <group ref={stage}>
+      {/* stage space (the side-graph transform undone): beams/sparks/arrows keep their stage size */}
+      <GraphStageSpace>
         <primitive object={beams.obj} />
         <primitive object={arrows.mesh} />
         <primitive object={sparks.obj} />
-      </group>
+      </GraphStageSpace>
       {Array.from({ length: MAX_NAMES }, (_, k) => (
         <group key={k} ref={(x) => void (nameGroups.current[k] = x)}>
           <Label3D ref={(x) => void (nameRefs.current[k] = x)} text="" offset={[0, 0.4]} size={0.24} opacity={0} fadeMs={250} pxRange={[8, 12]} />

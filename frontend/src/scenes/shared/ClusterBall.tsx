@@ -276,12 +276,15 @@ const WHITE = new THREE.Color("#ffffff");
 
 const LANES = Array.from({ length: LOD_LANES }, (_, k) => k);
 
+/** Lane color: one color for every lane, or a function of the lane (e.g. alternating palettes). */
+export type ClusterColor = string | ((lane: number) => string);
+
 /** One ClusterBall per lane (inactive lanes stay hidden); `place(lane, out, t)` positions each lane's ball. */
-export function ClusterBalls({ place, ...rest }: Omit<ClusterBallProps, "cluster" | "position"> & { place: (lane: number, out: THREE.Vector3, t: number) => void }) {
+export function ClusterBalls({ place, color, ...rest }: Omit<ClusterBallProps, "cluster" | "position" | "color"> & { place: (lane: number, out: THREE.Vector3, t: number) => void; color?: ClusterColor }) {
   return (
     <>
       {LANES.map((k) => (
-        <ClusterBall key={k} cluster={lod.clusters[k]} place={place} {...rest} />
+        <ClusterBall key={k} cluster={lod.clusters[k]} place={place} color={typeof color === "function" ? color(k) : color} {...rest} />
       ))}
     </>
   );

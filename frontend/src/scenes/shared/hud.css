@@ -10,7 +10,7 @@
   -webkit-backdrop-filter: blur(14px) saturate(1.3);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
-.hud-top { top: 16px; left: 16px; padding: 12px 16px; max-width: min(560px, calc(100vw - 32px)); }
+.hud-top { top: 16px; left: 16px; padding: 12px 16px; max-width: min(560px, calc(100cqw - 32px)); }
 .hud-title { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
 .hud-sub { margin-top: 3px; font-size: 12px; color: #94a3b8; }
 .hud-dot { width: 9px; height: 9px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 10px #22c55e; animation: hud-ping 1.6s ease-out infinite; }
@@ -29,12 +29,12 @@
 .hud-legend i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); }
 .hud-legend em { margin-left: auto; padding-left: 12px; font-style: normal; font-variant-numeric: tabular-nums; color: var(--c); font-weight: 700; }
 
-.hud-ticker { left: 16px; bottom: 16px; width: min(560px, calc(100vw - 32px)); padding: 10px 12px; display: grid; gap: 4px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.hud-ticker { left: 16px; bottom: 16px; width: min(560px, calc(100cqw - 32px)); padding: 10px 12px; display: grid; gap: 4px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .hud-tick { display: flex; gap: 8px; align-items: baseline; white-space: nowrap; overflow: hidden; color: #cbd5e1; }
 .hud-tick i { flex: 0 0 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); }
 .hud-tick span { overflow: hidden; text-overflow: ellipsis; }
 
-.hud-card { top: 210px; right: 16px; width: min(380px, calc(100vw - 32px)); max-height: 46vh; overflow: auto; padding: 14px 16px; }
+.hud-card { top: 210px; right: 16px; width: min(380px, calc(100cqw - 32px)); max-height: 46cqh; overflow: auto; padding: 14px 16px; }
 .hud-card h3 { margin: 0 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--c); display: flex; align-items: center; gap: 8px; }
 .hud-card h3 i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); }
 .hud-card ul { margin: 8px 0 0; padding-left: 16px; display: grid; gap: 4px; font-size: 12px; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -46,13 +46,13 @@
 /* keep 3D labels small + quiet (they're fixed-px DOM, so they don't shrink with distance): scale composes with inline transforms */
 .scene-label { scale: 0.78; max-width: 240px; overflow: hidden; text-overflow: ellipsis; border-width: 0.5px; text-shadow: 0 0 6px color-mix(in srgb, var(--c, #818cf8) 70%, transparent); background: rgba(3, 5, 11, 0.42); }
 
-@media (max-width: 760px) {
+@container agscene (max-width: 760px) {
   .hud-counts { grid-template-columns: repeat(3, auto); bottom: auto; top: 150px; }
   .hud-legend { display: none; }
 }
 
 /* ── Agent panel (top right): filter + list + detail ── */
-.hud-agents { top: 16px; right: 16px; width: min(360px, calc(100vw - 32px)); max-height: calc(100vh - 140px); display: flex; flex-direction: column; padding: 10px 12px; font-size: 13px; }
+.hud-agents { top: 16px; right: 16px; width: min(360px, calc(100cqw - 32px)); max-height: calc(100cqh - 140px); display: flex; flex-direction: column; padding: 10px 12px; font-size: 13px; }
 .hud-agents.is-collapsed { max-height: none; }
 .ap-head { display: flex; align-items: center; gap: 8px; }
 .ap-head strong { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: #a5b4fc; }
@@ -128,12 +128,16 @@
 .lod-cluster-label:hover { background: color-mix(in srgb, var(--c, #818cf8) 22%, rgba(3, 5, 11, 0.7)); border-color: var(--c, #818cf8); }
 .lod-cluster-label b { font-weight: 700; letter-spacing: -0.01em; }
 .lod-cluster-label small { font-size: 10px; font-weight: 500; color: #94a3b8; text-shadow: none; font-variant-numeric: tabular-nums; }
-.hud-lod { left: 50%; transform: translateX(-50%); top: 16px; padding: 6px 8px 6px 14px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #cbd5e1; white-space: nowrap; }
+/* the dock (top centre; bottom centre on narrow scenes) stacks the LOD chip and theme buttons in one row */
+.hud-dock { position: absolute; z-index: 10; top: 16px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; pointer-events: none; }
+.hud-dock > * { pointer-events: auto; }
+.hud-dock > .hud { position: static; }
+.hud-lod { padding: 6px 8px 6px 14px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #cbd5e1; white-space: nowrap; }
 .hud-lod b { color: #f1f5f9; font-variant-numeric: tabular-nums; }
 .hud-lod i { width: 7px; height: 7px; border-radius: 50%; background: #a5b4fc; box-shadow: 0 0 8px #a5b4fc; }
 .hud-lod button { all: unset; cursor: pointer; font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid rgba(148, 163, 255, 0.25); color: #c7d2fe; }
 .hud-lod button:hover { background: rgba(129, 140, 248, 0.2); color: #f8fafc; }
-@media (max-width: 1100px) { .hud-lod { top: auto; bottom: 96px; } }
+@container agscene (max-width: 1100px) { .hud-dock { top: auto; bottom: 96px; } }
 
 /* ── Compact HUD for small scenes (embeds like 600x400, phones): panels shrink so the scene stays visible ── */
 .scene-root { container: agscene / size; }
@@ -144,7 +148,7 @@
   .scene-root .hud-ticker { width: min(300px, calc(100% - 32px)); font-size: 10.5px; padding: 6px 9px; gap: 2px; }
   .scene-root .hud-tick:nth-child(n + 4) { display: none; }
   .scene-root .hud-agents { width: min(230px, 40%); max-height: 55%; font-size: 12px; padding: 7px 9px; }
-  .scene-root .hud-lod { top: auto; bottom: 64px; }
+  .scene-root .hud-dock { top: auto; bottom: 64px; }
 }
 @container agscene (max-height: 520px) {
   .scene-root .hud-tick:nth-child(n + 3) { display: none; }

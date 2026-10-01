@@ -10,7 +10,7 @@ import { Stars } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
 import * as THREE from "three";
-import { KitScene, kit, kitActiveLanes } from "../shared/kit";
+import { fit, KitScene, kit, kitActiveLanes } from "../shared/kit";
 import { Ground, Skyline } from "./Ambient";
 import { FOG, FOG_U } from "./buildingMaterial";
 import "./city.css";
@@ -21,7 +21,6 @@ import { Blimp, Comets, Drones, Tethers } from "./Sky";
 import { Lineage, Skyscraper } from "./Skyscrapers";
 
 const _p = new THREE.Vector3();
-const _t = new THREE.Vector3();
 /** tower tops, district avenues + signs, blimps (in the air) and the spire top stay in view */
 function extents(visit: (p: THREE.Vector3, r: number) => void) {
   for (const a of kit.agents.values()) visit(_p.set(a.target.x, roofH.get(a.id) ?? 0, a.target.z), 0.9);
@@ -37,11 +36,9 @@ function extents(visit: (p: THREE.Vector3, r: number) => void) {
 
 /** fog (scene + the building shader) follows the camera distance the kit picked, so a big city doesn't vanish */
 function FogFollow() {
-  const camera = useThree((s) => s.camera);
-  const controls = useThree((s) => s.controls) as unknown as { target?: THREE.Vector3 } | null;
   const scene = useThree((s) => s.scene);
   useFrame(() => {
-    const d = camera.position.distanceTo(controls?.target ?? _t.set(0, 0, 0));
+    const d = fit.cam.dist || 40;
     const near = Math.max(30, d * 0.68);
     const far = Math.max(100, d * 2.2);
     FOG_U.near.value = near;

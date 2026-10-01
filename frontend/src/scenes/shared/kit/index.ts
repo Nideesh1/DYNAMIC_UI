@@ -42,12 +42,12 @@
  *
  *  See PORTING.md for the step-by-step recipe to port a theme.
  */
-export { kit, reduced, agentLive, serverPos, backendPos, runLocal, graphToStage, stageToGraph, planePoint, planeA, planeB } from "./state";
+export { kit, kitSummary, reduced, agentLive, serverPos, backendPos, runLocal, graphToStage, stageToGraph, planePoint, planeA, planeB } from "./state";
 export type { Plane, KitAgent, KitRun, KitMcp, KitBackend, KitGraph } from "./state";
 export { PRESETS, radial, radar, lanes, grid, drift, bestCols, clusterRows, clusterCellSize } from "./presets";
 export type { LayoutPreset, LocalStyle, PresetCtx, PresetName } from "./presets";
 export { kitTick, kitExtents, kitActiveLanes, kitRoleU, config as kitConfig } from "./layout";
 export { fit, fitTick, setFitProfile, FitCamera, measureInsets, DEFAULT_FIT } from "./fit";
 export type { FitProfile } from "./fit";
-export { KitScene, useKitAgents, useKitRuns, useKitMcp, useKitList, useKitGalaxy } from "./KitScene";
+export { KitScene, GraphStageSpace, useKitAgents, useKitRuns, useKitMcp, useKitList, useKitGalaxy } from "./KitScene";
 export type { KitSceneProps, AgentSlotProps, EdgeSlotProps, RunSlotProps, McpServerSlotProps, BackendSlotProps, GraphSlotProps, ClusterSlotProps } from "./KitScene";

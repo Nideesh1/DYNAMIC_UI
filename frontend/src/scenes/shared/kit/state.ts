@@ -107,6 +107,11 @@ export type KitGraph = {
   natural: number;
   /** current group scale (stage = pos + local * scale) */
   scale: number;
+  /**
+   * unit stage direction from the core toward the graph (outward side): e.g. (-1, 0, 0) when it sits on the left.
+   * Put graph captions / node names on the far side with it instead of testing target.x.
+   */
+  out: THREE.Vector3;
   /** 0..1 presence (fades in at the side when the graph appears mid-session) */
   mix: number;
   fresh: boolean;
@@ -127,6 +132,7 @@ export const kit = {
     radius: 2.6,
     natural: 1,
     scale: 0,
+    out: new THREE.Vector3(-1, 0, 0),
     mix: 0,
     fresh: true,
   } as KitGraph,
@@ -190,5 +196,24 @@ let uidSeq = 0;
 /** next unique object id (React keys) */
 export const nextUid = () => ++uidSeq;
 
-// debugging / verification hook (read-only use): window.__agentglowKit
-if (typeof window !== "undefined") (window as unknown as { __agentglowKit?: typeof kit }).__agentglowKit = kit;
+const r2 = (v: THREE.Vector3) => [Math.round(v.x * 100) / 100, Math.round(v.y * 100) / 100, Math.round(v.z * 100) / 100];
+/** Plain-data snapshot of the kit (Maps flattened to arrays): what window.__agentglowKit serializes to. */
+export function kitSummary() {
+  return {
+    plane: kit.plane,
+    agents: [...kit.agents.values()].map((a) => ({ id: a.id, run: a.run.id, depth: a.depth, scale: Math.round(a.scale * 100) / 100, pos: r2(a.pos) })),
+    runs: kit.runOrder.map((r) => ({ id: r.id, members: r.members, origin: r2(r.origin), hu: r.hu, hv: r.hv })),
+    mcp: [...kit.mcp.values()].map((m) => ({ name: m.name, pos: r2(m.pos), backends: [...m.backends.values()].map((b) => ({ res: b.res.name, pos: r2(b.pos) })) })),
+    clusters: kit.clusterPos.map(r2),
+    core: { ...kit.core },
+    graph: { wanted: kit.graphWanted, pos: r2(kit.graph.pos), out: r2(kit.graph.out), radius: kit.graph.radius, scale: kit.graph.scale, mix: kit.graph.mix },
+  };
+}
+
+// debugging / verification hook (read-only use): window.__agentglowKit is the live kit object (Maps); its
+// JSON form (JSON.stringify, page.evaluate(() => JSON.stringify(...))) and .summary() are plain data, so a
+// serialized read never comes back as empty {} Maps
+if (typeof window !== "undefined") {
+  Object.defineProperties(kit, { toJSON: { value: kitSummary, enumerable: false }, summary: { value: kitSummary, enumerable: false } });
+  (window as unknown as { __agentglowKit?: typeof kit }).__agentglowKit = kit;
+}

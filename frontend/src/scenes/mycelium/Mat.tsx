@@ -126,7 +126,7 @@ export function Mat({ galaxy: full }: GraphSlotProps) {
   };
 
   useFrame(({ clock }) => {
-    const wantAnchor = kit.graph.target.x < -0.5 ? "left" : "center";
+    const wantAnchor = kit.graph.out.x < -0.5 ? "left" : "center";
     if (wantAnchor !== anchor) setAnchor(wantAnchor);
     const now = performance.now();
     const { pos, base, fire, white, fireC } = data;

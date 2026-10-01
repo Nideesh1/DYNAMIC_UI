@@ -9,7 +9,7 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
 import * as THREE from "three";
-import { KitScene } from "../shared/kit";
+import { fit, KitScene } from "../shared/kit";
 import { Bee, Messages } from "./Bees";
 import { CombStage, HoneyStore, STORE_R, StoreBeams } from "./Comb";
 import { Flower, FlowerLinks, Petal } from "./Flowers";
@@ -22,7 +22,7 @@ function Fog() {
   const { scene } = useThree();
   const fog = (scene.fog as THREE.Fog | null) ?? (scene.fog = new THREE.Fog(BG, 40, 90));
   useFrame(({ camera }) => {
-    const d = camera.position.length();
+    const d = fit.cam.dist || camera.position.length();
     fog.near = d + 2;
     fog.far = d * 2.3 + 20;
   });
