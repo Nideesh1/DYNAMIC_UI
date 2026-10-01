@@ -134,6 +134,17 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 
 Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
 
+### Claude Code skill
+
+Let Claude set AgentGlow up for you: install the [agentglow skill](skills/agentglow) once, then ask
+"set up agentglow" or "show my agents in 3D" (or type `/agentglow`).
+
+```bash
+mkdir -p ~/.claude/skills/agentglow
+curl -fsSL https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/SKILL.md \
+  -o ~/.claude/skills/agentglow/SKILL.md
+```
+
 ### The full stack in one command
 
 ```bash
