@@ -59,6 +59,7 @@ agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/
 | `GET /live/stream` | SSE world events; new viewers get MCP topology + runs still in progress |
 | `GET /live/graph` | graph sample for the scenes from FalkorDB (`--falkor` / `AGENTGLOW_FALKOR_URL`), else 404 |
 | `GET /live/health` | status |
+| `POST /live/run` `{topic}` | optional: forwards to `AGENTGLOW_RUN_WEBHOOK` (your trigger endpoint) and returns its JSON, e.g. `{run_id}`; health reports `run: true` and the UI shows "▶ Run agents" only when it is set |
 
 Embed in your own React app: `npm i agentglow` → `<AgentScene theme="neural" source="http://localhost:8100" />`.
 

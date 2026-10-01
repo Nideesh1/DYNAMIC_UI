@@ -121,9 +121,13 @@ def falkor_sample(url: str, limit: int = 220) -> dict:
 
 
 # ---------------------------------------------------------------------- app
-def create_app(*, falkor_url: str | None = None, hub: Hub | None = None) -> FastAPI:
+def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_webhook: str | None = None,
+               run_transport=None) -> FastAPI:
+    """`run_webhook` (or AGENTGLOW_RUN_WEBHOOK): URL that POST /live/run forwards `{topic}` to (your trigger endpoint);
+    the UI shows "Run agents" only when it is set. `run_transport` is an optional httpx transport (tests)."""
     hub = hub or Hub()
     falkor_url = falkor_url or os.environ.get("AGENTGLOW_FALKOR_URL")
+    run_webhook = run_webhook or os.environ.get("AGENTGLOW_RUN_WEBHOOK") or None
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -204,7 +208,29 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None) -> Fast
     @app.get("/live/health")
     def health():
         return {"ok": True, "version": __version__, "subscribers": len(hub.subs), "buffered": len(hub.buffer),
-                "open_runs": len(hub.mapper.runs), "ui": (STATIC / "index.html").exists()}
+                "open_runs": len(hub.mapper.runs), "ui": (STATIC / "index.html").exists(), "run": bool(run_webhook)}
+
+    @app.post("/live/run")
+    async def run(body: dict):
+        """Start a run of the user's agents: forwards `{topic}` to AGENTGLOW_RUN_WEBHOOK, returns its JSON (e.g. `{run_id}`)."""
+        if not run_webhook:
+            raise HTTPException(404, "no run webhook (set AGENTGLOW_RUN_WEBHOOK)")
+        topic = str(body.get("topic") or "").strip()
+        if not topic:
+            raise HTTPException(400, "topic is required")
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(transport=run_transport, timeout=30) as c:
+                r = await c.post(run_webhook, json={"topic": topic})
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"run webhook unreachable: {e}")
+        if r.status_code >= 400:
+            raise HTTPException(502, f"run webhook returned {r.status_code}: {r.text[:200]}")
+        try:
+            return r.json()
+        except ValueError:
+            return {"ok": True}
 
     # ---- static UI with SPA fallback (/ and /<theme> → index.html)
     @app.get("/{path:path}", include_in_schema=False)
