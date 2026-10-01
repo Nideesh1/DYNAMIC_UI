@@ -116,6 +116,7 @@ def test_hooks_and_traces_merge_without_duplicates(tmp_path):
 
 
 def test_merged_agents_exit_after_trace_wait_without_traces():
+    """Traces are on but Agent/interaction spans never arrive: agents exit after TRACE_WAIT_MS."""
     hub = Hub()
     t = T0
     for p in [hook("UserPromptSubmit", prompt="x"), hook("PreToolUse", tool_name="Agent", tool_use_id="tu", tool_input={"subagent_type": "Explore"}),
@@ -123,9 +124,11 @@ def test_merged_agents_exit_after_trace_wait_without_traces():
         t += 100
         hub.ingest_hook(p, t)
     hub.claude_code.sessions[SID].traces = True  # traces seen earlier, but this agent's spans never arrive
-    for p in [hook("SubagentStop", agent_id="ag"), hook("Stop", last_assistant_message="ok")]:
+    for p in [hook("SubagentStop", agent_id="ag"), hook("Stop", last_assistant_message="ok"),
+              hook("SessionEnd")]:
         t += 100
         hub.ingest_hook(p, t)
-    assert hub.mapper.runs
+    assert hub.mapper.runs  # still open, waiting for traces
+    # After TRACE_WAIT_MS deadline, tick should close the agents and session
     hub.tick(t + TRACE_WAIT_MS + 1)
     assert not hub.mapper.runs and [e["type"] for e in hub.buffer].count("exit") == 2

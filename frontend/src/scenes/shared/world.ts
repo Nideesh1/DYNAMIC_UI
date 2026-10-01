@@ -140,6 +140,10 @@ export const isDone = (i: Instance) => i.doneAt > 0;
 export const isLive = (i: Instance) => !i.doneAt && !i.exitAt;
 /** A started run whose agents are all finished and that got no completion for this long fades out anyway (ms). */
 export const ORPHAN_RUN_MS = 120_000;
+/** A finished subagent (has a parent) fades after this long even if its run is still active (e.g. a long-lived
+ * session whose root agent never finishes) - otherwise it would stay dimmed forever waiting for a run end
+ * that, for that kind of run, never comes. Root/main agents are unaffected: they still fade with their run. */
+export const SUBAGENT_DONE_MS = 8000;
 
 /** How long finished instances/runs stay visible while fading out (ms). */
 export const FADE_MS = 2500;
@@ -432,7 +436,10 @@ export function tick(now = performance.now()) {
     runsWithInstances.add(i.run);
     if (!i.exitAt) {
       if (!i.doneAt) runsWorking.add(i.run);
-      else if (i.doneAt > (runLastDone.get(i.run) ?? 0)) runLastDone.set(i.run, i.doneAt);
+      else {
+        if (i.doneAt > (runLastDone.get(i.run) ?? 0)) runLastDone.set(i.run, i.doneAt);
+        if (i.parent && now - i.doneAt > SUBAGENT_DONE_MS) i.exitAt = now;
+      }
     }
     if (i.exitAt && now - i.exitAt > linger.fadeMs(i)) {
       world.instances.delete(id);
