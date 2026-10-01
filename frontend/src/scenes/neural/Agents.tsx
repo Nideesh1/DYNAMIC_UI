@@ -156,8 +156,9 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     if (label.current) label.current.style.opacity = String(clamp01(swell) * (1 - wither) * 0.95);
 
     // synapse: visible while both ends live; grows on birth, retracts on exit
-    // lineage link stays while the CHILD is alive (parent may already be done)
-    s.parentK += ((inst.parent && !inst.exitAt ? 1 : 0) - s.parentK) * 0.05;
+    // lineage link lives while BOTH ends are alive; fades (~1.5s) once the parent exits — no dangling edges
+    const parentAlive = !!parent && !parent.exitAt;
+    s.parentK += ((inst.parent && !inst.exitAt && parentAlive ? 1 : 0) - s.parentK) * (parentAlive ? 0.05 : 0.035);
     const u = m.syn.uniforms;
     u.uP0.value.copy(s.p0);
     u.uP1.value.copy(s.p1);
