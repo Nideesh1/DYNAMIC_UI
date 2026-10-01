@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 from . import __version__
 
@@ -25,12 +26,19 @@ def main(argv: list[str] | None = None) -> None:
         ap.print_help()
         return
 
+    # Windows consoles default to cp1252: never let a non-ASCII character in console output crash the server.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     import uvicorn
 
     from .server import create_app
 
     shown = "localhost" if args.host in ("0.0.0.0", "::") else args.host
-    print(f"agentglow {__version__} → http://{shown}:{args.port}   (spans: POST /v1/live, OTLP: /v1/traces)", flush=True)
+    print(f"agentglow {__version__} -> http://{shown}:{args.port}   (spans: POST /v1/live, OTLP: /v1/traces)", flush=True)
     if args.host not in ("127.0.0.1", "localhost", "::1") and not (args.secret and args.ingest_key):
         import logging
 
