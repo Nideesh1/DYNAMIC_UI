@@ -49,8 +49,12 @@ npm i agentglow
 ```tsx
 import { AgentScene } from "agentglow";
 
-<AgentScene theme="neural" source="http://localhost:8100" />   // props: theme, source, hud, sim, style, className
+<div style={{ height: 600 }}>                {/* the scene fills its container — give it a height */}
+  <AgentScene theme="neural" source="http://localhost:8100" />
+</div>
 ```
+`source` is your `agentglow serve` URL (default port 8100). In a deployed app, use a URL your users' browsers can reach,
+e.g. `https://agentglow.yourco.com`. Other props: `hud`, `sim`, `style`, `className`.
 Works in Next.js App Router out of the box (the package is `"use client"`). See [examples/react-embed](examples/react-embed).
 
 ## What shows up
