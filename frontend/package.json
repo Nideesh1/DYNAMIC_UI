@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Live 3D views of agent systems (LangGraph, deepagents, any OpenTelemetry-instrumented agents) as a React component.",
   "keywords": [
+    "claude-code",
     "opentelemetry",
     "agents",
     "3d",
@@ -36,9 +37,17 @@
     "./style.css": "./dist/style.css",
     "./package.json": "./package.json"
   },
+  "bin": {
+    "agentglow": "cli/agentglow.mjs"
+  },
   "files": [
-    "dist"
+    "dist",
+    "cli",
+    "!cli/test"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "sideEffects": [
     "**/*.css",
     "./dist/index.js"
@@ -50,6 +59,7 @@
     "build:app": "tsc --noEmit && vite build",
     "build:lib": "vite build -c vite.lib.config.ts && tsc -p tsconfig.lib.json && node scripts/postbuild-lib.mjs",
     "preview": "vite preview",
+    "test": "node --test cli/test/*.test.mjs",
     "prepublishOnly": "npm run build:lib"
   },
   "peerDependencies": {

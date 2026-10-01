@@ -8,6 +8,23 @@ Python server, so it works with LangGraph, deepagents, LangChain and anything el
 
 ![neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.gif)
 
+## Watch Claude Code (CLI)
+
+```bash
+npx agentglow claude
+```
+Starts the AgentGlow server (fetching uv + Python on first run, so only Node 18+ is needed), opens the 3D view
+and runs `claude` with AgentGlow hooks + traces. Your agents and subagents appear live as Claude works.
+
+| Command | What it does |
+|---|---|
+| `npx agentglow claude [--port 8100] [--no-open] [-- <claude args>]` | start/reuse the server, open `/neural`, run Claude Code with AgentGlow attached |
+| `npx agentglow claude --install` / `--uninstall` | add/remove the AgentGlow hooks + env in `~/.claude/settings.json` (backup first) |
+| `npx agentglow serve` / `stop` / `open` `[--port 8100]` | run the server in the foreground / stop a background one / open the view |
+
+`AGENTGLOW_URL` points everything at a remote server, `AGENTGLOW_API_KEY` sends an ingest key. Details:
+[examples/claude-code](https://github.com/Nideesh1/agentglow/tree/main/examples/claude-code#cli).
+
 ## Install
 
 ```bash

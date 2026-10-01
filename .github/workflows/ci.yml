@@ -24,6 +24,7 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
+          npm test
           npm run build:app
           npm run build:lib
       - name: Python (uv workspace at repo root)

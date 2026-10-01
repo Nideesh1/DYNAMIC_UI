@@ -31,6 +31,13 @@ Open **http://localhost:8100/neural** and run your agents. No agents yet? **http
 Already sending traces to Langfuse / LangSmith / a collector? Nothing changes: `watch()` adds AgentGlow alongside.
 Any OTel exporter can also send OTLP/HTTP straight to `http://localhost:8100/v1/traces`.
 
+**Using Claude Code?** One command, only Node needed (uv and Python are fetched on first run):
+```bash
+npx agentglow claude                 # starts the server, opens /neural, runs claude with AgentGlow hooks + traces
+npx agentglow claude --install       # or: report every `claude` session (merges into ~/.claude/settings.json)
+```
+Pass Claude flags after `--` (`npx agentglow claude -- --model sonnet`). See [examples/claude-code](examples/claude-code).
+
 **Hand-written agent loop, no framework?** Trace it yourself (sync `with` or `async with`):
 ```python
 async with agentglow.run(topic="Inbound call", scope=clinic_id):
