@@ -131,8 +131,11 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
 
 // ------------------------------------------------------------------ live: trigger a real Hatchet run
 
+/** Topics that hit the demo graph (companies, products, incidents) and the analytics MCP backends. */
+const SUGGESTED = ["Why is churn rising for Acme Corp?", "Root cause of payment latency incidents", "Which region has the most incidents?", "Is Fraud Shield worth expanding to Globex?"];
+
 function RunBox() {
-  const [topic, setTopic] = useState("Tara Rose liquor license");
+  const [topic, setTopic] = useState(SUGGESTED[0]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   return (
@@ -151,7 +154,12 @@ function RunBox() {
         }
       }}
     >
-      <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Research topic…" />
+      <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Research topic…" list="run-topics" />
+      <datalist id="run-topics">
+        {SUGGESTED.map((t) => (
+          <option key={t} value={t} />
+        ))}
+      </datalist>
       <button disabled={busy}>{busy ? "Starting…" : "Run agents"}</button>
       {msg && <span>{msg}</span>}
     </form>
