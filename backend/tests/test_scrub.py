@@ -114,4 +114,4 @@ def test_claude_code_hooks_path_is_scrubbed():
         assert c.post("/v1/claude-code", json={**base, **p}).status_code == 200
     assert_clean(c)
     runs = [e for e in c.app.state.hub.buffer if e["type"] == "run"]
-    assert {e["topic"] for e in runs} == {"Claude Code · myproject"}
+    assert runs and all(e["topic"].startswith("Claude Code · myproject · ") for e in runs)

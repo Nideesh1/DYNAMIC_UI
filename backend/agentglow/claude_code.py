@@ -4,7 +4,7 @@ Point Claude Code's `"type": "http"` hooks at `POST /v1/claude-code` (see exampl
 becomes `{"kind": "start"|"end", "span": {...}}` items (the `/v1/live` shape), shaped to hit the mapper's rules:
 
 - One user prompt = one run (`agentglow.run.id` = `<session>:<n>`, workflow `claude-code`). The topic is the neutral
-  label `Claude Code · <cwd basename>`, never the prompt: payloads go through `scrub.scrub_hook` first (no prompt,
+  label `Claude Code · <cwd basename> · <session id> · <HH:MM>`, never the prompt: payloads go through `scrub.scrub_hook` first (no prompt,
   no identity keys, secrets redacted).
 - Main agent = agent span `claude` (`agentglow.agent`), opened on UserPromptSubmit, closed on Stop
   (`last_assistant_message` → `agentglow.final`).
@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,9 +54,19 @@ GRACE_MS = 8000  # main agent outlives its Stop while background subagents run, 
 SOURCE_RE = re.compile(r"^agent\.(?:builtin|custom|plugin)\.(.+)$")
 
 
-def run_label(cwd: Any) -> str:
+def run_label(cwd: Any, session: Any = "", ts_ms: int = 0) -> str:
+    """Neutral run topic, never the prompt: `Claude Code · <cwd basename> · <session short id> · <HH:MM>`, so several
+    concurrent sessions in the same folder stay distinguishable."""
     base = os.path.basename(str(cwd or "").rstrip("/\\"))
-    return f"Claude Code · {base}" if base else "Claude Code"
+    parts = ["Claude Code"]
+    if base:
+        parts.append(base)
+    sid = re.sub(r"[^0-9A-Za-z]", "", str(session or ""))[:4]
+    if sid:
+        parts.append(sid)
+    if ts_ms:
+        parts.append(time.strftime("%H:%M", time.localtime(ts_ms / 1000)))
+    return " · ".join(parts)
 
 
 def _hex(n: int) -> str:
@@ -381,7 +392,7 @@ class ClaudeCodeAdapter:
         s.n += 1
         turn = s.turn = _Turn(f"{s.id}:{s.n}", _hex(16), start=now, traced=s.traces)
         s.turns = (s.turns + [turn])[-8:]
-        topic = run_label(s.cwd)
+        topic = run_label(s.cwd, s.id, now)
         span = self._span(turn, None, "claude", now, {
             "agentglow.agent": "claude", "agentglow.run.id": turn.run_id, "agentglow.run.topic": topic,
             "agentglow.run.workflow": "claude-code", "agentglow.claude_code.session": s.id})
@@ -566,7 +577,7 @@ class ClaudeCodeAdapter:
         if ct is None:
             run_id = f"{sid}:{tr[:8]}" if sid else tr
             main = self._live(out, tr, _hex(8), None, "claude", t0, None, {
-                "agentglow.agent": "claude", "agentglow.run.id": run_id, "agentglow.run.topic": run_label(""),
+                "agentglow.agent": "claude", "agentglow.run.id": run_id, "agentglow.run.topic": run_label("", sid, t0),
                 "agentglow.run.workflow": "claude-code", "agentglow.claude_code.session": sid})
             ct = self.ctraces[tr] = _CT(run_id, main, now)
         ct.last = now
