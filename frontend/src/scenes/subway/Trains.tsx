@@ -131,16 +131,18 @@ export function Train({ agent, selected, onSelect }: AgentSlotProps) {
       else car.current.scale.setScalar(sc * Math.max(0.001, p) * (1 + e * 0.06) * (pending ? 1 + breathe * 0.06 : 1));
       car.current.scale.x *= st.dir;
     }
-    const glow = inst.exitAt ? 3 * (1 - exitAge) : waiting ? 0.25 + breathe * (pending ? 0.9 : 0.35) : 1.1 + e * 2.6;
+    // finished, waiting for the run to end: parked and nearly unlit (the kit dims the rest)
+    const dn = inst.exitAt ? 0 : agent.dim;
+    const glow = (inst.exitAt ? 3 * (1 - exitAge) : waiting ? 0.25 + breathe * (pending ? 0.9 : 0.35) : 1.1 + e * 2.6) * (1 - 0.75 * dn);
     mats.body.emissiveIntensity = glow;
     mats.body.opacity = Math.min(1, p * 1.2);
-    const winK = inst.exitAt ? 4 * (1 - exitAge) : waiting ? 0.5 + breathe * (pending ? 1.4 : 0.5) : 2.2 + e * 3;
+    const winK = (inst.exitAt ? 4 * (1 - exitAge) : waiting ? 0.5 + breathe * (pending ? 1.4 : 0.5) : 2.2 + e * 3) * (1 - 0.75 * dn);
     mats.win.color.copy(winColor).multiplyScalar(winK);
     if (inst.exitAt && exitAge < 0.25) mats.win.color.lerp(white, 1 - exitAge * 4).multiplyScalar(1.5);
     mats.win.opacity = p;
     mats.lampF.opacity = p * (waiting ? 0.4 : 1);
     mats.lampR.opacity = p;
-    mats.beam.opacity = (waiting ? 0.04 : 0.13 + e * 0.08) * p;
+    mats.beam.opacity = (waiting ? 0.04 : 0.13 + e * 0.08) * p * (1 - dn);
     if (halo.current) {
       halo.current.scale.setScalar(0.9 + e * 0.6 + (waiting ? breathe * 0.25 : 0));
       mats.halo.opacity = p * (waiting ? 0.04 + breathe * 0.04 : 0.07 + e * 0.08);

@@ -167,7 +167,7 @@ export function Blip({ agent, onSelect }: AgentSlotProps) {
       s.lastTag = now;
       let pending = false;
       for (const p of world.mcpPending.values()) if (p.instance === inst.id) pending = true;
-      const st = te >= 0 ? (failed ? "FAIL" : s.land < 1 ? "LAND" : "DONE") : s.takeoff < 1 ? "TKOF" : pending ? "MCP" : thinking ? "THNK" : "WAIT";
+      const st = te < 0 && inst.doneAt ? (failed ? "FAIL" : "DONE") : te >= 0 ? (failed ? "FAIL" : s.land < 1 ? "LAND" : "DONE") : s.takeoff < 1 ? "TKOF" : pending ? "MCP" : thinking ? "THNK" : "WAIT";
       const txt = `${fmtTok(inst.tokens)} tk  ${st}`;
       if (txt !== s.t2) {
         s.t2 = txt;

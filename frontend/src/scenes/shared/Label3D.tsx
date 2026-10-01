@@ -28,6 +28,9 @@ import { fit } from "./kit/fit";
 import { LabelScope, labels, newLabelEntry, registerLabel, unregisterLabel, type LabelKind } from "./kit/labels";
 import { STEPS, useWorld, type Run } from "./world";
 
+/** kit/dim.ts skips this subtree (the label fades itself) */
+const NO_DIM = { kitNoDim: true };
+
 // ------------------------------------------------------------------ types
 /** A run of text with its own color (e.g. the active hatchet step). */
 export type LabelSeg = { text: string; color?: THREE.ColorRepresentation };
@@ -597,7 +600,9 @@ function Label3DInner(props: Label3DProps) {
         if (e.w > 1) e.seen = performance.now();
       }
     }
-    const a = s.cur * s.dc * (1 - q.depthFade * THREE.MathUtils.smoothstep(dist, q.fadeRange[0], q.fadeRange[1]));
+    // a finished agent's label dims with it (kit dim); its slot's other meshes are dimmed by kit/dim.ts
+    const ag = scope.agent;
+    const a = s.cur * s.dc * (ag ? 1 - 0.55 * ag.dim : 1) * (1 - q.depthFade * THREE.MathUtils.smoothstep(dist, q.fadeRange[0], q.fadeRange[1]));
     if (a <= 0.004) {
       b.visible = false;
       return;
@@ -615,7 +620,7 @@ function Label3DInner(props: Label3DProps) {
   const tm = p.depthTest ? TEXT_MAT.depth : TEXT_MAT.top;
   const clickable = !!p.onClick;
   return (
-    <group ref={outer} position={p.position} visible={p.visible ?? true}>
+    <group ref={outer} position={p.position} visible={p.visible ?? true} userData={NO_DIM}>
       <group ref={bb} visible={false}>
         {p.leader && <mesh ref={leaderMesh} geometry={PLANE} material={mats.leader} renderOrder={p.renderOrder} raycast={noRaycast} />}
         <group ref={body}>

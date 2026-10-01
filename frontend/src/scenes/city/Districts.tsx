@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, world, type AgentType, type Run, type StepName } from "../shared/world";
+import { RUN_LINGER_MS, STEPS, isLive, world, type AgentType, type Run, type StepName } from "../shared/world";
 import { fit, kit, kitRoleU, runLocal, type KitRun, type RunSlotProps } from "../shared/kit";
 import { AVENUE_GAP, clamp01, easeInOut, reduced, STEP_COLOR } from "./layout";
 
@@ -197,7 +197,7 @@ function DistrictBody({ kr, run }: { kr: KitRun; run: Run }) {
     let alive = 0;
     let scouts = 0;
     world.instances.forEach((i) => {
-      if (i.run === run.id && !i.exitAt) {
+      if (i.run === run.id && isLive(i)) {
         alive++;
         if (i.subagent) scouts++;
       }

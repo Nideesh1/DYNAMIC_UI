@@ -37,6 +37,8 @@
  *  layout.ts    kitTick(): membership -> run-local coords -> run anchors -> clusters/core/periphery -> easing.
  *  fit.ts       fit (scale/spread/label/aspect/insets/cam/wpp), fitTick(), <FitCamera> (frames the content's
  *               screen bounds, labels included, and centres them in the free area), measureInsets().
+ *  dim.ts       finished look: done/failed agents stay at their spot DIMMED (agent.dim) until their run ends,
+ *               then the whole run fades out together (world.ts isDone / isLive).
  *  labels.ts    label registry + declutter pass (LabelScope context, priorities, framed label rects).
  *  KitScene.tsx <KitScene> + slot prop types + useKitAgents / useKitRuns / useKitMcp / useKitList,
  *               <GraphStageSpace> (stage-space drawing inside the side graph), `hudInset` (HUD dock).

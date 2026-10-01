@@ -105,7 +105,7 @@ function scoreOf(e: LabelEntry, now: number) {
     if (world.selected === a.id) return 10000;
     const busy = Math.min(1, energy(inst, now)) * 60 + (inst.status === "thinking" ? 30 : 0);
     s = a.depth > 0 ? KIND_PRIO.sub + busy * 0.5 : KIND_PRIO.agent + busy;
-    if (inst.exitAt) s -= a.depth > 0 ? 60 : 350;
+    if (inst.exitAt || inst.doneAt) s -= a.depth > 0 ? 60 : 350; // finished / fading agents yield to working ones
   }
   return s + e.size * 10 + (e.placed ? 8 : 0);
 }
