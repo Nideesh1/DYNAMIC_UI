@@ -1,5 +1,5 @@
 /**
- * Label3D — an in-scene text label (troika SDF text via drei <Text>) on a soft rounded plate.
+ * Label3D - an in-scene text label (troika SDF text via drei <Text>) on a soft rounded plate.
  *
  * Replaces drei <Html> labels: no DOM, no per-label React root, scales with distance (clamped to a px range so
  * it stays legible), takes part in Bloom, and fades/re-texts imperatively through a ref (no React re-renders).
@@ -8,15 +8,15 @@
  *   const l = useRef<Label3DHandle>(null);  …  useFrame(() => l.current?.setOpacity(a));  <Label3D ref={l} … />
  *
  * Fonts are bundled (Inter / JetBrains Mono, latin-subset woff, SIL OFL 1.1) so nothing is fetched from a CDN at
- * runtime (the lib build inlines them as data: URLs). Text is sanitized to that subset — symbols like ✓ ▶ ✦ are
- * mapped or dropped — so troika never falls back to its unicode-font-resolver CDN.
+ * runtime (the lib build inlines them as data: URLs). Text is sanitized to that subset - symbols like ✓ ▶ ✦ are
+ * mapped or dropped - so troika never falls back to its unicode-font-resolver CDN.
  *
  * Many labels: each label = 1 plate draw + 1 draw per text line, zero per-frame allocations, and a label faded
  * to 0 skips drawing entirely. For dynamic sets (graph-node tags etc.) use a fixed pool: render N <Label3D>
  * once, then per frame move `handle.object` (or a wrapper group), `setText`, `setOpacity` (see hive/Comb.tsx).
  * If draw calls ever matter at 100s of labels, troika's BatchedText (one draw for many texts) is the next step;
  * it needs `troika-three-text` imported directly, which the lib build would then bundle instead of sharing
- * drei's copy — stay on drei <Text> until that's worth it.
+ * drei's copy - stay on drei <Text> until that's worth it.
  */
 import { Text } from "@react-three/drei";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
@@ -32,7 +32,7 @@ export type LabelSeg = { text: string; color?: THREE.ColorRepresentation };
 export type LabelLine = string | LabelSeg[];
 
 export interface Label3DHandle {
-  /** the positioned outer group — move it freely (pooled labels) */
+  /** the positioned outer group - move it freely (pooled labels) */
   readonly object: THREE.Group;
   /** target opacity 0..1 (eased over `fadeMs`); 0 hides the label entirely (no draw calls) */
   setOpacity(o: number, immediate?: boolean): void;
@@ -104,7 +104,7 @@ export interface Label3DProps {
 // ------------------------------------------------------------------ fonts + text sanitizing
 const FONTS = { sans: interUrl, mono: monoUrl } as const;
 /** glyphs pre-generated once (troika SDF atlas) so labels never pop in glyph by glyph */
-const CHARS = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~·›…—–×•";
+const CHARS = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~·›…\u2014–×•";
 /** codepoint coverage of the bundled fontsource "latin" subsets */
 const COVERED: [number, number][] = [
   [0x20, 0x7e], [0xa0, 0xff], [0x131, 0x131], [0x152, 0x153], [0x2bb, 0x2bc], [0x2c6, 0x2c6], [0x2da, 0x2da], [0x2dc, 0x2dc],
@@ -233,7 +233,7 @@ const dimTmp = new THREE.Color();
 const dimHex = (h: string) => "#" + dimTmp.set(h).lerp(BG, 0.45).getHexString();
 
 // ------------------------------------------------------------------ components
-/** Graph/memory caption ("FalkorDB · knowledge graph" when served) — only this re-renders on world changes. */
+/** Graph/memory caption ("FalkorDB · knowledge graph" when served) - only this re-renders on world changes. */
 export function GraphLabel3D({ prefix = "", suffix = "", ...props }: Omit<Label3DProps, "text"> & { prefix?: string; suffix?: string }) {
   const w = useWorld();
   return <Label3D {...props} text={prefix + w.graphLabel + suffix} />;

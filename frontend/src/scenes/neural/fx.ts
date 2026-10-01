@@ -48,7 +48,7 @@ export function additiveBasic(color: THREE.ColorRepresentation = "#fff") {
   return new THREE.MeshBasicMaterial({ color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false });
 }
 
-/** Unit tube parameterised by t∈[0,1] along x, (cos,sin) in y/z — bent onto a quadratic bezier in the vertex shader. */
+/** Unit tube parameterised by t∈[0,1] along x, (cos,sin) in y/z - bent onto a quadratic bezier in the vertex shader. */
 function makeTubeGeometry(seg = 64, radial = 7) {
   const pos: number[] = [];
   const idx: number[] = [];
@@ -77,7 +77,7 @@ export const TUBE_GEO = makeTubeGeometry();
 export const SPHERE_GEO = new THREE.SphereGeometry(1, 32, 24);
 export const SHELL_GEO = new THREE.SphereGeometry(1, 40, 28);
 export const ICO_GEO = new THREE.IcosahedronGeometry(1, 1);
-/** Closed cone pointing +Y, base at origin — used as the direction arrowhead on lineage edges. */
+/** Closed cone pointing +Y, base at origin - used as the direction arrowhead on lineage edges. */
 export const ARROW_GEO = new THREE.ConeGeometry(1, 1, 14).translate(0, 0.5, 0);
 export const CONE_GEO = new THREE.ConeGeometry(1, 1, 6, 1, true).translate(0, 0.5, 0);
 

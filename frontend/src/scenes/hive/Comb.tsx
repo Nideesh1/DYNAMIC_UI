@@ -163,7 +163,7 @@ export function Comb({ galaxy: full }: { galaxy: Galaxy }) {
       if (adj[a].length < 4) adj[a].push(b);
       if (adj[b].length < 4) adj[b].push(a);
     }
-    // neighbour lists by cell (spill effect for writes) — computed lazily per cell
+    // neighbour lists by cell (spill effect for writes) - computed lazily per cell
     const beams = new THREE.BufferGeometry();
     beams.setAttribute("position", new THREE.BufferAttribute(new Float32Array(MAX_BEAMS * BEAM_SEG * 2 * 3), 3));
     beams.setAttribute("color", new THREE.BufferAttribute(new Float32Array(MAX_BEAMS * BEAM_SEG * 2 * 3), 3));

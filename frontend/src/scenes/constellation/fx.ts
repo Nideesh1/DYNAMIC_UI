@@ -42,7 +42,7 @@ export function glowTexture() {
     g.fillRect(0, 0, s, s);
   }));
 }
-/** Four-point diffraction spikes (+ faint diagonals) — the classic telescope star. */
+/** Four-point diffraction spikes (+ faint diagonals) - the classic telescope star. */
 let _spike: THREE.Texture | null = null;
 export function spikeTexture() {
   return (_spike ??= canvasTex(256, (g, s) => {
@@ -361,7 +361,7 @@ void main(){ float r = length(gl_PointCoord - 0.5) * 2.0; if (r > 1.0) discard;
   float core = smoothstep(0.35, 0.0, r); float halo = pow(1.0 - r, 2.6);
   gl_FragColor = vec4(vC * (core * 1.4 + halo * 0.5), 1.0); }`;
 
-/** Pooled glowing points (comet heads, packets, node flares) — one draw call. Call setScale() each frame. */
+/** Pooled glowing points (comet heads, packets, node flares) - one draw call. Call setScale() each frame. */
 export class SparkPool {
   geo = new THREE.BufferGeometry();
   mat = new THREE.ShaderMaterial({ uniforms: { uScale: { value: 400 } }, vertexShader: sparkVert, fragmentShader: sparkFrag, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });

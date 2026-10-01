@@ -1,9 +1,9 @@
 /**
- * /mycelium — "A glowing fungal network".
+ * /mycelium - "A glowing fungal network".
  * The forest floor at night: the knowledge graph is a dense mycelial mat at the heart; agents bloom as
  * fruiting bodies (parents bigger) that grow from their parent on branching hyphae; LLM calls puff spores
  * sized by tokens; MCP servers are nutrient stores at the network's edge, fed by thick trunk hyphae, with
- * their backends beyond; each run is a fairy ring. Bioluminescent violet/teal — a sibling to /neural.
+ * their backends beyond; each run is a fairy ring. Bioluminescent violet/teal - a sibling to /neural.
  */
 import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";

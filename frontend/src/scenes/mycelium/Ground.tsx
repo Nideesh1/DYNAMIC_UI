@@ -1,5 +1,5 @@
 /**
- * The forest floor: a dark mottled substrate, and a sprawling background mycelium — hundreds of branching
+ * The forest floor: a dark mottled substrate, and a sprawling background mycelium - hundreds of branching
  * hyphae that radiate from the knowledge mat with slow nutrient pulses travelling outward. The pulses quicken
  * and brighten with how many agents are working.
  */

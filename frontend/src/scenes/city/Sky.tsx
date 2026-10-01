@@ -25,7 +25,7 @@ function useLive<T extends { id: number }>(get: () => T[], keep: (x: T) => boole
   const [list, setList] = useState<T[]>([]);
   const key = useRef("");
   useFrame(() => {
-    // while grouped, only items between drawn (expanded) agents get a trail — keeps the Trail count bounded
+    // while grouped, only items between drawn (expanded) agents get a trail - keeps the Trail count bounded
     const all = !lod.grouped;
     let k = "";
     for (const c of get()) if (all || keep(c)) k += c.id + ",";

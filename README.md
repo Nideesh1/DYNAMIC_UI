@@ -2,19 +2,19 @@
 
 # AgentGlow
 
-**Watch your AI agents work — live, in 3D — from the OpenTelemetry they already emit.**
+**Watch your AI agents work live, in 3D, from the OpenTelemetry they already emit.**
 
 [![PyPI](https://img.shields.io/pypi/v/agentglow?color=818cf8)](https://pypi.org/project/agentglow/)
 [![npm](https://img.shields.io/npm/v/agentglow?color=e879f9)](https://www.npmjs.com/package/agentglow)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22d3ee)](LICENSE)
 
-![AgentGlow — neural theme](docs/media/hero.gif)
+![AgentGlow neural theme](docs/media/hero.gif)
 
 </div>
 
 Agents spawn as glowing shapes, pulse on every LLM call, fan out to subagents, query MCP servers and databases,
 and fade when they finish. One line of Python. Works with **LangChain, LangGraph, deepagents, OpenAI Agents SDK,
-Hatchet, MCP** — and **Claude Code** itself.
+Hatchet, MCP**, and **Claude Code** itself.
 
 ## Quickstart
 
@@ -28,7 +28,7 @@ agentglow.watch()                    # one line, before your agents run
 ```
 Open **http://localhost:8100/neural** and run your agents. No agents yet? **http://localhost:8100/neural?sim=1**.
 
-Already sending traces to Langfuse / LangSmith / a collector? Nothing changes — `watch()` adds AgentGlow alongside.
+Already sending traces to Langfuse / LangSmith / a collector? Nothing changes: `watch()` adds AgentGlow alongside.
 Any OTel exporter can also send OTLP/HTTP straight to `http://localhost:8100/v1/traces`.
 
 ## 15 themes
@@ -49,7 +49,7 @@ npm i agentglow
 ```tsx
 import { AgentScene } from "agentglow";
 
-<div style={{ height: 600 }}>                {/* the scene fills its container — give it a height */}
+<div style={{ height: 600 }}>                {/* the scene fills its container - give it a height */}
   <AgentScene theme="neural" source="http://localhost:8100" />
 </div>
 ```
@@ -59,8 +59,8 @@ import { AgentScene } from "agentglow";
 | `source` | `""` (same origin) | your `agentglow serve` URL (default port 8100). In a deployed app, use a URL your users' browsers can reach, e.g. `https://agentglow.yourco.com` |
 | `hud` | `true` | overlay panels (title, agent list, event log, stats); `hud={false}` = just the 3D scene |
 | `sim` | `false` | built-in fake agents, no server needed (also kicks in automatically if `source` is unreachable) |
-| `style` | — | inline styles for the container, e.g. `{{ height: "80vh" }}` |
-| `className` | — | CSS class for the container |
+| `style` | - | inline styles for the container, e.g. `{{ height: "80vh" }}` |
+| `className` | - | CSS class for the container |
 
 ```tsx
 <AgentScene theme="hive" sim hud={false} style={{ height: 400 }} />   // demo background, no server
@@ -71,7 +71,7 @@ Works in Next.js App Router out of the box (the package is `"use client"`). See 
 
 | Your system | In the scene |
 |---|---|
-| agents / subagents | shapes that spawn, think, wait and exit — subagents smaller, linked to their parent with directional edges |
+| agents / subagents | shapes that spawn, think, wait and exit - subagents smaller, linked to their parent with directional edges |
 | LLM calls | pulses sized by tokens |
 | tool & MCP calls | MCP server + its backends (Postgres, Snowflake, Spark…) light up, with data-flow arrows |
 | DB / graph queries (`db.system`) | knowledge-graph nodes light up on reads and writes (live from FalkorDB if configured) |
@@ -79,7 +79,7 @@ Works in Next.js App Router out of the box (the package is `"use client"`). See 
 | Hatchet workflow runs | runs and their step-by-step progress |
 
 **Hundreds of agents?** Above 12 live agents, AgentGlow auto-groups older runs into glowing clusters
-("35 runs · 84 agents") and keeps the newest ~10 in full detail — click a cluster to expand it. Stays at ~60 fps with 500 live agents.
+("35 runs · 84 agents") and keeps the newest ~10 in full detail - click a cluster to expand it. Stays at ~60 fps with 500 live agents.
 
 Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic`, `agentglow.final`,
 `agentglow.graph.nodes`, `agentglow.mcp.server` / `.resource` / `.resource_kind`. See [docs/SPEC.md](docs/SPEC.md).
@@ -88,19 +88,19 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 
 | | |
 |---|---|
-| [quickstart](examples/quickstart) | 40-line deepagents researcher with two subagents — the "just show me" path |
+| [quickstart](examples/quickstart) | 40-line deepagents researcher with two subagents - the "just show me" path |
 | [langgraph](examples/langgraph) | LangGraph supervisor with worker agents (`langgraph-supervisor` works too) |
 | [openai-agents](examples/openai-agents) | OpenAI Agents SDK: handoffs + agent-as-tool |
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
-| [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks — no code |
+| [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks - no code |
 | [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |
 
-Every Python example takes `AGENT_MODEL` — e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
+Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
 
 ### The full stack in one command
 
 ```bash
-cp .env.example .env            # add one LLM key (OpenAI, Anthropic or Gemini) — that's all the setup
+cp .env.example .env            # add one LLM key (OpenAI, Anthropic or Gemini) - that's all the setup
 docker compose up               # then open http://localhost:8100 and press ▶ Run agents
 ```
 Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d`.
@@ -108,7 +108,7 @@ Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT
 ## Production
 
 Run **one** `agentglow serve` per environment (Docker image / k8s Deployment with `replicas: 1`) and point every app
-pod at it: `agentglow.watch("http://agentglow:8100")`. If it's down, your app is unaffected — spans are just dropped.
+pod at it: `agentglow.watch("http://agentglow:8100")`. If it's down, your app is unaffected - spans are just dropped.
 
 ## Develop
 

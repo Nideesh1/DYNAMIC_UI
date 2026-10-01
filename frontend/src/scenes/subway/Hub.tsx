@@ -1,4 +1,4 @@
-/** Graph Central — the FalkorDB interchange in the middle of the map, plus flares / transfer beams to trains. */
+/** Graph Central - the FalkorDB interchange in the middle of the map, plus flares / transfer beams to trains. */
 import { Sparkles } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";

@@ -14,7 +14,7 @@ triage ──handoff──► tech_support ──handoff──► billing
                        └─ search_knowledge_base = kb_researcher.as_tool(...)   (subagent)
 ```
 
-All tools are fake `@function_tool`s (customer lookup, service status, KB search, invoice, credit) — no services needed.
+All tools are fake `@function_tool`s (customer lookup, service status, KB search, invoice, credit) - no services needed.
 
 ## What shows up
 

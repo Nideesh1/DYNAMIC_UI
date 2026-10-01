@@ -22,12 +22,12 @@ os.environ.setdefault("FALKOR_HOST", "falkordb" if IN_DOCKER else "localhost")
 
 AGENTGLOW_URL = os.environ.get("AGENTGLOW_URL", "http://localhost:8100")
 MCP_URL = os.environ.get("MCP_URL", "http://localhost:8200/mcp")
-# LLM: any LangChain `init_chat_model` spec "<provider>:<model>" — google_genai:, openai:, anthropic:.
+# LLM: any LangChain `init_chat_model` spec "<provider>:<model>" - google_genai:, openai:, anthropic:.
 # Keys come from the standard env vars: GEMINI_API_KEY (or GOOGLE_API_KEY), OPENAI_API_KEY, ANTHROPIC_API_KEY.
 # (Legacy OBS_MODEL=<gemini model> still works.)
 MODEL = os.environ.get("AGENT_MODEL") or (f"google_genai:{os.environ['OBS_MODEL']}" if os.environ.get("OBS_MODEL") else "google_genai:gemini-3.8-flash")
 
-# Optional: Langfuse over plain OTLP — on when keys are set (scripts/gen-obs-env.sh) unless LANGFUSE_EXPORT=0.
+# Optional: Langfuse over plain OTLP - on when keys are set (scripts/gen-obs-env.sh) unless LANGFUSE_EXPORT=0.
 # Start Langfuse with `docker compose --profile langfuse up -d`.
 LANGFUSE_PK, LANGFUSE_SK = os.environ.get("OBS_LANGFUSE_PUBLIC_KEY", ""), os.environ.get("OBS_LANGFUSE_SECRET_KEY", "")
 if os.environ.get("LANGFUSE_EXPORT", "1") == "0":

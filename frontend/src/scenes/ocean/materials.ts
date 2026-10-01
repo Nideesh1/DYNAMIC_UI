@@ -74,7 +74,7 @@ export function makeCurrentMaterial(color: string) {
   });
 }
 
-/** drifting marine snow — all motion on the GPU */
+/** drifting marine snow - all motion on the GPU */
 export function makeSnowMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: { uTime: { value: 0 }, uPx: { value: 1 } },

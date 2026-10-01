@@ -1,5 +1,5 @@
 /**
- * <ClusterBall> — one collapsed lane of runs (see lod.ts): a soft glowing core wrapped in a swarm of points,
+ * <ClusterBall> - one collapsed lane of runs (see lod.ts): a soft glowing core wrapped in a swarm of points,
  * one point per collapsed agent (colored by role, thinking ones brighter), breathing with the lane's activity,
  * plus a single clickable count badge ("32 runs · 96 agents"). Clicking expands that lane.
  *

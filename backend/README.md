@@ -5,7 +5,7 @@ born when its span starts, pulses on each LLM call, fires tool/MCP/graph packets
 when its span ends. Works with LangChain, LangGraph (incl. `langgraph-supervisor`), deepagents, the OpenAI Agents SDK
 (`agentglow[openai-agents]`), Hatchet workflows, Claude Code (via hooks), and any agent framework that emits OTel spans.
 
-![AgentGlow — neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.gif)
+![AgentGlow - neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.gif)
 
 15 themes:
 
@@ -64,7 +64,7 @@ agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/
 |---|---|
 | `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None)` | `url` also from `AGENTGLOW_URL` |
 | `POST /v1/live` | span start/end batches from `watch()` |
-| `POST /v1/traces` | standard OTLP/HTTP (protobuf or JSON) — point any OTel SDK or Collector here (ended spans only) |
+| `POST /v1/traces` | standard OTLP/HTTP (protobuf or JSON) - point any OTel SDK or Collector here (ended spans only) |
 | `GET /live/stream` | SSE world events; new viewers get MCP topology + runs still in progress |
 | `GET /live/graph` | graph sample for the scenes from FalkorDB (`--falkor` / `AGENTGLOW_FALKOR_URL`), else an empty graph |
 | `POST /v1/claude-code` | Claude Code HTTP hooks → its main agent + subagents in 3D (see `examples/claude-code`) |
@@ -80,7 +80,7 @@ detail (~60 fps with 500 live agents).
 
 ## Deploying
 
-State is in memory (no Redis). Run **exactly one** server per environment — on Kubernetes a Deployment with
+State is in memory (no Redis). Run **exactly one** server per environment - on Kubernetes a Deployment with
 `replicas: 1` plus a Service; point every worker's `AGENTGLOW_URL` at that Service.
 
 MIT licensed · https://github.com/Nideesh1/agentglow

@@ -1,5 +1,5 @@
 /**
- * /constellation — "Night sky".
+ * /constellation - "Night sky".
  * Agents are stars (parents brighter/bigger), delegation draws constellation lines parent → child, LLM calls make
  * a star flare (sized by tokens), MCP servers are planets with their backends as moons, the knowledge graph is a
  * distant nebula whose stars light on reads/writes, a final answer is a shooting star, and exiting agents collapse

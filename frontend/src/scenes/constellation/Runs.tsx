@@ -156,7 +156,7 @@ function ShootingStars() {
         cg.position.copy(s.from).add(p.set(0, -2.3, 0));
         if (capKeys.current[si] !== s.run + s.start) {
           capKeys.current[si] = s.run + s.start;
-          el.setText(`final answer — ${s.text.length > 64 ? s.text.slice(0, 62) + "…" : s.text}`);
+          el.setText(`final answer - ${s.text.length > 64 ? s.text.slice(0, 62) + "…" : s.text}`);
         }
         el.setOpacity(clamp01(age / 0.3) * clamp01((5.2 - age) / 1.2));
       }

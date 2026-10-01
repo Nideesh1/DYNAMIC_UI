@@ -1,6 +1,6 @@
 /**
  * A run is a grove: a soft pool of its run colour on the forest floor + a floating label (topic, status).
- * Hatchet runs (run.hasSteps) also get three lantern stones on the path toward the pond — plan › research › write —
+ * Hatchet runs (run.hasSteps) also get three lantern stones on the path toward the pond - plan › research › write -
  * the running step's lantern burns amber, finished ones glow teal.
  */
 import { useFrame } from "@react-three/fiber";
@@ -63,7 +63,7 @@ function Grove({ run }: { run: Run }) {
 }
 
 function RunLabel({ run, pos }: { run: Run; pos: THREE.Vector3 }) {
-  useWorld(); // re-render on events (props only — no DOM)
+  useWorld(); // re-render on events (props only - no DOM)
   const done = run.status !== "started";
   return (
     <Label3D

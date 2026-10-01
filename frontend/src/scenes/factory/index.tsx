@@ -1,5 +1,5 @@
 /**
- * /factory — "Neon factory floor".
+ * /factory - "Neon factory floor".
  * Runs = production lines; agents = machines that rise out of floor hatches (parents big, subagents compact);
  * delegation = conveyor belts parent → child carrying crates; LLM calls = spark fountains from the exhaust stack
  * (sized by tokens); tool calls = robot arms; MCP servers = loading docks with their backends parked behind as

@@ -336,7 +336,7 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
         <sprite ref={halo} material={m.halo} />
         <group ref={body} scale={0.0001}>
           <mesh geometry={HIT_GEO} material={HIT_MAT} onClick={select} onPointerOver={() => (document.body.style.cursor = "pointer")} onPointerOut={() => (document.body.style.cursor = "")} />
-          {/* abdomen (striped), thorax, head — head toward +x */}
+          {/* abdomen (striped), thorax, head - head toward +x */}
           <mesh geometry={SPHERE_GEO} material={m.abdomen} position={[-0.35 - abdL * 0.5, -0.05, 0]} scale={[abdL, 0.44, 0.44]} rotation={[0, 0, 0.12]} />
           <mesh geometry={STING_GEO} material={m.head} position={[-0.35 - abdL * 1.48, -0.16, 0]} />
           <mesh geometry={SPHERE_GEO} material={m.thorax} position={[0.12, 0.02, 0]} scale={0.34} />

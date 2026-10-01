@@ -1,5 +1,5 @@
 /**
- * /hive — "Glowing honeycomb".
+ * /hive - "Glowing honeycomb".
  * The knowledge graph is the comb itself (entity cells light on reads/writes), agents are bees (top-level agents
  * are big queens, subagents are workers that fly out along visible flight paths), LLM calls flood the cells behind
  * the calling bee with honey light (radius by tokens), MCP servers are flowers at the edge whose petals are the

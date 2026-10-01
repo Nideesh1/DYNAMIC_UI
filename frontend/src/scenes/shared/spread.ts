@@ -13,7 +13,7 @@ export const isSubRole = (t: AgentType) => t === "graph_scout" || t === "records
 /** Seeded jitter in -0.5..0.5 for an id (stable per id + salt). */
 export const jit = (id: string, salt: number) => hash01(id, salt) - 0.5;
 
-/** 0, +1, -1, +2, -2, … — spreads a growing set symmetrically around a centre without knowing the final count. */
+/** 0, +1, -1, +2, -2, … - spreads a growing set symmetrically around a centre without knowing the final count. */
 export const alt = (k: number) => (k === 0 ? 0 : k % 2 ? (k + 1) / 2 : -k / 2);
 
 const groups = new Map<string, Map<string, number>>();

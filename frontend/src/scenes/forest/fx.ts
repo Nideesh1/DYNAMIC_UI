@@ -98,10 +98,10 @@ export function groundGlowMaterial(color: THREE.ColorRepresentation = "#fff") {
 // ------------------------------------------------------------------ geometries
 export const SPHERE_GEO = new THREE.SphereGeometry(1, 24, 16);
 export const PLANE_FLAT = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
-/** Closed cone pointing +Y, base at origin — direction arrowheads. */
+/** Closed cone pointing +Y, base at origin - direction arrowheads. */
 export const ARROW_GEO = new THREE.ConeGeometry(1, 1, 12).translate(0, 0.5, 0);
 
-/** Unit tube parameterised by t∈[0,1] along x — bent onto a quadratic bezier in the vertex shader (roots, hyphae). */
+/** Unit tube parameterised by t∈[0,1] along x - bent onto a quadratic bezier in the vertex shader (roots, hyphae). */
 function makeTubeGeometry(seg = 48, radial = 6) {
   const pos: number[] = [];
   const idx: number[] = [];

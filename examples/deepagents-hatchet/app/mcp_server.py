@@ -1,4 +1,4 @@
-"""analytics — a generic MCP server (streamable HTTP on :8200/mcp) for the example.
+"""analytics - a generic MCP server (streamable HTTP on :8200/mcp) for the example.
 
 Three tools, each "backed" by a different system so the 3D scenes can show MCP → backend links:
   query_warehouse  → Snowflake warehouse (warehouse)

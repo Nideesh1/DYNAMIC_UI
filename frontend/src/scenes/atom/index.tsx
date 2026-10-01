@@ -1,5 +1,5 @@
 /**
- * /atom — "Atom". The knowledge graph is the nucleus (nucleons light on reads/writes), each run is an orbital
+ * /atom - "Atom". The knowledge graph is the nucleus (nucleons light on reads/writes), each run is an orbital
  * shell (plane tilt seeded per run), agents are electrons on their shell (subagents orbit their parent as a
  * mini-atom, joined by a directional field line), LLM calls emit photons sized by tokens, MCP servers are outer
  * particle detectors with backend sensor modules, data flows as particle beams, and exits decay into fading trails.

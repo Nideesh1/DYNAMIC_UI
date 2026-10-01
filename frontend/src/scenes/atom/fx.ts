@@ -285,7 +285,7 @@ function orbOf(inst: Instance): Orb {
 const SCR = Array.from({ length: 6 }, () => new THREE.Vector3());
 /**
  * Electron position at time `t` (seconds, performance clock), stage space. Deterministic → also used for trails.
- * Born: launched out of the nucleus (top-level) or out of its parent (subagent). Exit: decays — spirals outward.
+ * Born: launched out of the nucleus (top-level) or out of its parent (subagent). Exit: decays - spirals outward.
  */
 export function electronAt(inst: Instance, t: number, out: THREE.Vector3, depth = 0): THREE.Vector3 {
   const o = orbOf(inst);

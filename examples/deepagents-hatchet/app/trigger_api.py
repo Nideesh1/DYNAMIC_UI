@@ -1,4 +1,4 @@
-"""Tiny HTTP trigger for agent_smoke — the target of agentglow's AGENTGLOW_RUN_WEBHOOK ("Run agents" button).
+"""Tiny HTTP trigger for agent_smoke - the target of agentglow's AGENTGLOW_RUN_WEBHOOK ("Run agents" button).
 
   POST /run {"topic": "..."}  →  {"run_id": "<hatchet workflow run id>", "topic": "..."}
 

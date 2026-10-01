@@ -1,5 +1,5 @@
 /**
- * /tunnel — "Time tunnel / warp".
+ * /tunnel - "Time tunnel / warp".
  * The camera drifts forward through an endless glowing tunnel; TIME = DEPTH. Each Hatchet run is a lane on the wall
  * (angle = run.slot) with three gate rings (plan / research / write) that fly toward and past the camera as the run
  * advances. Agent instances are capsule ships riding their lane; scouts fork the researcher's lane into sub-lanes.

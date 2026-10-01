@@ -1,5 +1,5 @@
 /**
- * /orbit — "Planetary system". FalkorDB is a spinning spiral galaxy at the core; each Hatchet run is its own
+ * /orbit - "Planetary system". FalkorDB is a spinning spiral galaxy at the core; each Hatchet run is its own
  * tilted orbital ring with plan/research/write beads; agent instances are living orbs born from their parent,
  * scouts bud off the researcher as moons; MCP servers are space stations on a far outer orbit.
  */

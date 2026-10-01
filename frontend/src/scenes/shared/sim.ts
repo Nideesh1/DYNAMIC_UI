@@ -122,7 +122,7 @@ function scheduleRun(at: Sched) {
   const writer = `${run}:writer`;
   step("write", "running", 200);
   spawn(writer, "writer", researcher);
-  msg(researcher, writer, "Findings merged — draft the brief", 120);
+  msg(researcher, writer, "Findings merged - draft the brief", 120);
   exit(researcher, 200);
   think(writer);
   llm(writer, 1800);

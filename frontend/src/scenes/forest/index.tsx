@@ -1,5 +1,5 @@
 /**
- * /forest — "Night forest".
+ * /forest - "Night forest".
  * Agents grow as glowing pines (parents tall, subagents saplings linked by roots of light, parent → child),
  * LLM calls are fireflies bursting from the canopy (sized by tokens), MCP servers + their backends are glowing
  * mushrooms wired by mycorrhizal hyphae, the knowledge graph is a moonlit pond in a stone circle whose nodes

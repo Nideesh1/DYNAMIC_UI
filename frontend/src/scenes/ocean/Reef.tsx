@@ -68,7 +68,7 @@ function layoutReef(g: Galaxy) {
 const SAMPLE = 200;
 
 export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
-  // FalkorDB is shown as a representative sample (not a count) — keep the structure readable
+  // FalkorDB is shown as a representative sample (not a count) - keep the structure readable
   const galaxy = useMemo<Galaxy>(() => {
     const nodes = full.nodes.slice(0, SAMPLE);
     const ids = new Set(nodes.map((nd) => nd.id));

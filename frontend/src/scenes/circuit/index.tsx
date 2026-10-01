@@ -1,5 +1,5 @@
 /**
- * /circuit — "Tron circuit board".
+ * /circuit - "Tron circuit board".
  * Hatchet runs = bus lanes with plan/research/write gates; agent instances = chips that drop in, work and derez;
  * FalkorDB = memory bank of instanced cells; MCP servers = I/O ports on the board edge; messages = light-cycle packets.
  */

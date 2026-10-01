@@ -321,7 +321,7 @@ function AgentPanel({ onClose }: { onClose: () => void }) {
                 </button>
               </li>
             ))}
-            {rows.length > shown.length && <li className="ap-more">+{rows.length - shown.length} more — refine the filter</li>}
+            {rows.length > shown.length && <li className="ap-more">+{rows.length - shown.length} more - refine the filter</li>}
             {rows.length === 0 && <li className="ap-more">No agents match.</li>}
           </ul>
         </>

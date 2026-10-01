@@ -35,7 +35,7 @@ for (const e of events) {
   await post([fresh(e)]);
   await sleep(STEP_MS);
 }
-console.log(`trace ${trace}: ${agents.size} agents live on ${url} — ending them in ${HOLD_S}s`);
+console.log(`trace ${trace}: ${agents.size} agents live on ${url} - ending them in ${HOLD_S}s`);
 await sleep(HOLD_S * 1000);
 for (const e of held) await post([{ ...fresh(e), span: { ...fresh(e).span, end_time_ms: Date.now() } }]);
 console.log("run complete");

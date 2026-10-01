@@ -4,7 +4,7 @@
  * Models a Hatchet + deepagents + FalkorDB system as LIVING agent instances:
  *   - runs:      Hatchet workflow runs (several concurrent), each with steps plan → research → write
  *   - instances: agent instances spawned during a run (planner, researcher, N scouts fanned out, writer);
- *                each is born (spawn), works (thinking/waiting), and exits (done/failed) — then fades out
+ *                each is born (spawn), works (thinking/waiting), and exits (done/failed) - then fades out
  *   - comets:    messages between instances (handoffs, delegations, results)
  *   - flares:    FalkorDB nodes read/written by an instance
  *   - mcpServers / mcpCalls: external MCP servers ("satellites") and request/response packets to them

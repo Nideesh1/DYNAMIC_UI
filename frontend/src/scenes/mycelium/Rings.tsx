@@ -1,7 +1,7 @@
 /**
  * Each run is a fairy ring: a circle of tiny glowing fruiting bodies in run.color around the run's colony.
  * It sweeps in when the run starts and fades when it ends. Hatchet runs (run.hasSteps) split the ring into
- * three arcs — plan › research › write — lit by step status (running pulses, done steady, queued dim).
+ * three arcs - plan › research › write - lit by step status (running pulses, done steady, queued dim).
  */
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
@@ -74,7 +74,7 @@ function FairyRing({ run }: { run: Run }) {
 }
 
 function RunLabel({ run, pos }: { run: Run; pos: THREE.Vector3 }) {
-  useWorld(); // re-render on events (props only — no DOM)
+  useWorld(); // re-render on events (props only - no DOM)
   const done = run.status !== "started";
   return (
     <Label3D

@@ -42,7 +42,7 @@ function RunAura({ run }: { run: Run }) {
 }
 
 function RunLabel({ run, pos }: { run: Run; pos: THREE.Vector3 }) {
-  useWorld(); // re-render on events (props only — no DOM)
+  useWorld(); // re-render on events (props only - no DOM)
   const done = run.status !== "started";
   return (
     <Label3D

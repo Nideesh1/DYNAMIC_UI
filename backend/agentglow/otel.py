@@ -2,7 +2,7 @@
 
 Standard OTLP exporters only ship ended spans; the 3D view needs starts too (an agent is "alive" while its
 span is open). Spans are queued on the caller's thread (never blocks) and POSTed in ~50 ms batches by a daemon
-thread. If the server is down, batches are dropped silently — tracing must never break the app.
+thread. If the server is down, batches are dropped silently - tracing must never break the app.
 """
 from __future__ import annotations
 

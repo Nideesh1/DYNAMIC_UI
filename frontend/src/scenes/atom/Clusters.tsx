@@ -5,7 +5,7 @@ import { lod } from "../shared/lod";
 import { shellRadius } from "./fx";
 
 const DEG = Math.PI / 180;
-/** Screen-plane angle per lane (stage space, nucleus at origin) — spread around the atom, clear of the HUD corners at 16:9. */
+/** Screen-plane angle per lane (stage space, nucleus at origin) - spread around the atom, clear of the HUD corners at 16:9. */
 const ANGLE = [200, 20, 100, 290, 150, 340];
 
 function place(lane: number, out: THREE.Vector3) {

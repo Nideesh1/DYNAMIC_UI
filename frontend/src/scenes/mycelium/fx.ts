@@ -117,7 +117,7 @@ export const STEM_GEO = new THREE.LatheGeometry(
   20,
 );
 
-/** Unit tube parameterised by t∈[0,1] along x, (cos,sin) in y/z — bent onto a hypha curve in the vertex shader. */
+/** Unit tube parameterised by t∈[0,1] along x, (cos,sin) in y/z - bent onto a hypha curve in the vertex shader. */
 function makeTubeGeometry(seg = 72, radial = 6) {
   const pos: number[] = [];
   const idx: number[] = [];
@@ -331,7 +331,7 @@ export function gillMaterial() {
   }) as THREE.ShaderMaterial & { uniforms: { uColor: { value: THREE.Color }; uGlow: { value: number }; uTime: { value: number } } };
 }
 
-/** Stem: pale glowing flesh, bent sideways (x) by uBend·y² — used for lean, sway and wilting. */
+/** Stem: pale glowing flesh, bent sideways (x) by uBend·y² - used for lean, sway and wilting. */
 export function stemMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: { uColor: { value: new THREE.Color() }, uGlow: { value: 0.5 }, uOpacity: { value: 1 }, uBend: { value: 0 } },

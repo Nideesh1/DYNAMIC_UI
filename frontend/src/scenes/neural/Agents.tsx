@@ -165,7 +165,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     }
 
     // synapse: visible while both ends live; grows on birth, retracts on exit
-    // lineage link lives while BOTH ends are alive; fades (~1.5s) once the parent exits — no dangling edges
+    // lineage link lives while BOTH ends are alive; fades (~1.5s) once the parent exits - no dangling edges
     const parentAlive = !!parent && !parent.exitAt;
     s.parentK += ((inst.parent && !inst.exitAt && parentAlive ? 1 : 0) - s.parentK) * (parentAlive ? 0.05 : 0.035);
     const u = m.syn.uniforms;

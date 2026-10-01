@@ -1,4 +1,4 @@
-"""agent_smoke — a real Hatchet workflow running deepagents. Observability is plain OpenTelemetry only.
+"""agent_smoke - a real Hatchet workflow running deepagents. Observability is plain OpenTelemetry only.
 
   plan      planner (any LLM via AGENT_MODEL, structured output) → 2–4 research questions
   research  researcher deep agent fans out to subagents via the `task` tool:
@@ -63,7 +63,7 @@ def text_of(msg) -> str:
 
 
 def step_span(topic: str):
-    """The Hatchet task span (current inside a task) — tag it with the run topic."""
+    """The Hatchet task span (current inside a task) - tag it with the run topic."""
     span = trace.get_current_span()
     span.set_attribute("agentglow.run.topic", topic)
     span.set_attribute("agentglow.run.workflow", WORKFLOW)

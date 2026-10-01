@@ -5,7 +5,7 @@ import { lod } from "../shared/lod";
 import { ringLocal, ringOf } from "./layout";
 
 const TAU = Math.PI * 2;
-/** [ring angle (twelfths of a turn), radius multiplier] per lane — spread around the core, clear of the HUD at 16:9. */
+/** [ring angle (twelfths of a turn), radius multiplier] per lane - spread around the core, clear of the HUD at 16:9. */
 const HOME: [number, number][] = [[4, 1], [1, 1], [1, 1], [2, 1.15], [7, 1], [2, 1]];
 /** when the lane also shows expanded runs: slide further along / outside the ring so the cluster sits beside them */
 const BESIDE: [number, number][] = [[5, 1.3], [4, 1.15], [11, 1.15], [1, 1], [5, 1], [3, 1.3]];

@@ -1,5 +1,5 @@
 /**
- * /flow — "Particle flow field / murmuration".
+ * /flow - "Particle flow field / murmuration".
  * Tens of thousands of particles swirl in luminous currents. FalkorDB is the glowing nebula at the centre (anchors =
  * graph nodes, flares burst them; writes = white supernova rings). Each Hatchet run is a slow vortex loop with three
  * attractors (plan → research → write) lit by step status; handoffs pour a jet between them. Agent instances are
@@ -68,10 +68,10 @@ function Field({ engine, onSelect }: { engine: FlowEngine; onSelect: (id: string
   );
 }
 
-// ------------------------------------------------------------------ labels (few, DOM updated via refs — no per-frame renders)
+// ------------------------------------------------------------------ labels (few, DOM updated via refs - no per-frame renders)
 
 function RunLabel({ run }: { run: Run }) {
-  useWorld(); // re-render on events (props only — no DOM)
+  useWorld(); // re-render on events (props only - no DOM)
   const s = run.slot % RUN_SLOTS;
   const pos = useMemo(() => STEPS.map((_, k) => attractorPos(s, k, new THREE.Vector3(), runSpin(run.id)).toArray()), [s, run.id]);
   const chip = (st: string) => (st === "running" ? run.color : st === "done" ? "#cbd5e1" : st === "failed" ? "#fecaca" : "#64748b");

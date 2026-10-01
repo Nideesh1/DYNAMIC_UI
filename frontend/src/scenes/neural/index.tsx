@@ -1,5 +1,5 @@
 /**
- * /neural — "Living brain".
+ * /neural - "Living brain".
  * FalkorDB = the cortex (neurons fire on graph reads/writes), Hatchet runs = firing pathways with 3 ganglia,
  * agent instances = soma neurons that grow out of their parent, messages = pulses along synapses,
  * MCP servers = sensory organs wired in by nerves (tethers while a call is pending).

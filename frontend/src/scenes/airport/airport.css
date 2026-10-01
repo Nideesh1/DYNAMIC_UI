@@ -1,4 +1,4 @@
-/* /airport — radar-scope DOM labels (data tags, airports, gates, flight strips). Scoped by ap- prefix. */
+/* /airport - radar-scope DOM labels (data tags, airports, gates, flight strips). Scoped by ap- prefix. */
 .ap-root { background: radial-gradient(ellipse at 45% 50%, #03140e 0%, #010604 60%, #000302 100%); }
 .ap-root, .ap-tag, .ap-airport, .ap-gate, .ap-strip, .ap-wp, .ap-bearing { --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace; }
 

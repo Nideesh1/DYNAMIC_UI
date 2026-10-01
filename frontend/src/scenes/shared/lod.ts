@@ -144,7 +144,7 @@ const notify = () => {
 
 /** Lane index (0..LOD_LANES-1) of a run slot. */
 export const laneOfSlot = (slot: number) => ((slot % LOD_LANES) + LOD_LANES) % LOD_LANES;
-/** Lane of a run id (its slot; runs we never saw start — e.g. a late-joining viewer — hash to a lane). */
+/** Lane of a run id (its slot; runs we never saw start - e.g. a late-joining viewer - hash to a lane). */
 export function laneOfRun(runId: string) {
   const r = world.runs.get(runId);
   return r ? laneOfSlot(r.slot) : Math.floor(hash01(runId, 77) * LOD_LANES) % LOD_LANES;
@@ -369,7 +369,7 @@ function recompute(now: number) {
   }
 }
 
-/** Per-frame cluster stats (agents, thinking, tokens, energy) — one pass over instances, no allocations. */
+/** Per-frame cluster stats (agents, thinking, tokens, energy) - one pass over instances, no allocations. */
 function stats() {
   const now = performance.now();
   const cl = lod.clusters;

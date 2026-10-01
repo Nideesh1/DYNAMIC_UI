@@ -1,4 +1,4 @@
-/** /ocean — "Bioluminescent deep sea": agents are jellyfish, Hatchet runs are currents, FalkorDB is a coral reef, MCP servers are anglerfish. */
+/** /ocean - "Bioluminescent deep sea": agents are jellyfish, Hatchet runs are currents, FalkorDB is a coral reef, MCP servers are anglerfish. */
 import { OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";

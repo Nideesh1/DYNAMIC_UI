@@ -26,7 +26,7 @@ Server on another port/host? `VITE_AGENTGLOW_URL=http://localhost:8124 npm run d
 
 ## No agents yet?
 
-- **Simulator:** open http://localhost:3210/?sim=1 — this app passes `sim` to `<AgentScene/>`, which runs the
+- **Simulator:** open http://localhost:3210/?sim=1 - this app passes `sim` to `<AgentScene/>`, which runs the
   built-in simulator with no server at all. (Without `sim`, the scene also falls back to the simulator if the
   server is unreachable.)
 - **Replay a real run:** with the server running, `npm run demo-spans -- http://localhost:8100` replays a recorded
@@ -43,6 +43,6 @@ Server on another port/host? `VITE_AGENTGLOW_URL=http://localhost:8124 npm run d
 npm install
 ```
 
-`.npmrc` sets `install-links=true` so npm copies the local package instead of symlinking it — a symlink would make
+`.npmrc` sets `install-links=true` so npm copies the local package instead of symlinking it - a symlink would make
 `agentglow` resolve React from `frontend/node_modules` and you'd get two copies of React. Re-run `npm install` after
 rebuilding the lib. To use the published package instead: `npm i agentglow` (replaces the `file:` spec) and delete `.npmrc`.

@@ -1,4 +1,4 @@
-/** /subway — neon transit map in 3D: Hatchet runs are lines, agents are trains, the knowledge graph is Graph Central. */
+/** /subway - neon transit map in 3D: Hatchet runs are lines, agents are trains, the knowledge graph is Graph Central. */
 import { Grid, OrbitControls, Stars } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";

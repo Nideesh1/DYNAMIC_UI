@@ -14,7 +14,7 @@ Hatchet workflow `agent_smoke` (3 steps):
 
 | Step | Agents | Touches |
 |---|---|---|
-| `plan` | **planner** (structured output; any LLM via `AGENT_MODEL`) → 2–4 research questions | — |
+| `plan` | **planner** (structured output; any LLM via `AGENT_MODEL`) → 2–4 research questions | - |
 | `research` | **researcher** deep agent delegates in parallel via the `task` tool to subagents **graph_scout** and **data_scout** | FalkorDB demo graph (reads); `analytics` MCP server → Snowflake warehouse / Spark cluster / Postgres customers DB |
 | `write` | **writer** deep agent drafts the brief | FalkorDB (writes the brief + `COVERS` edges) |
 
@@ -39,11 +39,11 @@ to the same TracerProvider that `watch()` reuses.
 ```bash
 cp .env.example .env            # set one LLM key (+ AGENT_MODEL if not Gemini; see "LLM provider" below)
 docker compose up -d --build    # agentglow, falkordb, hatchet, mcp, worker, trigger
-open http://localhost:8100      # scenes — press ▶ Run agents, or:
+open http://localhost:8100      # scenes - press ▶ Run agents, or:
 docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
 
-Hatchet UI: http://localhost:8180 (admin@example.com / Admin123!!) — you can also trigger `agent_smoke` there.
+Hatchet UI: http://localhost:8180 (admin@example.com / Admin123!!) - you can also trigger `agent_smoke` there.
 No other setup: the worker and trigger read the Hatchet API token from the `obs_hatchet_token` volume.
 "▶ Run agents" works because compose sets `AGENTGLOW_RUN_WEBHOOK=http://trigger:8300/run` on agentglow: its
 `POST /live/run {topic}` forwards to the example's `trigger` service (`app/trigger_api.py`), which starts an `agent_smoke` run.

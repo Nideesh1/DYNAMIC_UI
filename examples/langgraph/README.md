@@ -1,6 +1,6 @@
 # Example: LangGraph supervisor + workers → AgentGlow
 
-A supervisor agent delegates to three named worker agents — **researcher**, **analyst**, **writer** — each a
+A supervisor agent delegates to three named worker agents - **researcher**, **analyst**, **writer** - each a
 LangGraph agent (`create_agent(..., name=...)`) with fake local tools. AgentGlow draws the supervisor, fans the
 workers out as its subagents, and pulses on every LLM and tool call. The integration is one line:
 

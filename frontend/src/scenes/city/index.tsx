@@ -1,5 +1,5 @@
 /**
- * /city — "Cyberpunk city at night".
+ * /city - "Cyberpunk city at night".
  *   FalkorDB      = central data spire; every graph node is a window, flares blaze, writes fire a beam into the sky
  *   Hatchet runs  = districts with 3 gated intersections (plan / research / write); handoff = light-trail car
  *   Agent instances = skyscrapers that rise on spawn, flicker while thinking, go dark while waiting, sink on exit

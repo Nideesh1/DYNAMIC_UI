@@ -4,7 +4,7 @@ Run: uv run python -m app.worker
 """
 from . import config
 
-config.setup_tracing("deepagents-hatchet-worker")  # agentglow.watch() (+ Langfuse if keys set) — before agents run
+config.setup_tracing("deepagents-hatchet-worker")  # agentglow.watch() (+ Langfuse if keys set) - before agents run
 
 import agentglow  # noqa: E402
 from deepagents import create_deep_agent  # noqa: E402

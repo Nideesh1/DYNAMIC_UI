@@ -1,4 +1,4 @@
-/** "/" — theme gallery for the standalone app. */
+/** "/" - theme gallery for the standalone app. */
 import "./gallery.css";
 import { THEME_INFO, THEMES, type Theme } from "./themes";
 

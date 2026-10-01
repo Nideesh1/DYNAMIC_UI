@@ -1,13 +1,13 @@
 /**
- * /flow engine — a CPU particle murmuration driven by the shared world model.
+ * /flow engine - a CPU particle murmuration driven by the shared world model.
  *
  * Everything is typed arrays written straight into BufferAttributes once per frame (no React, no allocation):
- *   field    — tens of thousands of free particles advected by a divergence-free flow (galactic swirl + stream-function
+ *   field    - tens of thousands of free particles advected by a divergence-free flow (galactic swirl + stream-function
  *              noise + one large vortex per Hatchet run + small swirls around each living agent). Agent eddies CAPTURE
  *              field particles (condense), spin them while alive, and RELEASE them outward on exit (dissolve).
- *   nebula   — FalkorDB: particle clouds around graph-sample anchors; flares ignite an anchor and burst its cloud.
- *   currents — luminous loop per run (the Hatchet vortex), brightest at the running step, a pouring front on handoff.
- *   streams  — stateless particle jets: messages (comets), step handoffs, graph beams, MCP packets, MCP tethers.
+ *   nebula   - FalkorDB: particle clouds around graph-sample anchors; flares ignite an anchor and burst its cloud.
+ *   currents - luminous loop per run (the Hatchet vortex), brightest at the running step, a pouring front on handoff.
+ *   streams  - stateless particle jets: messages (comets), step handoffs, graph beams, MCP packets, MCP tethers.
  */
 import * as THREE from "three";
 import type { Galaxy } from "../shared/useSceneSetup";

@@ -1,5 +1,5 @@
 /**
- * /airport — "Radar scope".
+ * /airport - "Radar scope".
  * A top-down air-traffic scope with a slight tilt. Agents are flights (blips with ATC data tags and history
  * trails); subagents take off from their parent along dashed directional routes; handoffs fly between blips;
  * LLM calls are transponder pings sized by tokens; MCP servers are airports on the rim with backend gates;
