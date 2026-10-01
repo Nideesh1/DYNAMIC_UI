@@ -1,0 +1,11 @@
+.flow-run { display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; }
+.flow-run .scene-label { font-size: 11px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.flow-steps { display: flex; gap: 3px; font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: 0.06em; }
+.flow-steps span { padding: 2px 5px; border-radius: 999px; color: #64748b; background: rgba(3, 5, 11, 0.55); border: 1px solid rgba(100, 116, 139, 0.35); }
+.flow-steps span[data-s="running"] { color: #03050b; background: var(--c); border-color: var(--c); box-shadow: 0 0 12px var(--c); }
+.flow-steps span[data-s="done"] { color: var(--c); border-color: color-mix(in srgb, var(--c) 60%, transparent); }
+.flow-steps span[data-s="failed"] { color: #fecaca; background: #7f1d1d; }
+.flow-step { font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; letter-spacing: 0.08em; color: color-mix(in srgb, var(--c) 70%, white); text-shadow: 0 0 8px var(--c); opacity: 0.55; pointer-events: none; white-space: nowrap; transition: opacity 0.3s; }
+.flow-step[data-s="running"] { opacity: 1; }
+.flow-hint { font-size: 10px; padding: 1px 7px; opacity: 0.9; }
+.flow-label-core { font-size: 11px; letter-spacing: 0.04em; }

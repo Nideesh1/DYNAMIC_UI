@@ -95,6 +95,11 @@ function scheduleRun(at: Sched) {
     put(500 + Math.random() * 500, () => ({ type: "tool", run_id: run, id, tool: graphish ? "graph_neighbors" : "search_resolutions", args_preview: `"${nodes[0]}"`, ts: ts() }));
     put(600, () => ({ type: "graph", run_id: run, id, op: "read", nodes, ts: ts() }));
     put(700 + Math.random() * 900, () => ({ type: "llm", run_id: run, id, tokens_in: 1500 + Math.round(Math.random() * 2000), tokens_out: 200 + Math.round(Math.random() * 400), latency_ms: 900 + Math.random() * 1200, ts: ts() }));
+    // MCP tool call to an external server: request out, response back after latency
+    const [server, tool] = graphish ? pick([["nyc-open-data", "query_dataset"], ["github", "search_code"]]) : pick([["cms-data", "provider_lookup"], ["nyc-open-data", "311_complaints"], ["google-drive", "read_doc"]]);
+    const lat = 600 + Math.random() * 1400;
+    put(400, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "call", ts: ts() }));
+    put(lat, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "result", latency_ms: lat, ts: ts() }));
     if (Math.random() < 0.7) put(500, () => ({ type: "graph", run_id: run, id, op: "read", nodes: pick(NODES), ts: ts() }));
     put(800 + Math.random() * 1200, () => ({ type: "message", run_id: run, from_id: id, to_id: researcher, text: `Found ${2 + Math.floor(Math.random() * 6)} linked records`, ts: ts() }));
     put(200, () => ({ type: "exit", run_id: run, id, status: "done", ts: ts() }));
@@ -112,7 +117,9 @@ function scheduleRun(at: Sched) {
   think(writer);
   llm(writer, 1800);
   later(400, () => ({ type: "graph", run_id: run, id: writer, op: "write", nodes: [`Brief: ${topic}`, ...pick(NODES).slice(0, 2)], ts: ts() }));
-  step("write", "done", 600);
+  later(300, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "call", ts: ts() }));
+  later(700, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "result", latency_ms: 700, ts: ts() }));
+  step("write", "done", 400);
   later(150, () => ({ type: "final", run_id: run, text: `Brief on "${topic}": linked votes, hearings and meetings summarized with sources.`, ts: ts() }));
   exit(writer, 100);
   later(200, () => ({ type: "run", run_id: run, status: "completed", topic, workflow: "cb6_brief", ts: ts() }));

@@ -1,0 +1,9 @@
+.scene-label.subway-station { font-size: 10px; font-weight: 500; padding: 1px 6px; letter-spacing: 0.08em; text-transform: uppercase; color: #cbd5e1; opacity: 0.85; }
+.scene-label.subway-airport { font-size: 11px; }
+.scene-label.subway-run { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 4px 9px; border-radius: 10px; font-size: 11px; }
+.subway-steps { display: flex; gap: 4px; }
+.subway-steps b { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 0 5px; border-radius: 999px; color: #94a3b8; border: 1px solid #334155; text-shadow: none; }
+.subway-steps b[data-st="running"] { color: #fde68a; border-color: #fbbf24; box-shadow: 0 0 8px #fbbf2499; }
+.subway-steps b[data-st="done"] { color: #bbf7d0; border-color: #22c55e; }
+.subway-steps b[data-st="failed"] { color: #fecaca; border-color: #ef4444; }
+.scene-label.subway-flare { font-size: 10px; transition: opacity 0.2s; }

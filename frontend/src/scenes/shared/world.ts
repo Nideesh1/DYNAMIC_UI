@@ -7,6 +7,9 @@
  *                each is born (spawn), works (thinking/waiting), and exits (done/failed) — then fades out
  *   - comets:    messages between instances (handoffs, delegations, results)
  *   - flares:    FalkorDB nodes read/written by an instance
+ *   - mcpServers / mcpCalls: external MCP servers ("satellites") and request/response packets to them
+ *   - mcpPending: calls awaiting a response → draw a pulsing TETHER beam agent ↔ server (brighter/redder the longer it waits);
+ *     mcpResolved: just-answered calls (~700ms) → "snap back" flash along the tether, then it dissolves
  *
  * Scenes read `world` every frame inside useFrame (mutable, no re-render) and use `useWorld()` for HUD/DOM.
  */
@@ -27,7 +30,9 @@ export type WorldEvent =
   | { type: "message"; run_id: string; from_id: string; to_id: string; text: string; ts: number }
   | { type: "tool"; run_id: string; id: string; tool: string; args_preview: string; ts: number }
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
-  | { type: "final"; run_id: string; text: string; ts: number };
+  | { type: "final"; run_id: string; text: string; ts: number }
+  // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
+  | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number };
 
 export const AGENT_TYPES: { type: AgentType; label: string; color: string }[] = [
   { type: "planner", label: "Planner", color: "#a78bfa" },
@@ -65,6 +70,11 @@ export type Instance = {
   tokens: number;
   index: number; // stable slot within its run (0..)
   recent: WorldEvent[];
+  // per-agent counters for the inspector panel
+  llmCalls: number;
+  toolCalls: number;
+  mcpCalls: number;
+  nodes: Set<string>; // FalkorDB nodes this agent read/wrote
 };
 export type Run = {
   id: string;
@@ -82,6 +92,20 @@ export type Run = {
   final: string;
 };
 export type Comet = { id: number; run: string; from: string; to: string; start: number; dur: number; text: string };
+/** External MCP servers agents call (persistent "satellites"; registered on first use). */
+export type McpServer = { name: string; color: string; slot: number; activeAt: number; calls: number; inflight: number };
+/** One MCP request/response: a packet flying instance → server ("call") or server → instance ("result"). */
+export type McpCall = { id: number; run: string; instance: string; server: string; tool: string; phase: "call" | "result"; start: number; dur: number };
+/** An MCP call that has been sent but not answered yet: draw a live tether instance ↔ server while it waits. */
+export type McpPending = { key: string; run: string; instance: string; server: string; tool: string; since: number };
+export const MCP_COLORS: Record<string, string> = {
+  "nyc-open-data": "#f97316",
+  "cms-data": "#06b6d4",
+  github: "#e5e7eb",
+  slack: "#e879f9",
+  "google-drive": "#facc15",
+};
+
 export type Flare = { id: number; run: string; instance: string; node: string; op: "read" | "write"; start: number };
 
 /** How long finished instances/runs stay visible while fading out (ms). */
@@ -93,13 +117,23 @@ export const world = {
   instances: new Map<string, Instance>(),
   comets: [] as Comet[],
   flares: [] as Flare[],
+  mcpServers: new Map<string, McpServer>(),
+  mcpCalls: [] as McpCall[],
+  /** in-flight MCP calls keyed `${instance}|${server}|${tool}`; resolvedAt kept briefly for a "snap back" effect */
+  mcpPending: new Map<string, McpPending>(),
+  mcpResolved: [] as (McpPending & { resolvedAt: number })[],
   ticker: [] as WorldEvent[],
-  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0 },
+  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0 },
   lastFinal: "" as string,
   simulated: false,
   focus: null as string | null, // instance id most recently active
   focusAt: 0,
+  /** exited instances kept for the agent panel after their shape fades (newest last, capped) */
+  archive: new Map<string, Instance>(),
+  /** instance selected in the agent panel or by clicking a shape */
+  selected: null as string | null,
 };
+const ARCHIVE_MAX = 500;
 
 let seq = 0;
 let version = 0;
@@ -183,6 +217,10 @@ export function apply(ev: WorldEvent) {
         tokens: 0,
         index,
         recent: [],
+        llmCalls: 0,
+        toolCalls: 0,
+        mcpCalls: 0,
+        nodes: new Set(),
       });
       world.stats.spawned++;
       world.focus = ev.id;
@@ -195,6 +233,7 @@ export function apply(ev: WorldEvent) {
         i.status = ev.status;
         i.exitAt = now;
       }
+      for (const [k, p] of world.mcpPending) if (p.instance === ev.id) world.mcpPending.delete(k);
       break;
     }
     case "agent": {
@@ -212,6 +251,7 @@ export function apply(ev: WorldEvent) {
         i.pulse = Math.min(2.5, 0.6 + (ev.tokens_in + ev.tokens_out) / 1500);
         i.pulseAt = now;
         i.tokens += ev.tokens_in + ev.tokens_out;
+        i.llmCalls++;
       }
       world.stats.llmCalls++;
       world.stats.tokens += ev.tokens_in + ev.tokens_out;
@@ -228,14 +268,40 @@ export function apply(ev: WorldEvent) {
       if (i) {
         i.pulse = Math.max(i.pulse, 0.5);
         i.pulseAt = now;
+        i.toolCalls++;
       }
       break;
     }
     case "graph":
+      world.instances.get(ev.id)?.nodes && ev.nodes.forEach((n) => world.instances.get(ev.id)!.nodes.add(n));
       for (const n of ev.nodes.slice(0, 20)) world.flares.push({ id: ++seq, run: ev.run_id, instance: ev.id, node: n, op: ev.op, start: now });
       if (ev.op === "read") world.stats.graphReads += ev.nodes.length;
       else world.stats.graphWrites += ev.nodes.length;
       break;
+    case "mcp": {
+      let srv = world.mcpServers.get(ev.server);
+      if (!srv) {
+        srv = { name: ev.server, color: MCP_COLORS[ev.server] ?? "#94a3b8", slot: world.mcpServers.size, activeAt: now, calls: 0, inflight: 0 };
+        world.mcpServers.set(ev.server, srv);
+      }
+      srv.activeAt = now;
+      if (ev.phase === "call") {
+        const inst = world.instances.get(ev.id);
+        if (inst) inst.mcpCalls++;
+        srv.calls++;
+        srv.inflight++;
+        world.stats.mcpCalls++;
+      } else srv.inflight = Math.max(0, srv.inflight - 1);
+      world.mcpCalls.push({ id: ++seq, run: ev.run_id, instance: ev.id, server: ev.server, tool: ev.tool, phase: ev.phase, start: now, dur: 900 });
+      const key = `${ev.id}|${ev.server}|${ev.tool}`;
+      if (ev.phase === "call") world.mcpPending.set(key, { key, run: ev.run_id, instance: ev.id, server: ev.server, tool: ev.tool, since: now });
+      else {
+        const p = world.mcpPending.get(key);
+        if (p) world.mcpResolved.push({ ...p, resolvedAt: now });
+        world.mcpPending.delete(key);
+      }
+      break;
+    }
     case "final": {
       const r = world.runs.get(ev.run_id);
       if (r) r.final = ev.text;
@@ -246,7 +312,7 @@ export function apply(ev: WorldEvent) {
   const id = "id" in ev ? ev.id : ev.type === "message" ? ev.from_id : null;
   if (id) {
     const i = world.instances.get(id);
-    if (i) i.recent = [ev, ...i.recent].slice(0, 14);
+    if (i) i.recent = [ev, ...i.recent].slice(0, 40);
   }
   notify();
 }
@@ -257,6 +323,8 @@ export function tick(now = performance.now()) {
   for (const [id, i] of world.instances) {
     if (i.exitAt && now - i.exitAt > FADE_MS) {
       world.instances.delete(id);
+      world.archive.set(id, i);
+      if (world.archive.size > ARCHIVE_MAX) world.archive.delete(world.archive.keys().next().value!);
       changed = true;
     }
   }
@@ -268,9 +336,12 @@ export function tick(now = performance.now()) {
   }
   const nc = world.comets.length;
   world.comets = world.comets.filter((c) => now - c.start < c.dur + 250);
+  world.mcpResolved = world.mcpResolved.filter((r) => now - r.resolvedAt < 700);
+  const nm = world.mcpCalls.length;
+  world.mcpCalls = world.mcpCalls.filter((c) => now - c.start < c.dur + 250);
   const nf = world.flares.length;
   world.flares = world.flares.filter((f) => now - f.start < 2600);
-  if (changed || nc !== world.comets.length || nf !== world.flares.length) notify();
+  if (changed || nc !== world.comets.length || nf !== world.flares.length || nm !== world.mcpCalls.length) notify();
 }
 
 /** 0..1 visibility for an instance: grows in on spawn, fades out after exit. */
@@ -284,6 +355,24 @@ export function presence(i: Instance, now = performance.now()) {
 /** Current pulse energy (decays after each LLM/tool event). */
 export function energy(i: Instance, now = performance.now()) {
   return i.pulse * Math.exp(-((now - i.pulseAt) / 1000) * 2.2);
+}
+
+/** Seconds an MCP call has been waiting (for tether intensity / color: amber → red past ~2s). */
+export function waitSeconds(p: McpPending, now = performance.now()) {
+  return (now - p.since) / 1000;
+}
+
+/** Look up a live or archived (exited) instance. */
+export function getInstance(id: string | null | undefined): Instance | undefined {
+  if (!id) return undefined;
+  return world.instances.get(id) ?? world.archive.get(id);
+}
+
+/** Select an agent (panel list click or 3D click); null clears. */
+export function selectInstance(id: string | null) {
+  if (world.selected === id) return;
+  world.selected = id;
+  notify();
 }
 
 export function setSimulated(v: boolean) {
