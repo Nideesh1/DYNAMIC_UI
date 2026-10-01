@@ -1,22 +1,25 @@
 /**
- * Knowledge graph = a dense glowing mycelial mat at the heart of the network (a low mound of nodes laid out
- * phyllotactically, knit together by short hyphae). Reads/writes light nodes up:
+ * Graph resource slot: the knowledge graph = a small dense glowing mycelial mat on the side of the colonies (a low
+ * mound of nodes laid out phyllotactically, knit together by short hyphae), drawn in its own frame (radius
+ * MAT_R); the kit positions, scales and fades it, and only draws it when the session has a graph. Reads/writes
+ * light nodes up:
  *   read  → node flares in the agent's color, a thread carries the data node → agent (arrow at the agent)
  *   write → node flashes white, a ripple spreads across the mat, thread agent → node (arrow at the node)
  */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
 import { KIND_COLOR, world } from "../shared/world";
-import { ArrowPool, DECAL_GEO, FLAT_RING_GEO, MAT_R, TEAL, TYPE_C, VIOLET, WHITE, addScaled, additiveBasic, capPos, glowDecalMaterial, pointScale, pointsMaterial, reduced } from "./fx";
+import { kit, stageToGraph, type GraphSlotProps } from "../shared/kit";
+import { ArrowPool, DECAL_GEO, FLAT_RING_GEO, MAT_R, TEAL, TYPE_C, VIOLET, WHITE, addScaled, additiveBasic, capOf, glowDecalMaterial, pointScale, pointsMaterial, reduced } from "./fx";
 
 const MAX_NODES = 260;
 const MAX_BEAMS = 40;
 const BEAM_SEG = 20;
 const MAX_RIPPLES = 10;
-const MAX_NAMES = 4;
+const MAX_NAMES = 3;
 
 function sample(g: Galaxy): Galaxy {
   const nodes = g.nodes.slice(0, MAX_NODES);
@@ -26,7 +29,9 @@ function sample(g: Galaxy): Galaxy {
 const moundY = (r: number) => 0.42 * Math.max(0, 1 - (r / MAT_R) ** 2) + 0.06;
 
 const MAX_FLARES = 64;
-export function Mat({ galaxy: full }: { galaxy: Galaxy }) {
+export function Mat({ galaxy: full }: GraphSlotProps) {
+  // names grow toward the agents (the graph sits left of the core on wide screens; centred labels would clip at the edge)
+  const [anchor, setAnchor] = useState<"left" | "center">("center");
   const galaxy = useMemo(() => sample(full), [full]);
   const n = galaxy.nodes.length;
   const { size, gl, camera } = useThree();
@@ -113,7 +118,7 @@ export function Mat({ galaxy: full }: { galaxy: Galaxy }) {
   );
   const cache = useMemo(() => new Map<string, number>(), [galaxy]);
   const arrows = useMemo(() => new ArrowPool(MAX_BEAMS), []);
-  const tmp = useMemo(() => ({ v: new THREE.Vector3(), v2: new THREE.Vector3(), mid: new THREE.Vector3(), c: new THREE.Color(), c2: new THREE.Color() }), []);
+  const tmp = useMemo(() => ({ v: new THREE.Vector3(), v2: new THREE.Vector3(), mid: new THREE.Vector3(), sp: new THREE.Vector3(), c: new THREE.Color(), c2: new THREE.Color() }), []);
   const idx = (name: string) => {
     let i = cache.get(name);
     if (i === undefined) cache.set(name, (i = nodeIndex(galaxy, name)));
@@ -121,9 +126,12 @@ export function Mat({ galaxy: full }: { galaxy: Galaxy }) {
   };
 
   useFrame(({ clock }) => {
+    const wantAnchor = kit.graph.target.x < -0.5 ? "left" : "center";
+    if (wantAnchor !== anchor) setAnchor(wantAnchor);
     const now = performance.now();
     const { pos, base, fire, white, fireC } = data;
-    mats.nodes.uniforms.uScale.value = pointScale(size.height, gl.getPixelRatio(), (camera as THREE.PerspectiveCamera).fov);
+    // point sprites are sized in view space: follow the kit's group scale so the side mat stays proportionate
+    mats.nodes.uniforms.uScale.value = pointScale(size.height, gl.getPixelRatio(), (camera as THREE.PerspectiveCamera).fov) * kit.graph.scale;
     fire.fill(0);
     white.fill(0);
     const { v, v2, mid, c, c2 } = tmp;
@@ -158,8 +166,9 @@ export function Mat({ galaxy: full }: { galaxy: Galaxy }) {
         }
         rp++;
       }
-      // thread: agent cap (t=0) ↔ graph node (t=1)
-      const sp = capPos.get(f.instance);
+      // thread: agent cap (t=0) <-> graph node (t=1), drawn inside the graph group (agent cap in graph-local units)
+      const cap = capOf(f.instance);
+      const sp = cap ? stageToGraph(cap.p, tmp.sp) : undefined;
       if (sp && age < 2.2 && b < MAX_BEAMS) {
         v.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
         mid.copy(sp).add(v).multiplyScalar(0.5);
@@ -231,7 +240,7 @@ export function Mat({ galaxy: full }: { galaxy: Galaxy }) {
       let near = false;
       for (let z = 0; z < shown; z++) {
         const g0 = nameGroups.current[z];
-        if (g0 && Math.abs(g0.position.z - pos[i * 3 + 2]) < 0.9 && Math.abs(g0.position.x - pos[i * 3]) < 3.2) near = true;
+        if (g0 && Math.abs(g0.position.z - pos[i * 3 + 2]) * kit.graph.scale < 1.1 && Math.abs(g0.position.x - pos[i * 3]) * kit.graph.scale < 4) near = true;
       }
       if (near) continue;
       const el = nameRefs.current[shown];
@@ -256,7 +265,7 @@ export function Mat({ galaxy: full }: { galaxy: Galaxy }) {
 
   return (
     <>
-      <mesh geometry={DECAL_GEO} material={mats.pool} scale={MAT_R * 4.2} position={[0, 0.01, 0]} />
+      <mesh geometry={DECAL_GEO} material={mats.pool} scale={MAT_R * 3.2} position={[0, 0.01, 0]} />
       <mesh geometry={DECAL_GEO} material={mats.core} scale={MAT_R * 1.8} position={[0, 0.03, 0]} />
       <lineSegments geometry={data.ageo} material={mats.arcs} frustumCulled={false} />
       <points geometry={data.ngeo} material={mats.nodes} frustumCulled={false} />
@@ -267,10 +276,10 @@ export function Mat({ galaxy: full }: { galaxy: Galaxy }) {
       ))}
       {Array.from({ length: MAX_NAMES }, (_, k) => (
         <group key={k} ref={(x) => void (nameGroups.current[k] = x)}>
-          <Label3D ref={(x) => void (nameRefs.current[k] = x)} text="" offset={[0, 0.34]} size={0.24} opacity={0} fadeMs={250} pxRange={[8, 12]} />
+          <Label3D ref={(x) => void (nameRefs.current[k] = x)} text="" offset={[0, 0.34]} anchorX={anchor} size={0.24} opacity={0} fadeMs={250} pxRange={[8, 12]} />
         </group>
       ))}
-      <GraphLabel3D position={[0, 0.2, -MAT_R - 0.7]} suffix=" · mycelial mat" color="#c084fc" size={0.28} opacity={0.75} pxRange={[8, 12]} />
+      <GraphLabel3D position={[anchor === "left" ? -MAT_R : 0, 0.2, -MAT_R - 0.7]} anchorX={anchor} suffix=" · mycelial mat" color="#c084fc" size={0.28} opacity={0.75} pxRange={[8, 12]} />
     </>
   );
 }

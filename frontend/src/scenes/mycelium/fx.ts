@@ -1,14 +1,12 @@
 /**
- * Mycelium scene: palette, shaders, shared geometries, easing and the ground layout.
+ * Mycelium scene: palette, shaders, shared geometries/materials and easing.
  *
- * Stage space: the forest floor is the XZ plane (y = 0). The knowledge-graph mat sits at the origin,
- * runs bloom in sectors around it (each run its own fairy ring), MCP servers sit at the network's edge
- * between the run sectors, fed by thick trunk hyphae; their backends fan out beyond them.
+ * Stage space: the forest floor is the XZ plane (y = 0). The scene kit (preset radial, plane xz) places the
+ * colonies (runs) at the centre, MCP servers + backends on the outskirts and the graph mat on the side.
  */
 import * as THREE from "three";
-import { alt, spreadIndex } from "../shared/spread";
-import { TYPE_COLOR, hash01, world, type AgentType, type Instance } from "../shared/world";
-import { laneOfRun, laneRank, lod } from "../shared/lod";
+import { TYPE_COLOR, type AgentType } from "../shared/world";
+import { kit } from "../shared/kit";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -359,95 +357,27 @@ export function stemMaterial() {
   }) as THREE.ShaderMaterial & { uniforms: { uColor: { value: THREE.Color }; uGlow: { value: number }; uOpacity: { value: number }; uBend: { value: number } } };
 }
 
-// ------------------------------------------------------------------ layout (ground plane)
-export const MAT_R = 3.8; // knowledge-graph mat radius
-export const RUN_R = 6.9; // distance of a run's root agents from the mat
-export const SRV_R = 14.4; // MCP servers (network edge)
-export const BACK_R = 17.4; // their backends
+// ------------------------------------------------------------------ sizes
+/** knowledge-graph mat radius (side GraphResource, its own local frame) */
+export const MAT_R = 3.8;
+/** stem height per unit role size (Mushroom) */
+export const STEM_H = 1.75;
 
+const _cap = new THREE.Vector3();
 /**
- * Layout slot of a run: its own slot normally; while grouped (LOD) lane + 6·rank, so focus runs sit in their lane's
- * sector and extra expanded runs of a clicked lane step round (one-sided) from it.
+ * Approximate cap centre of a drawn agent (stage space) + cap radius, derived from the kit (foot = agentLive).
+ * Returns undefined when the agent isn't drawn (collapsed into a cluster, or gone).
  */
-export function runSlot(runId: string) {
-  if (lod.grouped) return laneOfRun(runId) + 6 * laneRank(runId);
-  return world.runs.get(runId)?.slot ?? 0;
+export function capOf(id: string, out: THREE.Vector3 = _cap): { p: THREE.Vector3; r: number } | undefined {
+  const a = kit.agents.get(id);
+  if (!a) return undefined;
+  out.copy(a.live);
+  out.y += (STEM_H + 0.12) * a.scale;
+  capTmp.p = out;
+  capTmp.r = a.scale;
+  return capTmp;
 }
-/** Angle of a run sector: 6 slots around the mat, jittered per run. */
-export function runAngle(slot: number, runId: string) {
-  return (slot % 6) * (Math.PI / 3) + Math.PI / 6 + (hash01(runId, 1) - 0.5) * 0.26 + Math.floor(slot / 6) * 0.45;
-}
-export function runCenter(slot: number, runId: string, r: number, out: THREE.Vector3) {
-  const a = runAngle(slot, runId);
-  return out.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-}
-
-/** Stable ground position of each agent's stem base (computed once per instance). */
-export const basePos = new Map<string, THREE.Vector3>();
-/** layout slot each cached base was computed for (LOD re-lays a run out → fresh Vector3) */
-const baseSlot = new Map<string, number>();
-/** Live cap centre (world/stage space) + current cap radius, written by each mushroom every frame. */
-export const capPos = new Map<string, THREE.Vector3>();
-export const capSize = new Map<string, number>();
-
-const ROLE_T: Record<AgentType, number> = { planner: -2.4, researcher: 0, writer: 2.4, graph_scout: 0, records_scout: 0, data_scout: 0 };
-const ROLE_GROUP: Record<AgentType, string> = { planner: "myc:planner", researcher: "myc:researcher", writer: "myc:writer", graph_scout: "myc:root", records_scout: "myc:root", data_scout: "myc:root" };
-const kidGroup = new Map<string, string>();
-
-export function agentBase(inst: Instance): THREE.Vector3 {
-  const slot = runSlot(inst.run);
-  let p = basePos.get(inst.id);
-  if (p && baseSlot.get(inst.id) === slot) return p;
-  p = new THREE.Vector3();
-  baseSlot.set(inst.id, slot);
-  if (baseSlot.size > 600) for (const id of baseSlot.keys()) if (!world.instances.has(id)) baseSlot.delete(id);
-  const parentInst = inst.parent ? world.instances.get(inst.parent) : undefined;
-  const parentP = parentInst ? (basePos.has(parentInst.id) ? agentBase(parentInst) : undefined) : undefined;
-  if (parentP && parentInst) {
-    // child: grows outward from its parent, fanned by sibling index
-    let g = kidGroup.get(inst.parent!);
-    if (!g) kidGroup.set(inst.parent!, (g = `myc:kids:${inst.parent}`));
-    const k = spreadIndex(inst, g);
-    const out = Math.atan2(parentP.z, parentP.x);
-    const row = Math.floor(k / 5);
-    const fan = Math.max(-1.45, Math.min(1.45, alt(k % 5) * 0.5)) + (hash01(inst.id, 7) - 0.5) * 0.28 + (row ? 0.31 : 0);
-    const depth = parentIsSub(inst) ? 2.3 : 3.15;
-    const len = depth * (0.92 + 0.22 * hash01(inst.id, 8)) + row * 1.7;
-    p.set(parentP.x + Math.cos(out + fan) * len, 0, parentP.z + Math.sin(out + fan) * len);
-  } else {
-    // root agent: in its run's sector, role offset along the tangent, duplicates pushed outward/sideways
-    const a = runAngle(slot, inst.run);
-    const k = spreadIndex(inst, ROLE_GROUP[inst.type]);
-    const tx = -Math.sin(a);
-    const tz = Math.cos(a);
-    const t = ROLE_T[inst.type] + alt(k) * 1.5;
-    const r = RUN_R + (k ? Math.ceil(k / 2) * 1.2 : 0) + (hash01(inst.id, 9) - 0.5) * 0.8;
-    p.set(Math.cos(a) * r + tx * t, 0, Math.sin(a) * r + tz * t);
-  }
-  p.x += (hash01(inst.id, 10) - 0.5) * 0.5;
-  p.z += (hash01(inst.id, 11) - 0.5) * 0.5;
-  basePos.set(inst.id, p);
-  return p;
-}
-function parentIsSub(inst: Instance) {
-  const par = inst.parent ? world.instances.get(inst.parent) : undefined;
-  return !!par?.subagent;
-}
-
-/** MCP servers: at the network edge, between run sectors. */
-export function serverPos(slot: number, out: THREE.Vector3) {
-  const ring = Math.floor(slot / 6);
-  const a = (slot % 6) * (Math.PI / 3) + ring * (Math.PI / 6);
-  const r = SRV_R + ring * 2.6;
-  return out.set(Math.cos(a) * r, 0.9, Math.sin(a) * r);
-}
-/** Backend k of n behind a server: fanned along the tangent, further out. */
-export function backendPos(slot: number, k: number, n: number, out: THREE.Vector3) {
-  const ring = Math.floor(slot / 6);
-  const a = (slot % 6) * (Math.PI / 3) + ring * (Math.PI / 6) + (k - (n - 1) / 2) * 0.2;
-  const r = BACK_R + ring * 2.6 + (n > 2 && k % 2 ? 1.1 : 0);
-  return out.set(Math.cos(a) * r, 0.7, Math.sin(a) * r);
-}
+const capTmp = { p: _cap, r: 0 };
 
 /** Pooled instanced arrowheads placed on hypha curves (data-flow direction). */
 export class ArrowPool {

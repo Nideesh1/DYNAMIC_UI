@@ -8,10 +8,11 @@
  * A faint mycelium web spreads under the whole forest floor for ambience.
  */
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type McpResource, type McpServer, type ResourceKind } from "../shared/world";
+import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import {
   ARROW_GEO,
   ArrowPool,
@@ -33,7 +34,6 @@ import {
   reduced,
   tubeMaterial,
 } from "./fx";
-import { backendPos, basePos, serverPos } from "./layout";
 import { emitTrail } from "./Particles";
 
 // ------------------------------------------------------------------ mushroom shapes
@@ -104,24 +104,30 @@ function Fungus({ parts, cap, stem }: { parts: Part[]; cap: THREE.Material; stem
 }
 
 // ------------------------------------------------------------------ backend fungi
-function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number; n: number }) {
-  const pos = useMemo(() => backendPos(srv.slot, k, n, new THREE.Vector3()), [srv.slot, k, n]);
-  const sp = useMemo(() => serverPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+/** Backend slot: a smaller fungus of its kind behind the server mushroom, wired to it by a hypha. */
+export function Backend({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const k = backend.k;
   const parts = useMemo(() => kindParts(res.kind), [res.kind]);
   const col = useMemo(() => new THREE.Color(srv.color).lerp(C_TEAL, 0.25).lerp(C_WHITE, 0.15), [srv.color]);
-  const m = useMemo(() => {
-    const edge = tubeMaterial(col, 0.04, 1);
-    edge.uniforms.uP0.value.set(sp.x, 0.05, sp.z);
-    edge.uniforms.uP2.value.set(pos.x, 0.05, pos.z);
-    groundControl(edge.uniforms.uP0.value, edge.uniforms.uP2.value, 0.18 * (k % 2 ? 1 : -1), 0.05, edge.uniforms.uP1.value);
-    return { edge, arrow: additiveBasic(col), cap: additiveBasic(col), stem: additiveBasic(col), halo: glowSpriteMaterial(col), pool: groundGlowMaterial(col) };
-  }, [sp, pos, col, k]);
+  const m = useMemo(
+    () => ({ edge: tubeMaterial(col, 0.04, 1), arrow: additiveBasic(col), cap: additiveBasic(col), stem: additiveBasic(col), halo: glowSpriteMaterial(col), pool: groundGlowMaterial(col) }),
+    [col],
+  );
+  const at = useRef<THREE.Group>(null);
   const g = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
   const arrow = useRef<THREE.Mesh>(null);
   const label = useRef<Label3DHandle>(null);
   const lastText = useRef("");
   useFrame(({ clock }) => {
+    // the kit places server + backend (they ease when the periphery re-lays out)
+    const e0 = m.edge.uniforms;
+    e0.uP0.value.set(mcp.pos.x, 0.05, mcp.pos.z);
+    e0.uP2.value.set(backend.pos.x, 0.05, backend.pos.z);
+    groundControl(e0.uP0.value, e0.uP2.value, 0.18 * (k % 2 ? 1 : -1), 0.05, e0.uP1.value);
+    at.current?.position.copy(backend.pos);
     const now = performance.now();
     const busy = res.inflight > 0;
     const act = Math.exp(-((now - res.activeAt) / 1000) * 1.5);
@@ -189,7 +195,7 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
     <>
       <mesh geometry={TUBE_GEO} material={m.edge} frustumCulled={false} />
       <mesh ref={arrow} geometry={ARROW_GEO} material={m.arrow} visible={false} />
-      <group position={pos}>
+      <group ref={at}>
         <mesh geometry={PLANE_FLAT} material={m.pool} position={[0, 0.02, 0]} scale={3.2} />
         <sprite ref={halo} material={m.halo} position={[0, 0.8, 0]} />
         <group ref={g}>
@@ -202,19 +208,16 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
 }
 
 // ------------------------------------------------------------------ server mushrooms
-function Server({ srv }: { srv: McpServer }) {
-  const pos = useMemo(() => serverPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+/** MCP server slot: a big glowing mushroom cluster on the outskirts. */
+export function Server({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
   const col = useMemo(() => new THREE.Color(srv.color).lerp(C_TEAL, 0.2), [srv.color]);
   const m = useMemo(() => ({ cap: additiveBasic(col), stem: additiveBasic(col), halo: glowSpriteMaterial(col), pool: groundGlowMaterial(col) }), [col]);
   const halo = useRef<THREE.Sprite>(null);
   const g = useRef<THREE.Group>(null);
-  const [res, setRes] = useState<McpResource[]>([]);
-  const nRes = useRef(0);
+  const at = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
-    if (srv.resources.size !== nRes.current) {
-      nRes.current = srv.resources.size;
-      setRes([...srv.resources.values()]);
-    }
+    at.current?.position.copy(mcp.pos);
     const now = performance.now();
     const busy = srv.inflight > 0;
     const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.5);
@@ -228,19 +231,14 @@ function Server({ srv }: { srv: McpServer }) {
     if (g.current) g.current.scale.setScalar(1 + act * 0.05 + beat * 0.03);
   });
   return (
-    <>
-      <group position={pos}>
-        <mesh geometry={PLANE_FLAT} material={m.pool} position={[0, 0.02, 0]} scale={6} />
-        <sprite ref={halo} material={m.halo} position={[0, 1.6, 0]} />
-        <group ref={g}>
-          <Fungus parts={SERVER_PARTS} cap={m.cap} stem={m.stem} />
-        </group>
-        <Label3D position={[0, 2.95, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.3} pxRange={[9, 13]} />
+    <group ref={at}>
+      <mesh geometry={PLANE_FLAT} material={m.pool} position={[0, 0.02, 0]} scale={6} />
+      <sprite ref={halo} material={m.halo} position={[0, 1.6, 0]} />
+      <group ref={g}>
+        <Fungus parts={SERVER_PARTS} cap={m.cap} stem={m.stem} />
       </group>
-      {res.map((r, k) => (
-        <Backend key={r.name} srv={srv} res={r} k={k} n={res.length} />
-      ))}
-    </>
+      <Label3D position={[0, 2.95, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.3} pxRange={[9, 13]} />
+    </group>
   );
 }
 
@@ -271,13 +269,13 @@ function Hyphae() {
     // curve runs tree (t=0) → server (t=1), hugging the ground
     const draw = (instance: string, server: string, mode: number, x: number, salt: number) => {
       if (n >= MAX_T) return;
-      const bp = basePos.get(instance);
+      const bp = agentLive(instance);
       const srv = world.mcpServers.get(server);
-      if (!bp || !srv) return;
+      const sv = serverPos(server);
+      if (!bp || !srv || !sv) return;
       const { a, b, c, p, col, k } = tmp;
       a.set(bp.x, 0.07, bp.z);
-      serverPos(srv.slot, b);
-      b.y = 0.07;
+      b.set(sv.x, 0.07, sv.z);
       groundControl(a, b, 0.16 * (salt % 2 ? 1 : -1), 0.07, c);
       col.set(srv.color).lerp(C_TEAL, 0.3);
       let base: number;
@@ -363,7 +361,6 @@ function MyceliumWeb() {
         a += (rnd() - 0.5) * 0.7;
         const nx = x + Math.cos(a) * 0.55;
         const nz = z + Math.sin(a) * 0.55;
-        if (Math.hypot(nx, nz) < 6.2) break; // stay out of the pond
         pos.push(x, 0.035, z, nx, 0.035, nz);
         ph.push(d, d + 0.55);
         d += 0.55;
@@ -374,7 +371,7 @@ function MyceliumWeb() {
     };
     for (let k = 0; k < 30; k++) {
       const a = rnd() * Math.PI * 2;
-      const r = 7 + rnd() * 16;
+      const r = 1.5 + rnd() * 21;
       walk(Math.cos(a) * r, Math.sin(a) * r, rnd() * Math.PI * 2, 18 + Math.floor(rnd() * 22), rnd() * 20, 0);
     }
     const geo = new THREE.BufferGeometry();
@@ -389,21 +386,11 @@ function MyceliumWeb() {
   return <lineSegments geometry={geo} material={mat} />;
 }
 
+/** Theme extras: the ambient mycelium web + pending-call hyphae tethers (servers/backends are kit slots). */
 export function Mushrooms() {
-  const [servers, setServers] = useState<McpServer[]>([]);
-  const k = useRef(-1);
-  useFrame(() => {
-    if (world.mcpServers.size !== k.current) {
-      k.current = world.mcpServers.size;
-      setServers([...world.mcpServers.values()]);
-    }
-  });
   return (
     <>
       <MyceliumWeb />
-      {servers.map((s) => (
-        <Server key={s.name} srv={s} />
-      ))}
       <Hyphae />
     </>
   );

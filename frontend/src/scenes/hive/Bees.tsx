@@ -11,8 +11,9 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { energy, presence, roleScale, waitSeconds, world, type Comet, type Instance } from "../shared/world";
-import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
+import { energy, presence, waitSeconds, world, type Comet } from "../shared/world";
+import { isExpanded, lod, showLabel } from "../shared/lod";
+import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
   AMBER,
   ARROW_GEO,
@@ -25,14 +26,10 @@ import {
   additive,
   arcControl,
   backOut,
-  beeHome,
-  beePos,
-  beeTarget,
   bezier,
   clamp01,
   easeInOut,
   flightCtrl,
-  forgetBee,
   glowSprite,
   glowTexture,
   reduced,
@@ -49,6 +46,8 @@ const HIT_GEO = new THREE.SphereGeometry(1.15, 10, 8);
 const HIT_MAT = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
 const RING_GEO = new THREE.RingGeometry(1.25, 1.36, 6, 1);
 const POLLEN_N = 7;
+/** bees read a bit larger than the kit's unit agent (their bodies are long and thin) */
+const BEE_K = 1.3;
 
 let wingTex: THREE.Texture | null = null;
 function wingTexture() {
@@ -122,8 +121,10 @@ function bodyMaterial(base: THREE.ColorRepresentation, rim: THREE.Color, stripes
   }) as unknown as BodyMat;
 }
 
-// ------------------------------------------------------------------ a bee
-function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => void }) {
+// ------------------------------------------------------------------ a bee (kit Agent slot)
+/** One bee at the kit's home (`agent.pos`); the hover bob / lift-off is written into `agent.live`. */
+export function Bee({ agent, selected, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
   const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
   const wingL = useRef<THREE.Mesh>(null);
@@ -133,6 +134,7 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
   const ring = useRef<THREE.Mesh>(null);
   const arrow = useRef<THREE.Mesh>(null);
   const label = useRef<Label3DHandle>(null);
+  const labelG = useRef<THREE.Group>(null);
   const queen = !inst.subagent;
   const seed = useMemo(() => [...inst.id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 9973, 7) / 9973, [inst.id]);
   const color = TYPE_C[inst.type];
@@ -156,9 +158,6 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
   }, [color, queen]);
   const s = useMemo(
     () => ({
-      home: new THREE.Vector3(),
-      target: new THREE.Vector3(),
-      live: new THREE.Vector3(),
       prev: new THREE.Vector3(),
       p0: new THREE.Vector3(),
       p1: new THREE.Vector3(),
@@ -167,7 +166,6 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
       b: new THREE.Vector3(),
       d: new THREE.Vector3(),
       c: new THREE.Color(),
-      init: false,
       p0set: false,
       face: 1,
       yaw: 0,
@@ -179,14 +177,9 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
   );
 
   useEffect(() => {
-    beePos.set(inst.id, s.live);
-    beeHome.set(inst.id, s.home);
     flightCtrl.set(inst.id, s.p1);
     return () => {
-      if (beePos.get(inst.id) === s.live) beePos.delete(inst.id);
-      if (beeHome.get(inst.id) === s.home) beeHome.delete(inst.id);
       if (flightCtrl.get(inst.id) === s.p1) flightCtrl.delete(inst.id);
-      forgetBee(inst.id);
     };
   }, [inst.id, s]);
 
@@ -194,9 +187,8 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
     const now = performance.now();
     const t = clock.elapsedTime;
     const still = reduced ? 0 : 1;
-    beeTarget(inst, s.target);
-    if (!s.init) s.home.copy(s.target), (s.init = true);
-    else s.home.lerp(s.target, 0.035);
+    const home = agent.pos;
+    const live = agent.live;
 
     // lifecycle
     const tb = (now - inst.bornAt) / 1000;
@@ -208,40 +200,41 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
 
     // parent anchor for the flight path
     const parent = inst.parent ? world.instances.get(inst.parent) : undefined;
-    const pp = inst.parent ? beePos.get(inst.parent) : undefined;
+    const pp = inst.parent ? agentLive(inst.parent) : undefined;
     if (pp) s.p0.copy(pp), (s.p0set = true);
-    else if (!s.p0set) s.p0.copy(s.home), (s.p0set = true);
+    else if (!s.p0set) s.p0.copy(home), (s.p0set = true);
     const hasPath = !!inst.parent && s.p0set && !!pp;
 
-    // hover: gentle figure-eight bob
-    s.live.set(
-      s.home.x + Math.sin(t * 0.7 + seed * 20) * 0.22 * still,
-      s.home.y + Math.sin(t * 1.4 + seed * 9) * 0.16 * still,
-      s.home.z + Math.cos(t * 0.6 + seed * 5) * 0.18 * still,
+    // hover: gentle figure-eight bob (drawn position: beams, tethers and messages read it via agentLive)
+    const bob = still * Math.min(1.2, fit.spread);
+    live.set(
+      home.x + Math.sin(t * 0.7 + seed * 20) * 0.22 * bob,
+      home.y + Math.sin(t * 1.4 + seed * 9) * 0.16 * bob,
+      home.z + Math.cos(t * 0.6 + seed * 5) * 0.18 * bob,
     );
     if (te >= 0) {
       // done: lift up and away; failed: sink
-      const k = easeInOut(te / 2.4);
-      s.live.y += failed ? -k * 2.2 : k * 1.6;
-      s.live.z += failed ? 0 : k * 1.2;
+      const k = easeInOut(te / 2.4) * agent.scale;
+      live.y += failed ? -k * 2.2 : k * 1.6;
+      live.z += failed ? 0 : k * 1.2;
     }
-    arcControl(s.p0, s.live, inst.subagent ? 1.6 : 2.2, s.p1);
+    arcControl(s.p0, live, (inst.subagent ? 1.6 : 2.2) * Math.min(1.3, fit.spread), s.p1);
     // workers fly out of their parent along the arc
     const flightT = inst.parent ? easeInOut(tb / 1.5) : 1;
-    if (flightT < 1 && hasPath) bezier(s.p0, s.p1, s.live, flightT, s.fly);
-    else s.fly.copy(s.live);
+    if (flightT < 1 && hasPath) bezier(s.p0, s.p1, live, flightT, s.fly);
+    else s.fly.copy(live);
     if (root.current) root.current.position.copy(s.fly);
 
     // facing (side-on bees): follow horizontal motion, with hysteresis
     s.vx = s.vx * 0.85 + (s.fly.x - s.prev.x) * 0.15;
     s.prev.copy(s.fly);
-    if (!s.init || tb < 0.05) s.face = s.home.x < 0 ? 1 : -1;
+    if (tb < 0.05) s.face = home.x < 0 ? 1 : -1;
     if (s.vx > 0.012) s.face = 1;
     else if (s.vx < -0.012) s.face = -1;
     const yawT = s.face > 0 ? -0.45 : Math.PI + 0.45;
     s.yaw += (yawT - s.yaw) * 0.08;
     const grow = inst.parent ? backOut(tb / 0.9) : backOut(tb / 0.7);
-    const sc = Math.max(0.0001, roleScale(inst) * lodScale() * (0.35 + 0.65 * grow) * (te >= 0 ? Math.max(0.25, pres) : 1));
+    const sc = Math.max(0.0001, agent.scale * BEE_K * (0.35 + 0.65 * grow) * (te >= 0 ? Math.max(0.25, pres) : 1));
     if (body.current) {
       body.current.rotation.set(0, s.yaw, Math.sin(t * 1.4 + seed * 9) * 0.08 * still + (failed && te >= 0 ? -0.6 : 0));
       body.current.scale.setScalar(sc * (1 + e * 0.05));
@@ -282,7 +275,7 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
     }
     // selection ring (hexagonal)
     if (ring.current) {
-      const sel = world.selected === inst.id;
+      const sel = selected;
       ring.current.visible = sel;
       if (sel) {
         ring.current.rotation.z = t * 0.4 * still;
@@ -290,6 +283,7 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
         m.ring.color.copy(CREAM).multiplyScalar(0.9);
       }
     }
+    labelG.current?.position.set(0, -0.95 * agent.scale * BEE_K - 0.2, 0);
     label.current?.setOpacity(showLabel(inst.id) ? clamp01(tb / 0.8) * (te >= 0 ? pres : 1) * 0.95 : 0);
 
     // flight path parent → child: grows with the flight, then a dotted trail with flowing dashes
@@ -298,7 +292,7 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
     const u = m.path.uniforms;
     u.uP0.value.copy(s.p0);
     u.uP1.value.copy(s.p1);
-    u.uP2.value.copy(s.live);
+    u.uP2.value.copy(live);
     const retract = te >= 0 ? easeInOut(te / 1.4) : 0;
     u.uGrow.value = hasPath ? Math.max(0, flightT * (1 - retract)) : 0;
     u.uHead.value = flightT < 1 ? flightT : -1;
@@ -310,12 +304,12 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
       const vis = hasPath && flightT >= 1 && s.parentK > 0.05 && u.uGrow.value > 0.9;
       arrow.current.visible = vis;
       if (vis) {
-        bezier(s.p0, s.p1, s.live, 0.78, s.a);
-        bezier(s.p0, s.p1, s.live, 0.8, s.b);
+        bezier(s.p0, s.p1, live, 0.78, s.a);
+        bezier(s.p0, s.p1, live, 0.8, s.b);
         arrow.current.position.copy(s.a);
         s.d.subVectors(s.b, s.a).normalize();
         arrow.current.quaternion.setFromUnitVectors(UP, s.d);
-        const k = inst.subagent ? 0.8 : 1;
+        const k = (inst.subagent ? 0.8 : 1) * Math.min(1.3, fit.scale);
         arrow.current.scale.set(0.15 * k, 0.4 * k, 0.15 * k);
         m.arrow.color.copy(color).lerp(GOLD, 0.3).multiplyScalar(1.5 * s.parentK);
       }
@@ -354,9 +348,10 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
           ))}
         </group>
         <mesh ref={ring} geometry={RING_GEO} material={m.ring} visible={false} />
+        <group ref={labelG}>
         <Label3D
           ref={label}
-          position={[0, -0.95 * roleScale(inst) - 0.2, 0]}
+          fit
           text={`${inst.name}${k !== undefined && inst.subagent ? ` ${Number(k) + 1}` : ""}`}
           color={`#${color.getHexString()}`}
           size={queen ? 0.3 : 0.22}
@@ -364,31 +359,8 @@ function Bee({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => voi
           pxRange={queen ? [9, 14] : [8, 11.5]}
           glow={queen ? 1.05 : 0.9}
         />
+        </group>
       </group>
-    </>
-  );
-}
-
-export function Bees({ onSelect }: { onSelect: (id: string) => void }) {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.instances;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // parents first so children can fan out around their parent's settled home; collapsed runs → cluster
-      setList([...m.values()].filter(isExpanded).sort((a, b) => a.bornAt - b.bornAt));
-    }
-  });
-  return (
-    <>
-      {list.map((i) => (
-        <Bee key={i.id} inst={i} onSelect={onSelect} />
-      ))}
     </>
   );
 }
@@ -402,8 +374,8 @@ function Pollen({ comet }: { comet: Comet }) {
   const mats = useMemo(() => Array.from({ length: TRAIL }, (_, j) => new THREE.SpriteMaterial({ map: glowTexture(), color: color.clone().lerp(CREAM, 0.45).multiplyScalar(1.6 * (1 - j / TRAIL)), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false })), [color]);
   const s = useMemo(() => ({ a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), h: new THREE.Vector3() }), []);
   useFrame(() => {
-    const pa = beePos.get(comet.from);
-    const pb = beePos.get(comet.to);
+    const pa = agentLive(comet.from);
+    const pb = agentLive(comet.to);
     const t = clamp01((performance.now() - comet.start) / comet.dur);
     const ok = !!pa && !!pb && t < 1;
     for (let j = 0; j < TRAIL; j++) {
