@@ -11,7 +11,7 @@
 import * as THREE from "three";
 import { clusterOf, isExpanded, isRunExpanded, LOD_LANES, lod } from "../lod";
 import { alt, jit } from "../spread";
-import { graphMix, isDone, mcpWanted, roleScale, world, type AgentType, type Instance } from "../world";
+import { graphMix, graphShown, isDone, mcpWanted, roleScale, world, type AgentType, type Instance } from "../world";
 import { fit, fitTick } from "./fit";
 import { radial, type LayoutPreset, type Point2, type PresetCtx, type Slot2 } from "./presets";
 import { kit, nextUid, planePoint, reduced, type KitAgent, type KitBackend, type KitMcp, type KitRun } from "./state";
@@ -372,7 +372,7 @@ function layoutPeriphery() {
 
   const gap = config.peripheryGap;
   const g = kit.graph;
-  const graphOn = kit.graphWanted && world.hasGraph;
+  const graphOn = kit.graphWanted && graphShown();
   const R = config.graphRadius;
   g.radius = R;
   // ---- MCP servers (+ backends) and the side graph
@@ -556,7 +556,7 @@ export function kitTick(now = performance.now()) {
   }
   // side graph: fades in where it lives (agents never move for it)
   const g = kit.graph;
-  const on = kit.graphWanted && world.hasGraph;
+  const on = kit.graphWanted && graphShown(now);
   const mix = on ? graphMix(now) : 0;
   g.mix += (mix - g.mix) * (on ? 1 : k);
   if (g.fresh || g.mix < 0.01) g.pos.copy(g.target), (g.fresh = !on);
@@ -591,7 +591,7 @@ export function kitExtents(visit: (p: THREE.Vector3, r: number) => void, agentRa
     for (const b of m.backends.values()) visit(b.target, 1.4);
   }
   const g = kit.graph;
-  if (kit.graphWanted && world.hasGraph) visit(g.target, g.radius + 0.8);
+  if (kit.graphWanted && graphShown()) visit(g.target, g.radius + 0.8);
 }
 
 /** Lanes with an active cluster ball this frame (grouped mode). */
