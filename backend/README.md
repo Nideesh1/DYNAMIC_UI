@@ -11,8 +11,9 @@ agent framework that emits OTel spans.
 ## Quickstart
 
 ```bash
-pip install "agentglow[langchain]"
-agentglow serve                      # → http://localhost:8100 (gallery at /, scenes at /neural, /orbit, …)
+uvx agentglow serve                  # → http://localhost:8100 (gallery at /, scenes at /neural, /orbit, …)
+uv add "agentglow[langchain]"        # in your agent project (or: uv pip install "agentglow[langchain]")
+# pip install "agentglow[langchain]" also works
 ```
 
 ```python

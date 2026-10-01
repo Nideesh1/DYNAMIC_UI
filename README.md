@@ -10,9 +10,10 @@ and fade when they finish. Works with LangChain, LangGraph, deepagents, Hatchet,
 ## Quickstart
 
 ```bash
-pip install "agentglow[langchain]"
-agentglow serve                 # → http://localhost:8100
+uvx agentglow serve             # → http://localhost:8100  (no install needed)
+uv add "agentglow[langchain]"   # in your agent project  (or: uv pip install "agentglow[langchain]")
 ```
+Not on uv? `pip install "agentglow[langchain]" && agentglow serve` works too.
 ```python
 import agentglow
 agentglow.watch()               # one line, before your agents run
@@ -63,9 +64,11 @@ pod at it: `agentglow.watch("http://agentglow:8100")`. If it's down, your app is
 ## Example: deepagents + Hatchet + MCP + FalkorDB
 
 ```bash
-cp .env.example .env            # add GEMINI_API_KEY; ./scripts/gen-obs-env.sh for Langfuse/Hatchet secrets
+cp .env.example .env            # add one LLM key (Gemini, OpenAI or Anthropic); ./scripts/gen-obs-env.sh for Langfuse/Hatchet secrets
 docker compose up
 ```
+The example agents use any LangChain chat model: set `AGENT_MODEL` to `google_genai:gemini-3.8-flash` (default, `GEMINI_API_KEY`),
+`openai:<model>` (`OPENAI_API_KEY`) or `anthropic:claude-sonnet-5-5` (`ANTHROPIC_API_KEY`).
 See [examples/deepagents-hatchet](examples/deepagents-hatchet/README.md).
 
 ## Repo
@@ -75,5 +78,18 @@ See [examples/deepagents-hatchet](examples/deepagents-hatchet/README.md).
 | `backend/` | Python package `agentglow` — server, `watch()`, OTel → agent mapping |
 | `frontend/` | the 3D scenes; npm package `agentglow` + the app bundled into the Python package |
 | `examples/` | real agent stacks instrumented with one line |
+
+## Develop
+
+The repo is one [uv](https://docs.astral.sh/uv/) workspace (root `pyproject.toml` + a single `uv.lock`; members `backend`, `examples/deepagents-hatchet`).
+
+```bash
+uv sync --all-packages                              # everything into ./.venv
+(cd frontend && npm ci && npm run build:app)         # bundle the UI into backend/agentglow/static
+uv run agentglow serve                              # :8100
+uv run --package agentglow pytest backend/tests -q
+uv build --package agentglow --out-dir dist         # sdist + wheel → ./dist
+cd examples/deepagents-hatchet && uv run python -m app.worker   # the example (see its README)
+```
 
 MIT licensed.

@@ -9,8 +9,7 @@ your agents ──agentglow.watch()──► agentglow serve (:8100) ──SSE w
 
 ## User experience (the whole point — keep it this simple)
 ```bash
-pip install agentglow
-agentglow serve                      # http://localhost:8100  (gallery at /, scenes at /neural, /orbit, …)
+uvx agentglow serve                  # or: uv add agentglow && uv run agentglow serve  → http://localhost:8100  (gallery at /, scenes at /neural, /orbit, …)
 ```
 ```python
 import agentglow

@@ -2,7 +2,7 @@
 #
 #   ./scripts/gen-obs-env.sh && docker compose up -d --build     # agentglow, falkordb, hatchet, mcp, worker
 #   open http://localhost:8100                                    # 3D scenes
-#   docker compose exec worker python trigger.py "Why is churn rising for Acme Corp?"
+#   docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 #   LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d     # + Langfuse at :3100 (same spans, side by side)
 #
 # Ports avoid the BOOKIE stack: agentglow :8100, Hatchet UI :8180, Hatchet gRPC :7177, Langfuse :3100.
@@ -35,7 +35,7 @@ services:
     build: &example-build
       context: .
       dockerfile: examples/deepagents-hatchet/Dockerfile
-    command: ["python", "-m", "app.mcp_server"]
+    command: ["uv", "run", "python", "-m", "app.mcp_server"]
     environment:
       AGENTGLOW_URL: http://agentglow:8100
     depends_on: [agentglow]
@@ -44,13 +44,15 @@ services:
   worker:       # Hatchet worker running the deepagents workflow `agent_smoke`
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
-    command: ["python", "-m", "app.worker"]
+    command: ["uv", "run", "python", "-m", "app.worker"]
     environment:
       AGENTGLOW_URL: http://agentglow:8100
       MCP_URL: http://mcp:8200/mcp
       FALKOR_HOST: falkordb
+      AGENT_MODEL: ${AGENT_MODEL:-google_genai:gemini-3.8-flash}   # provider:model (google_genai / openai / anthropic)
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      OBS_MODEL: ${OBS_MODEL:-gemini-3.8-flash}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OBS_LANGFUSE_PUBLIC_KEY: ${OBS_LANGFUSE_PUBLIC_KEY:-}
       OBS_LANGFUSE_SECRET_KEY: ${OBS_LANGFUSE_SECRET_KEY:-}
       LANGFUSE_EXPORT: ${LANGFUSE_EXPORT:-0}

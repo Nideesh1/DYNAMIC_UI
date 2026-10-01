@@ -1,6 +1,6 @@
 """agent_smoke — a real Hatchet workflow running deepagents. Observability is plain OpenTelemetry only.
 
-  plan      planner (Gemini, structured output) → 2–4 research questions
+  plan      planner (any LLM via AGENT_MODEL, structured output) → 2–4 research questions
   research  researcher deep agent fans out to subagents via the `task` tool:
               graph_scout → demo FalkorDB graph tools (graph_resolve, graph_neighbors)
               data_scout  → MCP tools from the `analytics` MCP server (Snowflake / Spark / Postgres backends)
@@ -12,13 +12,13 @@ The only hand-written telemetry here is a few span attributes the visualizer can
   agentglow.agent      on a span around the planner's bare LLM call (so it shows as an agent)
   agentglow.final      on the write task span  (the finished brief)
 """
-import os
 from datetime import timedelta
 
 from . import config  # noqa: F401  (must be first: Hatchet env)
 
 from hatchet_sdk import Context, Hatchet
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.chat_models import init_chat_model
+from langchain_core.language_models import BaseChatModel
 from opentelemetry import trace
 from pydantic import BaseModel, Field
 
@@ -38,15 +38,24 @@ class Plan(BaseModel):
     questions: list[str] = Field(description="2-4 concrete research questions about the topic")
 
 
-def make_model() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(model=MODEL, google_api_key=os.environ["GEMINI_API_KEY"], temperature=0.2, thinking_level="low")
+def make_model() -> BaseChatModel:
+    """Chat model from AGENT_MODEL (e.g. google_genai:gemini-3.8-flash, openai:gpt-5-mini, anthropic:claude-sonnet-5-5).
+    Low temperature / low thinking only where the provider supports those knobs."""
+    provider = MODEL.split(":", 1)[0] if ":" in MODEL else ""
+    kwargs: dict = {}
+    if provider == "google_genai":
+        kwargs = {"temperature": 0.2, "thinking_level": "low"}
+    elif provider == "anthropic":
+        kwargs = {"temperature": 0.2}
+    # openai: defaults (reasoning models reject a custom temperature)
+    return init_chat_model(MODEL, **kwargs)
 
 
 agent_smoke = hatchet.workflow(name=WORKFLOW, input_validator=BriefInput)
 
 
 def text_of(msg) -> str:
-    """Plain text from a LangChain message (Gemini may return a list of content parts)."""
+    """Plain text from a LangChain message (Gemini / Anthropic may return a list of content parts)."""
     c = getattr(msg, "content", msg)
     if isinstance(c, list):
         return "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in c)

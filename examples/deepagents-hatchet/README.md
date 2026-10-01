@@ -14,7 +14,7 @@ Hatchet workflow `agent_smoke` (3 steps):
 
 | Step | Agents | Touches |
 |---|---|---|
-| `plan` | **planner** (Gemini, structured output) → 2–4 research questions | — |
+| `plan` | **planner** (structured output; any LLM via `AGENT_MODEL`) → 2–4 research questions | — |
 | `research` | **researcher** deep agent delegates in parallel via the `task` tool to subagents **graph_scout** and **data_scout** | FalkorDB demo graph (reads); `analytics` MCP server → Snowflake warehouse / Spark cluster / Postgres customers DB |
 | `write` | **writer** deep agent drafts the brief | FalkorDB (writes the brief + `COVERS` edges) |
 
@@ -37,11 +37,11 @@ to the same TracerProvider that `watch()` reuses.
 ## Run with docker compose (repo root)
 
 ```bash
-cp .env.example .env            # set GEMINI_API_KEY
+cp .env.example .env            # set one LLM key + AGENT_MODEL (see "LLM provider" below)
 ./scripts/gen-obs-env.sh        # local secrets (Langfuse etc.)
 docker compose up -d --build    # agentglow, falkordb, hatchet, mcp, worker
 open http://localhost:8100      # scenes
-docker compose exec worker python trigger.py "Why is churn rising for Acme Corp?"
+docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
 
 Hatchet UI: http://localhost:8180 (admin@example.com / Admin123!!) — you can also trigger `agent_smoke` there.
@@ -53,12 +53,26 @@ Needs FalkorDB on :6379 and Hatchet on :7177 (`docker compose up -d falkordb obs
 then `./scripts/gen-obs-env.sh` once to put `OBS_HATCHET_TOKEN` in `.env`.
 
 ```bash
-(cd backend && uv run agentglow serve)          # :8100
-cd examples/deepagents-hatchet
+uv sync --all-packages                           # repo root: one uv workspace, one uv.lock
+uv run agentglow serve                           # :8100
+cd examples/deepagents-hatchet                   # uv run here uses the workspace .venv
 uv run python -m app.mcp_server                  # :8200/mcp
 uv run python -m app.worker
 uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
 
 Env: `AGENTGLOW_URL` (default `http://localhost:8100`), `MCP_URL` (default `http://localhost:8200/mcp`),
-`OBS_MODEL` (default `gemini-3.8-flash`), `LANGFUSE_EXPORT=0` to skip Langfuse even when keys are set.
+`AGENT_MODEL` (see below), `LANGFUSE_EXPORT=0` to skip Langfuse even when keys are set.
+
+## LLM provider
+
+Models are built with LangChain `init_chat_model(AGENT_MODEL)`, so any of these work (set the matching key in `.env`):
+
+| `AGENT_MODEL` | Key |
+|---|---|
+| `google_genai:gemini-3.8-flash` (default) | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
+| `openai:<model>` e.g. `openai:gpt-5-mini` | `OPENAI_API_KEY` |
+| `anthropic:claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
+
+Gemini runs with `thinking_level=low` and temperature 0.2, Anthropic with temperature 0.2, OpenAI with provider defaults.
+The legacy `OBS_MODEL=<gemini model>` is still honored when `AGENT_MODEL` is unset.
