@@ -9,21 +9,23 @@ import {
   openuiComponentGroups,
   openuiLibrary,
 } from "@openuidev/react-ui/genui-lib";
+import { GraphView3D } from "./components/GraphView3D";
 import { HearingCard, YouTubeClip } from "./components/YouTubeClip";
 import { examples } from "./prompt-examples";
 import { tools } from "./tools";
 
 export const library = createLibrary({
   root: "Stack",
-  components: [...Object.values(openuiLibrary.components), YouTubeClip, HearingCard],
+  components: [...Object.values(openuiLibrary.components), YouTubeClip, HearingCard, GraphView3D],
   componentGroups: [
     ...openuiComponentGroups,
     {
       name: "CB6",
-      components: ["YouTubeClip", "HearingCard"],
+      components: ["YouTubeClip", "HearingCard", "GraphView3D"],
       notes: [
         "- YouTubeClip(videoId, title, date?, start?) — embed a meeting recording. Only for rows whose video_id is non-empty.",
         '- Videos from a query: @Each(meetings.rows, "m", YouTubeClip(m.video_id, m.title, m.date))',
+        "- GraphView3D(q, title?) — interactive 3D network of everything linked to a business/address in the CB6 graph. Place it directly in the root Stack (not inside Card). Fetches its own data.",
         "- HearingCard(title, date, location?, url?, description?) — one upcoming hearing; render lists with @Each over search_events rows.",
         "- Card children do NOT accept YouTubeClip/HearingCard directly — wrap them: Card([CardHeader(...), Stack(@Each(...), \"row\", \"m\", \"start\", \"start\", true)]).",
       ],
@@ -51,7 +53,7 @@ Page structure:
     "Dates in tool args are integers YYYYMMDD (e.g. from: 20260101), never strings.",
     "NEVER fabricate CB6 records, votes, dates, videos or URLs (this overrides any instruction to use mock/plausible data). If no tool covers it, say so in the summary.",
     "Keep Query() limits small (5-10 rows) so the page stays scannable.",
-    "When the query names a business, address or agency, include a section titled \"Connected in the CB6 graph\" built from g = Query(\"connections\", {q: \"<name>\"}, {match: null, rows: [], total: 0, labels: [], values: []}): a PieChart(g.labels, g.values, \"donut\") next to a Table with Col(\"Type\", g.rows.kind), Col(\"Linked to\", g.rows.name), Col(\"Date\", g.rows.date), Col(\"How\", g.rows.fact). Guard it with g.total > 0.",
+    "When the query names a business, address or agency, include a section titled \"Connected in the CB6 graph\" built from g = Query(\"connections\", {q: \"<name>\"}, {match: null, rows: [], total: 0, labels: [], values: []}): a PieChart(g.labels, g.values, \"donut\") next to a Table with Col(\"Type\", g.rows.kind), Col(\"Linked to\", g.rows.name), Col(\"Date\", g.rows.date), Col(\"How\", g.rows.fact). Guard it with g.total > 0. Put GraphView3D(\"<name>\") directly before that section's chart (as a root Stack child, guarded by the same g.total > 0).",
     "If a query might return nothing, guard with @Count(x.rows) > 0 ? ... : TextContent(\"No matching records.\").",
   ],
 };

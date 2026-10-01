@@ -27,7 +27,7 @@ a { color: var(--accent); }
   border-bottom: 1px solid var(--line);
 }
 .topbar__inner {
-  max-width: 1080px; margin: 0 auto; padding: 12px 16px;
+  max-width: none; margin: 0; padding: 12px clamp(16px, 3vw, 48px);
   display: flex; gap: 16px; align-items: center;
 }
 .brand { display: flex; align-items: center; gap: 8px; text-decoration: none; color: var(--ink); flex-shrink: 0; }
@@ -56,7 +56,7 @@ a { color: var(--accent); }
 .searchbox__btn--stop { background: var(--ink-2); }
 
 /* ── Page ── */
-.page { flex: 1; width: 100%; max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+.page { flex: 1; width: 100%; max-width: none; margin: 0; padding: 24px clamp(16px, 3vw, 48px) 48px; }
 
 .hero { padding: 16px 0 24px; }
 .hero h1 { font-size: clamp(24px, 4vw, 34px); line-height: 1.15; margin: 0 0 6px; letter-spacing: -0.02em; }
@@ -142,4 +142,17 @@ a { color: var(--accent); }
 .page { min-width: 0; overflow-x: clip; }
 .page table { width: 100%; max-width: 100%; }
 .page td, .page th { white-space: normal !important; overflow-wrap: anywhere; vertical-align: top; }
-.page td { max-width: 420px; }
+.page td { max-width: 640px; }
+
+/* ── GraphView3D ── */
+.graph3d { border: 1px solid var(--line); border-radius: var(--radius); background: radial-gradient(ellipse at center, #121a2b 0%, #0b0f17 75%); overflow: hidden; margin: 8px 0 16px; }
+.graph3d__head { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; padding: 14px 16px 6px; }
+.graph3d__head h3 { margin: 0 0 2px; font-size: 16px; color: var(--ink); }
+.graph3d__head p { margin: 0; font-size: 12px; color: var(--muted); }
+.graph3d__legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 0; padding: 0; font-size: 12px; color: var(--ink-2); }
+.graph3d__legend li { display: flex; align-items: center; gap: 5px; }
+.graph3d__legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.graph3d__canvas { position: relative; width: 100%; cursor: grab; }
+.graph3d__canvas:active { cursor: grabbing; }
+.graph3d__loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+.scene-tooltip { font: 12px var(--font) !important; background: rgba(11,15,23,.92) !important; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px !important; }

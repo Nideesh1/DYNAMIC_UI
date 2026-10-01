@@ -19,6 +19,7 @@ export const TOOL_NAMES = [
   "topic_trends",
   "home_stats",
   "connections",
+  "graph_subgraph", // used directly by GraphView3D, not advertised to the LLM
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 

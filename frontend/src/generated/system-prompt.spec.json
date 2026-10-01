@@ -336,6 +336,10 @@
     "HearingCard": {
       "signature": "HearingCard(title: string, date: string, location?: string, url?: string, description?: string)",
       "description": "An upcoming CB6 hearing or meeting (calendar-style date badge, title linked to url, location)."
+    },
+    "GraphView3D": {
+      "signature": "GraphView3D(q: string, title?: string, height?: number)",
+      "description": "Interactive 3D knowledge-graph network (FalkorDB) around a business/address: businesses, addresses, votes, meetings, hearings, agencies. Fetches its own data. Clicking a node searches it."
     }
   },
   "componentGroups": [
@@ -542,11 +546,13 @@
       "name": "CB6",
       "components": [
         "YouTubeClip",
-        "HearingCard"
+        "HearingCard",
+        "GraphView3D"
       ],
       "notes": [
         "- YouTubeClip(videoId, title, date?, start?) — embed a meeting recording. Only for rows whose video_id is non-empty.",
         "- Videos from a query: @Each(meetings.rows, \"m\", YouTubeClip(m.video_id, m.title, m.date))",
+        "- GraphView3D(q, title?) — interactive 3D network of everything linked to a business/address in the CB6 graph. Place it directly in the root Stack (not inside Card). Fetches its own data.",
         "- HearingCard(title, date, location?, url?, description?) — one upcoming hearing; render lists with @Each over search_events rows.",
         "- Card children do NOT accept YouTubeClip/HearingCard directly — wrap them: Card([CardHeader(...), Stack(@Each(...), \"row\", \"m\", \"start\", \"start\", true)])."
       ]
@@ -807,6 +813,9 @@
       },
       "HearingCard": {
         "$ref": "#/$defs/HearingCard"
+      },
+      "GraphView3D": {
+        "$ref": "#/$defs/GraphView3D"
       }
     },
     "required": [
@@ -893,7 +902,8 @@
       "VisualCardBlock",
       "Modal",
       "YouTubeClip",
-      "HearingCard"
+      "HearingCard",
+      "GraphView3D"
     ],
     "additionalProperties": false,
     "$defs": {
@@ -4800,6 +4810,25 @@
         ],
         "additionalProperties": false,
         "description": "An upcoming CB6 hearing or meeting (calendar-style date badge, title linked to url, location)."
+      },
+      "GraphView3D": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "height": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "q"
+        ],
+        "additionalProperties": false,
+        "description": "Interactive 3D knowledge-graph network (FalkorDB) around a business/address: businesses, addresses, votes, meetings, hearings, agencies. Fetches its own data. Clicking a node searches it."
       }
     }
   }

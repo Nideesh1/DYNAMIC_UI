@@ -12,9 +12,10 @@ from fastapi.responses import JSONResponse, StreamingResponse  # noqa: E402
 
 from . import data  # noqa: E402
 from .search import run_search  # noqa: E402
-from .graph_tool import connections  # noqa: E402
+from .graph_tool import connections, graph_subgraph  # noqa: E402
 
 data.TOOLS["connections"] = connections
+data.TOOLS["graph_subgraph"] = graph_subgraph
 
 data.load()
 

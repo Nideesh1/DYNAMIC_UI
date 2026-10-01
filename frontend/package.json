@@ -15,6 +15,9 @@
     "@openuidev/react-ui": "0.16.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-force-graph-3d": "^1.29.2",
+    "three": "^0.186.1",
+    "three-spritetext": "^1.10.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

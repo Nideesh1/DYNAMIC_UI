@@ -6,7 +6,11 @@ Built for the State Capacity Hackathon on two public sources:
 - **[blockparty.studio](https://www.blockparty.studio)** — CB6 meeting transcripts (600) and board resolutions (1,588)
 - **[cbsix.org](https://cbsix.org)** — community events / city hearings (1,494), pages, ~580 agendas/minutes/report PDFs
 
-![Station Cafe page](screens/station-cafe-dark.png)
+![384 3rd Avenue page](screens/graph3d-page.png)
+
+**3D knowledge graph** — every business/address page gets an interactive, auto-orbiting force graph of what it connects to in FalkorDB (votes, meetings, hearings, agencies, nearby businesses). Click any node to search it.
+
+![3D graph](screens/graph3d.png)
 
 ## How it works
 
@@ -23,7 +27,7 @@ Built for the State Capacity Hackathon on two public sources:
         └── cards call /api/tools/* via Query() so data and URLs are real, not LLM-written
 ```
 
-- **UI**: [thesys OpenUI](https://github.com/thesysdev/openui) `<Renderer>` + custom `YouTubeClip` / `HearingCard`; sticky search bar, generated page below, dark mode.
+- **UI**: [thesys OpenUI](https://github.com/thesysdev/openui) `<Renderer>` + custom components: `YouTubeClip`, `HearingCard`, and `GraphView3D` (react-force-graph-3d / three.js). Sticky search bar, full-width generated page, dark mode.
 - **Search/RAG**: Gemini File Search (`gemini-3.8-flash`, fallback `gemini-3-flash-preview`), low thinking for speed (~10–20s per page).
 - **Graph**: [Graphiti](https://github.com/getzep/graphiti) data model on FalkorDB. Structured records are inserted directly (no LLM); one lite-model pass per transcript extracts businesses/addresses discussed.
 
@@ -37,7 +41,7 @@ Built for the State Capacity Hackathon on two public sources:
 | `upload_filesearch.py` | Upload corpus to a Gemini File Search store (30 parallel, resumable) |
 | `overlap.py` | How many blockparty resolutions also appear in CB6 PDFs |
 | `graph/` | FalkorDB graph build (`build.py`, `discuss.py`) + `query.py` helpers |
-| `backend/` | FastAPI: `/api/search` (SSE), `/api/tools/{name}`, `/api/health` |
+| `backend/` | FastAPI: `/api/search` (SSE), `/api/tools/{name}` (search_resolutions, search_events, search_meetings, topic_trends, home_stats, connections, graph_subgraph), `/api/health`; serves the built UI at `/` |
 | `frontend/` | Vite + React + OpenUI search page |
 
 ## Run it
@@ -67,7 +71,7 @@ cd backend && uv run uvicorn app.main:app --port 8000 --reload
 cd frontend && npm install && npm run generate && npx vite --port 5180   # proxies /api to :8000
 ```
 
-Open http://localhost:8000 (or :5180 in dev). Good demo queries: **Station Cafe**, **Tara Rose**, **rats**, **Posto**, **hearings this month**.
+Open http://localhost:8000 (or :5180 in dev). Good demo queries: **Turtle Bay Tavern** / **384 3rd Avenue** (biggest graphs), **Station Cafe**, **Tara Rose**, **rats**, **hearings this month**.
 
 Each folder has its own README with details (`backend/`, `frontend/`, `graph/`).
 

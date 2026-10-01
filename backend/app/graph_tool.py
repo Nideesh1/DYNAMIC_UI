@@ -40,3 +40,26 @@ def connections(args: dict) -> dict:
         "labels": list(counts),
         "values": list(counts.values()),
     }
+
+
+def graph_subgraph(args: dict) -> dict:
+    """Nodes + links within 2 hops of an entity, for the 3D graph view."""
+    name = (args.get("q") or args.get("name") or "").strip()
+    empty = {"center": None, "nodes": [], "links": []}
+    if not name:
+        return empty
+    try:
+        res = graph.neighbors(name, hops=int(args.get("hops") or 2), limit=int(args.get("limit") or 150))
+    except Exception as e:
+        return empty | {"error": str(e)}
+    centers = {m["name"] for m in res["matches"]}
+    nodes: dict[str, dict] = {}
+    links, seen = [], set()
+    for p in res["paths"]:
+        for n, kind in ((p["from"], p["from_label"]), (p["to"], p["to_label"])):
+            nodes.setdefault(n, {"id": n, "name": n, "kind": kind, "center": n in centers})
+        key = (p["from"], p["to"], p["rel"])
+        if key not in seen:
+            seen.add(key)
+            links.append({"source": p["from"], "target": p["to"], "rel": p["rel"]})
+    return {"center": next(iter(centers), None), "nodes": list(nodes.values()), "links": links}

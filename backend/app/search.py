@@ -196,7 +196,11 @@ async def _run(q: str) -> AsyncIterator[str]:
             f"RESIDENT QUERY: {q}\n\n"
             f"RESEARCH NOTES (from CB6 document search):\n{notes}\n\n"
             f"SOURCES:\n{json.dumps(sources[:15], ensure_ascii=False)}\n\n"
-            f"LOCAL TOOL RESULTS for this query (use the same q in Query calls if they returned rows):\n"
+            + (f"GRAPH: the CB6 knowledge graph has {local['connections']['total']} links for "
+               f"'{local['connections']['match']}'. You MUST include GraphView3D(\"{local['connections']['match']}\") "
+               f"as the 3rd child of root (right after the summary/stat tiles), plus the 'Connected in the CB6 graph' section.\n\n"
+               if local.get("connections") else "")
+            + f"LOCAL TOOL RESULTS for this query (use the same q in Query calls if they returned rows):\n"
             f"{json.dumps(local, ensure_ascii=False)[:12000]}\n"
         )
 
