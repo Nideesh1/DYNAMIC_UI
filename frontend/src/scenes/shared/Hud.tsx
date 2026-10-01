@@ -79,7 +79,6 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
           {w.mode === "live" && <span className="hud-badge hud-badge--live">live · hatchet</span>}
         </div>
         <div className="hud-sub">{subtitle}</div>
-        {w.mode === "live" && <RunBox />}
         <nav className="hud-nav">
           {SCENES.map((s) => (
             <a key={s} href={`/${s}`} aria-current={s === here ? "page" : undefined}>
@@ -126,43 +125,6 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
 
       {children}
     </>
-  );
-}
-
-// ------------------------------------------------------------------ live: trigger a real Hatchet run
-
-/** Topics that hit the demo graph (companies, products, incidents) and the analytics MCP backends. */
-const SUGGESTED = ["Why is churn rising for Acme Corp?", "Root cause of payment latency incidents", "Which region has the most incidents?", "Is Fraud Shield worth expanding to Globex?"];
-
-function RunBox() {
-  const [topic, setTopic] = useState(SUGGESTED[0]);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  return (
-    <form
-      className="hud-run"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        if (!topic.trim()) return;
-        setBusy(true);
-        try {
-          const { startLiveRun } = await import("./useSceneSetup");
-          const id = await startLiveRun(topic.trim());
-          setMsg(id ? `run ${id.slice(0, 8)} queued` : "failed to start");
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Research topic…" list="run-topics" />
-      <datalist id="run-topics">
-        {SUGGESTED.map((t) => (
-          <option key={t} value={t} />
-        ))}
-      </datalist>
-      <button disabled={busy}>{busy ? "Starting…" : "Run agents"}</button>
-      {msg && <span>{msg}</span>}
-    </form>
   );
 }
 
