@@ -14,6 +14,7 @@ resolution-markers = [
 [manifest]
 members = [
     "agentglow",
+    "agentglow-example-custom-loop",
     "agentglow-example-deepagents-hatchet",
     "agentglow-example-langgraph",
     "agentglow-example-openai-agents",
@@ -82,6 +83,17 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "python-dotenv" },
 ]
+
+[[package]]
+name = "agentglow-example-custom-loop"
+version = "0.1.0"
+source = { virtual = "examples/custom-loop" }
+dependencies = [
+    { name = "agentglow" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "agentglow", editable = "backend" }]
 
 [[package]]
 name = "agentglow-example-deepagents-hatchet"

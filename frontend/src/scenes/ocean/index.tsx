@@ -1,61 +1,49 @@
-/** /ocean - "Bioluminescent deep sea": agents are jellyfish, Hatchet runs are currents, FalkorDB is a coral reef, MCP servers are anglerfish. */
-import { OrbitControls } from "@react-three/drei";
-import { Canvas } from "@react-three/fiber";
+/**
+ * /ocean - "Bioluminescent deep sea" (scene-kit theme, preset: drift with level currents).
+ * Agents are jellyfish drifting at the centre, Hatchet runs are the currents under them, MCP servers are anglerfish
+ * on the outskirts, the knowledge graph is a small coral reef patch on the side (only when the session has a graph).
+ */
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
-import { useEffect, useState } from "react";
-import { Hud } from "../shared/Hud";
-import { useSceneSetup } from "../shared/useSceneSetup";
+import { KitScene } from "../shared/kit";
 import { Abyss } from "./Abyss";
-import { Anglers } from "./Anglers";
-import { Currents } from "./Currents";
-import { Jellies } from "./Jellies";
-import { selection } from "./layout";
+import { Angler, McpTethers } from "./Anglers";
+import { Current } from "./Currents";
+import { Jelly, Tethers } from "./Jellies";
+import { oceanDrift } from "./layout";
 import { Messages } from "./Packets";
-import { Reef } from "./Reef";
-import { OceanClusters } from "./Clusters";
+import { REEF_R, ReefPatch } from "./Reef";
 
 export default function Scene() {
-  const galaxy = useSceneSetup();
-  const [selected, setSelected] = useState<string | null>(null);
-  useEffect(() => {
-    selection.id = selected;
-  }, [selected]);
-
   return (
-    <div className="scene-root" style={{ background: "#010409" }}>
-      <Canvas
-        camera={{ position: [0, 0.6, 21], fov: 50, near: 0.1, far: 300 }}
-        dpr={[1, 2]}
-        gl={{ antialias: false, powerPreference: "high-performance" }}
-        onPointerMissed={() => setSelected(null)}
-      >
-        <color attach="background" args={["#010409"]} />
-        <Abyss />
-        <Reef galaxy={galaxy} />
-        <Currents />
-        <Jellies onSelect={setSelected} />
-        <Messages />
-        <OceanClusters />
-        <Anglers />
-        <OrbitControls
-          makeDefault
-          target={[0, -0.4, -1]}
-          enableDamping
-          dampingFactor={0.06}
-          minDistance={9}
-          maxDistance={36}
-          minPolarAngle={Math.PI * 0.28}
-          maxPolarAngle={Math.PI * 0.6}
-          minAzimuthAngle={-0.8}
-          maxAzimuthAngle={0.8}
-        />
+    <KitScene
+      title="Deep sea · bioluminescent agents"
+      subtitle="jellyfish = agents · currents = Hatchet runs · coral reef = knowledge graph · anglerfish = MCP servers"
+      preset={oceanDrift}
+      plane="xy"
+      camera={{ position: [0, 2.4, 21], fov: 50, far: 300 }}
+      controls={{ minPolarAngle: Math.PI * 0.3, maxPolarAngle: Math.PI * 0.58, minAzimuthAngle: -0.8, maxAzimuthAngle: 0.8 }}
+      bg="#010409"
+      fit={{ nRef: 4, min: 0.62, max: 1.6, minRadius: 5.5 }}
+      agentRadius={1.4}
+      graph={{ natural: REEF_R, radius: 3.6 }}
+      peripheryGap={4}
+      Background={<Abyss />}
+      Agent={Jelly}
+      RunMarker={Current}
+      McpServer={Angler}
+      GraphResource={ReefPatch}
+      cluster={{ radius: 1.25, variant: "swarm", pointSize: 0.9, labelBelow: 1.15 }}
+      PostFX={
         <EffectComposer multisampling={0}>
           <Bloom mipmapBlur intensity={1.25} luminanceThreshold={0.16} luminanceSmoothing={0.25} radius={0.78} />
           <Vignette eskil={false} offset={0.22} darkness={0.9} />
           <Noise opacity={0.03} />
         </EffectComposer>
-      </Canvas>
-      <Hud title="Deep sea · bioluminescent agents" subtitle="jellyfish = agents · currents = Hatchet runs · coral reef = knowledge graph · anglerfish = MCP servers" selected={selected} onClose={() => setSelected(null)} />
-    </div>
+      }
+    >
+      <Tethers />
+      <Messages />
+      <McpTethers />
+    </KitScene>
   );
 }

@@ -93,6 +93,8 @@ void main() {
 }`;
 
 export const FOG = { color: new THREE.Color("#05040d"), near: 34, far: 110 };
+/** shared fog uniforms: the scene follows the kit's camera distance (index.tsx FogFollow) */
+export const FOG_U = { near: { value: FOG.near }, far: { value: FOG.far } };
 
 export function makeBuildingMaterial(opts: { color?: string; edge?: string; filler?: boolean } = {}) {
   return new THREE.ShaderMaterial({
@@ -115,8 +117,8 @@ export function makeBuildingMaterial(opts: { color?: string; edge?: string; fill
       uFiller: { value: opts.filler ? 1 : 0 },
       uOpacity: { value: 1 },
       uFogColor: { value: FOG.color },
-      uFogNear: { value: FOG.near },
-      uFogFar: { value: FOG.far },
+      uFogNear: FOG_U.near,
+      uFogFar: FOG_U.far,
     },
   });
 }

@@ -1,6 +1,7 @@
 /**
- * Knowledge graph = the waypoint grid. Every sampled graph node is a △ waypoint scattered over the scope
- * (deterministic per node), graph relations are faint airways between them. A read lights the waypoint
+ * Graph resource slot: knowledge graph = a small waypoint chart beside the scope (only when the session has a
+ * graph). Every sampled graph node is a △ waypoint scattered over the chart (deterministic per node), graph
+ * relations are faint airways between them. Drawn in its own frame (radius WPT_R); the kit places/scales it. A read lights the waypoint
  * cyan and streams a beam waypoint → flight; a write flashes it amber-white, streams flight → waypoint and
  * rings out across the scope. The most recent touched waypoints get a name tag.
  */
@@ -8,9 +9,13 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
-import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
+import { nodeIndex } from "../shared/useSceneSetup";
 import { hash01, world } from "../shared/world";
-import { CYAN, CurvePool, SCOPE_R, Style, arcControl, blips, clamp01, easeInOut, ping, polar, reduced, sweepAngle } from "./fx";
+import { graphToStage, kit, stageToGraph, type GraphSlotProps } from "../shared/kit";
+import { CYAN, CurvePool, Style, TAU, arcControl, blips, clamp01, easeInOut, ping, polar, reduced, sweepAngle } from "./fx";
+
+/** chart radius (local units) */
+export const WPT_R = 3.4;
 
 const MAX_NODES = 180;
 const MAX_TAGS = 4;
@@ -48,7 +53,7 @@ void main(){
   gl_FragColor = vec4(vC * a, 1.0);
 }`;
 
-export function Waypoints({ galaxy }: { galaxy: Galaxy }) {
+export function Waypoints({ galaxy }: GraphSlotProps) {
   const nodes = useMemo(() => galaxy.nodes.slice(0, MAX_NODES), [galaxy]);
   const n = nodes.length;
   const data = useMemo(() => {
@@ -58,7 +63,7 @@ export function Waypoints({ galaxy }: { galaxy: Galaxy }) {
     const ga = Math.PI * (3 - Math.sqrt(5));
     for (let i = 0; i < n; i++) {
       const id = nodes[i].id;
-      const r = 1.3 + (SCOPE_R - 1.9) * Math.sqrt((i + 0.5) / n) + (hash01(id, 11) - 0.5) * 0.45;
+      const r = 0.45 + (WPT_R - 0.75) * Math.sqrt((i + 0.5) / n) + (hash01(id, 11) - 0.5) * 0.25;
       polar(i * ga + (hash01(id, 12) - 0.5) * 0.12, r, 0.04, v);
       pos.set([v.x, v.y, v.z], i * 3);
     }
@@ -80,7 +85,7 @@ export function Waypoints({ galaxy }: { galaxy: Galaxy }) {
       if (a === undefined || b === undefined || a === b) continue;
       const dx = pos[a * 3] - pos[b * 3];
       const dz = pos[a * 3 + 2] - pos[b * 3 + 2];
-      if (dx * dx + dz * dz < 4.2 * 4.2) pairs.push(a, b);
+      if (dx * dx + dz * dz < 1.6 * 1.6) pairs.push(a, b);
       if (pairs.length > 600) break;
     }
     const lg = new THREE.BufferGeometry();
@@ -102,13 +107,30 @@ export function Waypoints({ galaxy }: { galaxy: Galaxy }) {
   const tagGroups = useRef<(THREE.Group | null)[]>([]);
   const tagDivs = useRef<(Label3DHandle | null)[]>([]);
   const tagShown = useRef<string[]>(Array(MAX_TAGS).fill(""));
-  const tmp = useMemo(() => ({ wp: new THREE.Vector3(), c: new THREE.Vector3(), col: new THREE.Color(), base: new THREE.Color("#2fd6c8"), air: new THREE.Color("#0f6f5a") }), []);
+  const tmp = useMemo(() => ({ wp: new THREE.Vector3(), ws: new THREE.Vector3(), bp: new THREE.Vector3(), c: new THREE.Vector3(), col: new THREE.Color(), base: new THREE.Color("#2fd6c8"), air: new THREE.Color("#0f6f5a") }), []);
+  const rim = useMemo(() => {
+    // chart outline: a thin ring + 4 ticks so the resource reads as a small scope of its own
+    const pts: number[] = [];
+    const N = 96;
+    for (let i = 0; i < N; i++) {
+      const a0 = (i / N) * TAU, a1 = ((i + 1) / N) * TAU;
+      pts.push(Math.sin(a0) * WPT_R, 0.02, -Math.cos(a0) * WPT_R, Math.sin(a1) * WPT_R, 0.02, -Math.cos(a1) * WPT_R);
+    }
+    for (let q = 0; q < 4; q++) {
+      const a = (q / 4) * TAU;
+      pts.push(Math.sin(a) * WPT_R, 0.02, -Math.cos(a) * WPT_R, Math.sin(a) * (WPT_R + 0.3), 0.02, -Math.cos(a) * (WPT_R + 0.3));
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+    return g;
+  }, []);
 
   useFrame(({ clock, size }) => {
     const now = performance.now();
     const dt = Math.min(0.1, st.current.last ? (now - st.current.last) / 1000 : 0.016);
     st.current.last = now;
-    mat.uniforms.uScale.value = size.height * 0.9;
+    // point sprites are sized in view space: follow the kit's group scale
+    mat.uniforms.uScale.value = size.height * 0.9 * kit.graph.scale;
     mat.uniforms.uSweep.value = sweepAngle(clock.elapsedTime);
     const { read, write, pos } = data;
     const { wp, c, col, base, air } = tmp;
@@ -122,7 +144,7 @@ export function Waypoints({ galaxy }: { galaxy: Galaxy }) {
       else {
         write[i] = 1;
         wp.set(pos[i * 3], 0.05, pos[i * 3 + 2]);
-        ping(wp, 1.6, WRITE_C, 1400, 0.9);
+        ping(graphToStage(wp, tmp.ws), 1.6 * kit.graph.scale, WRITE_C, 1400, 0.9);
       }
     }
     // decay + colours
@@ -161,14 +183,16 @@ export function Waypoints({ galaxy }: { galaxy: Galaxy }) {
       if (!s) continue;
       const i = nodeIndex(galaxy, f.node) % n;
       wp.set(pos[i * 3], 0.05, pos[i * 3 + 2]);
-      arcControl(s.pos, wp, 0.6, 0.3, c);
+      // beams are drawn inside the chart group: the flight's stage position in chart-local units
+      const bp = stageToGraph(s.pos, tmp.bp);
+      arcControl(bp, wp, 0.6, 0.3, c);
       const u = clamp01(age / 1.1);
       const fade = age < 1.1 ? 1 : 1 - (age - 1.1) / 0.7;
       const colr = f.op === "read" ? CYAN : WRITE_C;
       // read: data flows waypoint → flight; write: flight → waypoint
       const hd = f.op === "read" ? 1 - easeInOut(u) : easeInOut(u);
-      pool.curve(s.pos, c, wp, colr, 0.6 * fade * s.vis, Style.Head, hd, 1);
-      pool.arrow(s.pos, c, wp, f.op === "read" ? 0.1 : 0.9, f.op === "read" ? -1 : 1, 0.26, colr, 1.2 * fade * s.vis);
+      pool.curve(bp, c, wp, colr, 0.6 * fade * s.vis, Style.Head, hd, 1);
+      pool.arrow(bp, c, wp, f.op === "read" ? 0.1 : 0.9, f.op === "read" ? -1 : 1, 0.26, colr, 1.2 * fade * s.vis);
       if (++shown > 40) break;
     }
     pool.end();
@@ -205,6 +229,9 @@ export function Waypoints({ galaxy }: { galaxy: Galaxy }) {
 
   return (
     <>
+      <lineSegments geometry={rim}>
+        <lineBasicMaterial color="#1fa865" transparent opacity={0.55} toneMapped={false} />
+      </lineSegments>
       <lineSegments geometry={data.lg} material={lineMat} frustumCulled={false} />
       <points geometry={data.g} material={mat} frustumCulled={false} />
       <primitive object={pool.lines} />
@@ -214,7 +241,7 @@ export function Waypoints({ galaxy }: { galaxy: Galaxy }) {
           <Label3D ref={(el) => void (tagDivs.current[i] = el)} position={[0, 0, 0.45]} text="" font="mono" plate="box" letterSpacing={0.05} size={0.26} opacity={0} pxRange={[7.5, 10.5]} renderOrder={22} />
         </group>
       ))}
-      <GraphLabel3D position={polar(Math.PI, SCOPE_R + 3.3, 0, new THREE.Vector3())} prefix="WPT  waypoints · " font="mono" plate="box" color="#38e8ff" textColor="#c8f7de" letterSpacing={0.04} size={0.3} pxRange={[8, 11.5]} />
+      <GraphLabel3D position={polar(Math.PI, WPT_R + 0.9, 0, new THREE.Vector3())} prefix="WPT  waypoints · " font="mono" plate="box" color="#38e8ff" textColor="#c8f7de" letterSpacing={0.04} size={0.3} pxRange={[8, 11.5]} />
     </>
   );
 }

@@ -11,7 +11,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 
-from .otel import LiveSpanProcessor
+from .otel import LiveSpanProcessor, ingest_headers
 
 log = logging.getLogger("agentglow")
 _lock = threading.Lock()
@@ -22,8 +22,10 @@ def _default_url(url: str | None) -> str:
     return (url or os.environ.get("AGENTGLOW_URL") or "http://localhost:8100").rstrip("/")
 
 
-def watch(url: str | None = None, *, instrument: bool = True, service_name: str | None = None) -> TracerProvider:
-    """Stream spans to agentglow. Reuses the global SDK TracerProvider (keeps Langfuse/OTLP exporters), else
+def watch(url: str | None = None, *, instrument: bool = True, service_name: str | None = None,
+          api_key: str | None = None) -> TracerProvider:
+    """Stream spans to agentglow. `api_key` (or env AGENTGLOW_API_KEY) is sent as `x-api-key` (server
+    `--ingest-key`). Reuses the global SDK TracerProvider (keeps Langfuse/OTLP exporters), else
     creates and installs one. Instruments LangChain/LangGraph/deepagents and the OpenAI Agents SDK (OpenInference)
     and Hatchet when installed. Idempotent; never raises because the server is down."""
     url = _default_url(url)
@@ -36,8 +38,10 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
                 log.warning("agentglow: global tracer provider is not an SDK provider; instrumenting a private one")
         key = (id(provider), url)
         if key not in _processors:
-            _processors[key] = LiveSpanProcessor(url)
+            _processors[key] = LiveSpanProcessor(url, api_key=api_key)
             provider.add_span_processor(_processors[key])
+        elif api_key:
+            _processors[key].api_key = api_key
         if instrument:
             _instrument(provider)
         return provider
@@ -75,16 +79,17 @@ def _instrument(provider: TracerProvider) -> None:
         log.info("agentglow: Hatchet instrumentation skipped: %s", e)
 
 
-def register_mcp(server: str, resources: list | dict = (), url: str | None = None) -> bool:
+def register_mcp(server: str, resources: list | dict = (), url: str | None = None, *, api_key: str | None = None) -> bool:
     """Announce an MCP server and the backends behind it, e.g.
-    register_mcp("analytics", {"snowflake": "warehouse", "spark": "spark"}). Returns False if the server is down."""
+    register_mcp("analytics", {"snowflake": "warehouse", "spark": "spark"}). Returns False if the server is down
+    (or rejects the ingest key: `api_key` or env AGENTGLOW_API_KEY)."""
     if isinstance(resources, dict):
         res = [{"name": n, "kind": k} for n, k in resources.items()]
     else:
         res = [r if isinstance(r, dict) else {"name": r[0], "kind": r[1]} for r in resources]
     body = json.dumps({"server": server, "resources": res}).encode()
     try:
-        req = urllib.request.Request(_default_url(url) + "/live/topology", data=body, headers={"Content-Type": "application/json"}, method="POST")
+        req = urllib.request.Request(_default_url(url) + "/live/topology", data=body, headers=ingest_headers(api_key), method="POST")
         urllib.request.urlopen(req, timeout=2).close()
         return True
     except Exception:

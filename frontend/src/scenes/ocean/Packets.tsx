@@ -4,11 +4,13 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { TYPE_COLOR, world, type Comet, type McpCall } from "../shared/world";
-import { arcPoint, jellyPos, satPos } from "./layout";
+import { agentLive } from "../shared/kit";
+import { arcPoint, lurePos } from "./layout";
 import { isExpanded, lod } from "../shared/lod";
 
 const FISH_GEO = new THREE.ConeGeometry(0.07, 0.34, 8).rotateX(Math.PI / 2);
 const _n = new THREE.Vector3();
+const _lure = new THREE.Vector3();
 const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 
 /** list of items keyed by numeric id, refreshed only when membership changes */
@@ -33,13 +35,13 @@ function Pulse({ comet }: { comet: Comet }) {
   const from = world.instances.get(comet.from);
   const color = from ? TYPE_COLOR[from.type] : "#a5f3fc";
   const mat = useMemo(() => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(4), toneMapped: false }), [color]);
-  const start = useMemo(() => (jellyPos.get(comet.from) ?? new THREE.Vector3()).clone(), [comet.from]);
+  const start = useMemo(() => (agentLive(comet.from) ?? new THREE.Vector3()).clone(), [comet.from]);
   useFrame(() => {
     const m = ref.current;
     if (!m) return;
     const t = Math.min(1, (performance.now() - comet.start) / comet.dur);
-    const a = jellyPos.get(comet.from);
-    const b = jellyPos.get(comet.to);
+    const a = agentLive(comet.from);
+    const b = agentLive(comet.to);
     if (!a || !b) {
       m.scale.setScalar(0.001);
       return;
@@ -62,15 +64,15 @@ function Fish({ call }: { call: McpCall }) {
   const color = srv?.color ?? "#94a3b8";
   const mat = useMemo(() => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(call.phase === "result" ? 5 : 3.5), toneMapped: false }), [color, call.phase]);
   const start = useMemo(() => {
-    const p = call.phase === "call" ? jellyPos.get(call.instance) : satPos.get(call.server);
+    const p = call.phase === "call" ? agentLive(call.instance) : lurePos(call.server, new THREE.Vector3());
     return (p ?? new THREE.Vector3()).clone();
   }, [call]);
   useFrame(() => {
     const m = ref.current;
     if (!m) return;
     const t = Math.min(1, (performance.now() - call.start) / call.dur);
-    const j = jellyPos.get(call.instance);
-    const s = satPos.get(call.server);
+    const j = agentLive(call.instance);
+    const s = lurePos(call.server, _lure);
     if (!j || !s) {
       m.scale.setScalar(0.001);
       return;

@@ -1,69 +1,41 @@
 /**
- * Runs: each run is a patch of sky with a faint run-colored glow and a chart label (topic; Hatchet steps only when the
- * run has them). The final answer is a shooting star streaking out of the run's root star, with a short caption.
+ * Runs (scene-kit RunMarker slot): each run is a patch of sky with a faint run-colored glow behind its stars and a
+ * chart label above them (topic; Hatchet steps only when the run has them). The final answer is a shooting star
+ * streaking out of the run's root star, with a short caption.
  */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine, type Label3DHandle } from "../shared/Label3D";
 import { RUN_LINGER_MS, hash01, useWorld, world, type Run } from "../shared/world";
-import { isRunExpanded, lod } from "../shared/lod";
-import { ICE, SparkPool, WHITE, clamp01, easeOut, glowTexture, lineMat, reduced, runRegion, spriteMat, starPos } from "./fx";
+import { agentLive, kit, type RunSlotProps } from "../shared/kit";
+import { ICE, SparkPool, WHITE, clamp01, easeOut, glowTexture, lineMat, reduced, spriteMat } from "./fx";
 
-/** Current run-label positions (stage space) so later runs can step aside instead of overlapping. */
-const labelAt = new Map<string, { p: THREE.Vector3; startedAt: number }>();
-
-function RunGlow({ run }: { run: Run }) {
-  const col = useMemo(() => new THREE.Color(run.color), [run.color]);
+export function RunGlow({ run: kr }: RunSlotProps) {
+  const col = useMemo(() => new THREE.Color(kr.color), [kr.color]);
   const mat = useMemo(() => spriteMat(glowTexture(), "#000"), []);
-  const s = useMemo(() => {
-    const c = runRegion(run.id, new THREE.Vector3());
-    return { aura: c.clone().setZ(-3), label: c.clone().add(new THREE.Vector3(0, 2.6, 0)), want: new THREE.Vector3(), init: false };
-  }, [run.slot, run.id]);
   const aura = useRef<THREE.Sprite>(null);
   const label = useRef<THREE.Group>(null);
-  useEffect(() => () => void labelAt.delete(run.id), [run.id]);
   useFrame(({ clock }) => {
     const now = performance.now();
-    const grow = easeOut((now - run.startedAt) / 1500);
-    const fade = run.endedAt ? clamp01(1 - (now - run.endedAt - (RUN_LINGER_MS - 2500)) / 2500) : 1;
-    const breathe = reduced ? 1 : 0.9 + 0.1 * Math.sin(clock.elapsedTime * 0.5 + run.slot);
+    const run = kr.run ?? world.runs.get(kr.id);
+    const grow = run ? easeOut((now - run.startedAt) / 1500) : 1;
+    const fade = run?.endedAt ? clamp01(1 - (now - run.endedAt - (RUN_LINGER_MS - 2500)) / 2500) : 1;
+    const breathe = reduced ? 1 : 0.9 + 0.1 * Math.sin(clock.elapsedTime * 0.5 + kr.index);
     mat.color.copy(col).multiplyScalar(0.075 * grow * fade * breathe);
-    // the chart label floats just above the run's highest star (never on top of the constellation)
-    let n = 0, sx = 0, sy = 0, top = -1e9;
-    for (const i of world.instances.values()) {
-      if (i.run !== run.id) continue;
-      const p = starPos.get(i.id);
-      if (!p) continue;
-      n++;
-      sx += p.x;
-      sy += p.y;
-      if (p.y > top) top = p.y;
+    // screen extents of the run group (its frame may be rotated): glow covers it, the chart label floats above it
+    const w = Math.abs(kr.side.x) * kr.hu + Math.abs(kr.axis.x) * kr.hv;
+    const h = Math.abs(kr.side.y) * kr.hu + Math.abs(kr.axis.y) * kr.hv;
+    if (aura.current) {
+      aura.current.position.set(kr.origin.x, kr.origin.y, -3);
+      aura.current.scale.set(w * 2.8 + 6, h * 2.8 + 5, 1);
     }
-    if (n) {
-      // stay clear of the top HUD: cap the height (rarely reached thanks to the region layout)
-      s.want.set(sx / n, Math.min(top + 1.7, 8.4), 0);
-      // the newer run's label steps up past any older label it would collide with
-      for (const [id, o] of labelAt)
-        if (id !== run.id && o.startedAt < run.startedAt && Math.abs(o.p.x - s.want.x) < 8.5 && Math.abs(o.p.y - s.want.y) < 1.4) s.want.y = o.p.y + 1.45;
-      if (!s.init) s.label.copy(s.want), (s.init = true);
-      else s.label.lerp(s.want, 0.04);
-      s.aura.x += (sx / n - s.aura.x) * 0.03;
-      s.aura.y += (sy / n - s.aura.y) * 0.03;
-    }
-    label.current?.position.copy(s.label);
-    let me = labelAt.get(run.id);
-    if (!me) labelAt.set(run.id, (me = { p: new THREE.Vector3(), startedAt: run.startedAt }));
-    me.p.copy(s.label);
-    aura.current?.position.copy(s.aura);
-    aura.current?.scale.set(15, 11, 1);
+    label.current?.position.set(kr.origin.x, kr.origin.y + h + 0.7, 0);
   });
   return (
     <>
       <sprite ref={aura} material={mat} />
-      <group ref={label}>
-        <RunLabel run={run} />
-      </group>
+      <group ref={label}>{kr.run && <RunLabel run={kr.run} />}</group>
     </>
   );
 }
@@ -78,10 +50,11 @@ function RunLabel({ run }: { run: Run }) {
       color={run.color}
       textColor="#e6ecff"
       plate="none"
+      anchorY="bottom"
       uppercase
       letterSpacing={0.12}
       size={0.34}
-      maxWidth={14}
+      maxWidth={11}
       opacity={done ? 0.5 : 0.92}
       fadeMs={600}
       pxRange={[10, 14]}
@@ -96,9 +69,9 @@ const DUST = 6;
 const TRAIL_SEG = 28;
 const STRANDS = 3;
 const SHOOT_S = 2.2;
-type Shot = { run: string; start: number; from: THREE.Vector3; dir: THREE.Vector3; color: THREE.Color; text: string };
+type Shot = { run: string; start: number; from: THREE.Vector3; dir: THREE.Vector3; travel: number; color: THREE.Color; text: string };
 
-function ShootingStars() {
+export function ShootingStars() {
   const { size, gl, camera } = useThree();
   const seen = useRef(new Set<string>());
   const shots = useRef<Shot[]>([]);
@@ -122,15 +95,19 @@ function ShootingStars() {
     for (const r of world.runs.values()) {
       if (!r.final || seen.current.has(r.id)) continue;
       seen.current.add(r.id);
-      if (!isRunExpanded(r.id)) continue; // collapsed into a cluster: no shooting star
+      const kr = kit.runs.get(r.id);
+      if (!kr) continue; // collapsed into a cluster: no shooting star
       let from: THREE.Vector3 | undefined;
-      for (const i of world.instances.values()) if (i.run === r.id && !i.parent) from = starPos.get(i.id);
-      const f = from ? from.clone() : runRegion(r.id, new THREE.Vector3());
-      // streak across the open sky toward the far side, gently falling
-      const tx = (f.x < 0 ? 1 : -1) * (10 + hash01(r.id, 21) * 6);
-      const ty = Math.max(-5, Math.min(4, f.y)) - 2.5 - hash01(r.id, 22) * 2;
+      for (const i of world.instances.values()) if (i.run === r.id && !i.parent) from = agentLive(i.id) ?? from;
+      const f = (from ?? kr.origin).clone();
+      // streak across the open sky away from the centre (sideways when the run is centred), gently falling;
+      // the length follows the size of the sky in use (kit core)
+      const R = kit.core.r;
+      const sx = Math.abs(f.x) > 0.5 ? (f.x < 0 ? 1 : -1) : hash01(r.id, 23) < 0.5 ? 1 : -1;
+      const tx = f.x + sx * (0.9 + hash01(r.id, 21) * 0.5) * (R + 3);
+      const ty = f.y - (0.25 + hash01(r.id, 22) * 0.2) * (R + 3);
       const dir = new THREE.Vector3(tx - f.x, ty - f.y, 1.5).normalize();
-      shots.current.push({ run: r.id, start: now, from: f, dir, color: new THREE.Color(r.color).lerp(WHITE, 0.7), text: r.final });
+      shots.current.push({ run: r.id, start: now, from: f, dir, travel: 1.3 * (R + 4), color: new THREE.Color(r.color).lerp(WHITE, 0.7), text: r.final });
       if (shots.current.length > MAX_SHOOT) shots.current.shift();
     }
     if (seen.current.size > 200) for (const id of seen.current) if (!world.runs.has(id)) seen.current.delete(id);
@@ -162,9 +139,9 @@ function ShootingStars() {
       }
       const u = age / SHOOT_S;
       if (u >= 1.25) continue;
-      const travel = 24 * (reduced ? 0.6 : 1);
+      const travel = s.travel * (reduced ? 0.6 : 1);
       const d = travel * easeOut(Math.min(1, u));
-      const trail = 7.5 * Math.min(1, u * 3) * (u > 1 ? Math.max(0, 1 - (u - 1) / 0.25) : 1);
+      const trail = Math.min(7.5, travel * 0.4) * Math.min(1, u * 3) * (u > 1 ? Math.max(0, 1 - (u - 1) / 0.25) : 1);
       const fade = u > 1 ? Math.max(0, 1 - (u - 1) / 0.25) : 1;
       // three hair-thin strands converging on the head → a tapered streak
       const px = -s.dir.y;
@@ -210,27 +187,3 @@ function ShootingStars() {
   );
 }
 
-export function Runs() {
-  const [list, setList] = useState<Run[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.runs;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // collapsed runs are drawn by their lane's cluster
-      setList([...m.values()].filter((r) => isRunExpanded(r.id)));
-    }
-  });
-  return (
-    <>
-      {list.map((r) => (
-        <RunGlow key={r.id} run={r} />
-      ))}
-      <ShootingStars />
-    </>
-  );
-}

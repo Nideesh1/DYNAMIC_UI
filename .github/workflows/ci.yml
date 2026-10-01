@@ -34,4 +34,5 @@ jobs:
           uv run --package agentglow-example-quickstart python -c "import deepagents, langchain_openai, langchain_anthropic"
           uv run --package agentglow-example-langgraph python -c "import langgraph, langchain_openai, langchain_anthropic"
           uv run --package agentglow-example-openai-agents python -c "import agents, openinference.instrumentation.openai_agents"
+          uv run --package agentglow-example-custom-loop --directory examples/custom-loop python -c "import ast; ast.parse(open('main.py').read()); import agentglow; agentglow.run, agentglow.traced_tool"
           uv build --package agentglow --out-dir dist

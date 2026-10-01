@@ -1,28 +1,18 @@
 /** MCP servers as anglerfish lurking at the edge of the abyss; pending calls = live lure-line tethers to the jelly. */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpServer } from "../shared/world";
-import { MOTION, arcPoint, dotTexture, jellyPos, satPos } from "./layout";
+import { waitSeconds, world } from "../shared/world";
+import { agentLive, type McpServerSlotProps } from "../shared/kit";
+import { ANGLER_SCALE, MOTION, arcPoint, dotTexture, lurePos } from "./layout";
 import { makeBellMaterial } from "./materials";
 
-const SLOTS: [number, number, number][] = [
-  [-19.5, 4.2, -7],
-  [19.5, 4.2, -7],
-  [-19.5, -2.6, -6],
-  [19.5, -2.6, -6],
-  [0, 11, -12],
-  [-9, 11.5, -14],
-  [9, 11.5, -14],
-];
-const slotPos = (s: number) => SLOTS[s % SLOTS.length];
-
-const _c = new THREE.Color();
 const LURE = new THREE.Vector3(0.95, 0.75, 0.25); // lure bulb, in fish-local space
 
-function Angler({ srv }: { srv: McpServer }) {
-  const [x, y, z] = slotPos(srv.slot);
+/** McpServer slot: an anglerfish at the kit's server slot on the outskirts, facing the jellies. */
+export function Angler({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
   const group = useRef<THREE.Group>(null);
   const fish = useRef<THREE.Group>(null);
   const bulb = useRef<THREE.Mesh>(null);
@@ -40,12 +30,7 @@ function Angler({ srv }: { srv: McpServer }) {
     const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(0.55, 0.35, 0), new THREE.Vector3(0.75, 1.25, 0), LURE);
     return new THREE.TubeGeometry(curve, 16, 0.018, 4);
   }, []);
-  const pos = useMemo(() => new THREE.Vector3(), []);
   const born = useMemo(() => performance.now(), []);
-  useEffect(() => {
-    satPos.set(srv.name, pos);
-    return () => void satPos.delete(srv.name);
-  }, [srv.name, pos]);
 
   useFrame(({ clock }) => {
     const now = performance.now();
@@ -57,11 +42,13 @@ function Angler({ srv }: { srv: McpServer }) {
     const g = group.current;
     const f = fish.current;
     if (!g || !f) return;
-    g.position.set(x + Math.sin(t * 0.3 + s.slot) * 0.5, y + Math.sin(t * 0.45 + s.slot * 2) * 0.35, z);
-    // face the centre of the abyss; when busy, it turns and wags
-    f.rotation.y = (x > 0 ? Math.PI : 0) + Math.sin(t * (busy ? 2.4 : 0.6)) * (busy ? 0.35 : 0.12);
+    // the kit places the fish (it eases when the periphery re-lays out); a little bob, no drift off the slot
+    g.position.copy(mcp.pos);
+    g.position.y += Math.sin(t * 0.45 + s.slot * 2) * 0.2;
+    // face the core; when busy, it turns and wags
+    f.rotation.y = (mcp.out.x > 0 ? Math.PI : 0) + Math.sin(t * (busy ? 2.4 : 0.6)) * (busy ? 0.35 : 0.12);
     f.rotation.z = Math.sin(t * 0.5 + s.slot) * 0.08;
-    f.scale.setScalar(appear * (1 + act * 0.12));
+    f.scale.setScalar(Math.max(1e-3, appear * ANGLER_SCALE * (1 + act * 0.12)));
     bodyMat.uniforms.uIntensity.value = 0.16 + (busy ? 0.18 : 0) + act * 0.45;
     bodyMat.uniforms.uOpacity.value = 0.7 * appear;
     const glow = (busy ? 2.4 + Math.sin(now / 110) * 0.9 : 1.2) + act * 4;
@@ -78,8 +65,6 @@ function Angler({ srv }: { srv: McpServer }) {
       sonar.current.scale.setScalar(0.3 + sa * 2.4);
       sonarMat.opacity = Math.max(0, 1 - sa) * 0.9;
     }
-    // publish lure world position for packets and tethers
-    if (bulb.current) bulb.current.getWorldPosition(pos);
     label.current?.setOpacity(appear * (busy ? 1 : 0.75));
   });
 
@@ -116,7 +101,7 @@ function Angler({ srv }: { srv: McpServer }) {
 }
 
 /** live tethers for pending MCP calls: dashes stream toward the server; amber → red the longer it waits; snap-back flash on resolve */
-function Tethers() {
+export function McpTethers() {
   const MAX = 24;
   const SUB = 28;
   const geo = useMemo(() => {
@@ -126,6 +111,7 @@ function Tethers() {
     return g;
   }, []);
   const p = useMemo(() => new THREE.Vector3(), []);
+  const lure = useMemo(() => new THREE.Vector3(), []);
   const amber = useMemo(() => new THREE.Color("#f59e0b"), []);
   const red = useMemo(() => new THREE.Color("#ef4444"), []);
   const white = useMemo(() => new THREE.Color(1, 1, 1), []);
@@ -157,8 +143,8 @@ function Tethers() {
     };
     for (const pend of world.mcpPending.values()) {
       if (k >= MAX) break;
-      const a = jellyPos.get(pend.instance);
-      const b = satPos.get(pend.server);
+      const a = agentLive(pend.instance);
+      const b = lurePos(pend.server, lure);
       if (!a || !b) continue;
       const w = waitSeconds(pend, now);
       const srv = world.mcpServers.get(pend.server);
@@ -175,8 +161,8 @@ function Tethers() {
     }
     for (const r of world.mcpResolved) {
       if (k >= MAX) break;
-      const a = jellyPos.get(r.instance);
-      const b = satPos.get(r.server);
+      const a = agentLive(r.instance);
+      const b = lurePos(r.server, lure);
       if (!a || !b) continue;
       const age = (now - r.resolvedAt) / 700;
       c.set(world.mcpServers.get(r.server)?.color ?? "#ffffff").lerp(white, 0.6);
@@ -194,21 +180,3 @@ function Tethers() {
   );
 }
 
-export function Anglers() {
-  const [list, setList] = useState<McpServer[]>([]);
-  const n = useRef(0);
-  useFrame(() => {
-    if (world.mcpServers.size !== n.current) {
-      n.current = world.mcpServers.size;
-      setList([...world.mcpServers.values()]);
-    }
-  });
-  return (
-    <group>
-      {list.map((s) => (
-        <Angler key={s.name} srv={s} />
-      ))}
-      <Tethers />
-    </group>
-  );
-}

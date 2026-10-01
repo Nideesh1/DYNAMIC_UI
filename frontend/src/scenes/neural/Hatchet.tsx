@@ -1,52 +1,46 @@
-/** Hatchet run = a soft aura in run.color behind its agents + one label (topic, plan › research › write). */
+/** Run marker: a soft aura in run.color behind the run's agents + one label above them (topic, plan › research › write). */
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine } from "../shared/Label3D";
 import { RUN_LINGER_MS, useWorld, world, type Run } from "../shared/world";
-import { isRunExpanded, lod } from "../shared/lod";
-import { clamp01, easeOut, glowSpriteMaterial, rankOffset, slotOf } from "./fx";
+import type { RunSlotProps } from "../shared/kit";
+import { clamp01, easeOut, glowSpriteMaterial } from "./fx";
 
-const TMP = new THREE.Vector3();
-
-function RunAura({ run }: { run: Run }) {
-  const S = slotOf(run.slot);
-  const col = useMemo(() => new THREE.Color(run.color), [run.color]);
+export function RunAura({ run: kr }: RunSlotProps) {
+  const col = useMemo(() => new THREE.Color(kr.color), [kr.color]);
   const mat = useMemo(() => glowSpriteMaterial("#000"), []);
-  const center = useMemo(() => S.dir.clone().multiplyScalar(S.somaR + S.fanLen * 0.35).setZ(-1.5), [S]);
-  const horizontal = Math.abs(S.dir.x) > 0.5;
   const aura = useRef<THREE.Sprite>(null);
-  const shift = useRef<THREE.Group>(null);
+  const labelG = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
     const now = performance.now();
-    // several expanded runs in one lane (LOD) fan out along the lane tangent
-    if (shift.current) shift.current.position.lerp(TMP.copy(S.tan).multiplyScalar(rankOffset(run.id)), 0.05);
-    const grow = easeOut((now - run.startedAt) / 1200);
-    const fade = run.endedAt ? clamp01(1 - (now - run.endedAt - (RUN_LINGER_MS - 2500)) / 2500) : 1;
-    const breathe = 0.9 + 0.1 * Math.sin(clock.elapsedTime * 0.6 + run.slot);
+    const run = kr.run ?? world.runs.get(kr.id);
+    const grow = run ? easeOut((now - run.startedAt) / 1200) : 1;
+    const fade = run?.endedAt ? clamp01(1 - (now - run.endedAt - (RUN_LINGER_MS - 2500)) / 2500) : 1;
+    const breathe = 0.9 + 0.1 * Math.sin(clock.elapsedTime * 0.6 + kr.index);
     mat.color.copy(col).multiplyScalar(0.16 * grow * fade * breathe);
-    aura.current?.scale.set(horizontal ? 9.5 : 13, horizontal ? 11 : 7.5, 1);
+    // screen-space extents of the run group (its frame may be rotated): aura covers it, label sits above it
+    const w = Math.abs(kr.side.x) * kr.hu + Math.abs(kr.axis.x) * kr.hv;
+    const h = Math.abs(kr.side.y) * kr.hu + Math.abs(kr.axis.y) * kr.hv;
+    if (aura.current) {
+      aura.current.position.set(kr.origin.x, kr.origin.y, -1.5);
+      aura.current.scale.set(w * 2.6 + 3, h * 2.6 + 3, 1);
+    }
+    labelG.current?.position.set(kr.origin.x, kr.origin.y + h + 0.6, 0.5);
   });
-  const labelPos = useMemo(() => {
-    const v = S.dir.clone().multiplyScalar(S.somaR);
-    if (horizontal) v.y += S.spread + 1.9;
-    else v.addScaledVector(S.dir, S.fanLen + 1.8);
-    return v;
-  }, [S, horizontal]);
   return (
-    <group ref={shift}>
-      <sprite ref={aura} material={mat} position={center} />
-      <RunLabel run={run} pos={labelPos} />
-    </group>
+    <>
+      <sprite ref={aura} material={mat} />
+      <group ref={labelG}>{kr.run && <RunLabel run={kr.run} />}</group>
+    </>
   );
 }
 
-function RunLabel({ run, pos }: { run: Run; pos: THREE.Vector3 }) {
+function RunLabel({ run }: { run: Run }) {
   useWorld(); // re-render on events (props only - no DOM)
   const done = run.status !== "started";
   return (
     <Label3D
-      position={pos}
       text={run.topic}
       secondary={runStepsLine(run, { base: "#94a3b8", current: "#fde68a", done: "#cbd5e1" }, ["running…", "run complete"])}
       color={run.color}
@@ -54,30 +48,8 @@ function RunLabel({ run, pos }: { run: Run; pos: THREE.Vector3 }) {
       maxWidth={10}
       opacity={done ? 0.5 : 1}
       fadeMs={400}
+      anchorY="bottom"
       pxRange={[10, 15]}
     />
-  );
-}
-
-export function Pathways() {
-  const [list, setList] = useState<Run[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.runs;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      setList([...m.values()].filter((r) => isRunExpanded(r.id)));
-    }
-  });
-  return (
-    <>
-      {list.map((r) => (
-        <RunAura key={r.id} run={r} />
-      ))}
-    </>
   );
 }

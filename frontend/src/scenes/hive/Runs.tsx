@@ -1,40 +1,41 @@
 /**
- * A run = a swarm: a warm aura on the comb behind its bees + one label (topic; Hatchet plan › research › write
+ * A run = a swarm (kit RunMarker slot): a warm aura on the comb behind its bees + one label (topic; Hatchet plan › research › write
  * only when the run has steps). Also drifting pollen motes (GPU-animated, static with reduced motion).
  */
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine } from "../shared/Label3D";
 import { RUN_LINGER_MS, useWorld, world, type Run } from "../shared/world";
-import { isRunExpanded, lod } from "../shared/lod";
-import { HONEY, clamp01, easeOut, glowSprite, reduced, runCenter } from "./fx";
+import { kit, type RunSlotProps } from "../shared/kit";
+import { HONEY, clamp01, easeOut, glowSprite, reduced } from "./fx";
 
-function Swarm({ run }: { run: Run }) {
-  const col = useMemo(() => new THREE.Color(run.color).lerp(HONEY, 0.55), [run.color]);
+/** Run marker: a warm aura on the comb behind the run's bees, sized to the run, + its label above them. */
+export function Swarm({ run: kr }: RunSlotProps) {
+  const col = useMemo(() => new THREE.Color(kr.color).lerp(HONEY, 0.55), [kr.color]);
   const mat = useMemo(() => glowSprite("#000"), []);
   const aura = useRef<THREE.Sprite>(null);
   const lbl = useRef<THREE.Group>(null);
-  const c = useMemo(() => new THREE.Vector3(), []);
   useFrame(({ clock }) => {
     const now = performance.now();
-    runCenter(run.id, c);
-    const grow = easeOut((now - run.startedAt) / 1200);
-    const fade = run.endedAt ? clamp01(1 - (now - run.endedAt - (RUN_LINGER_MS - 2500)) / 2500) : 1;
-    const breathe = 0.9 + 0.1 * Math.sin((reduced ? 0 : clock.elapsedTime) * 0.6 + run.slot);
+    const run = kr.run ?? world.runs.get(kr.id);
+    const grow = run ? easeOut((now - run.startedAt) / 1200) : 1;
+    const fade = run?.endedAt ? clamp01(1 - (now - run.endedAt - (RUN_LINGER_MS - 2500)) / 2500) : 1;
+    const breathe = 0.9 + 0.1 * Math.sin((reduced ? 0 : clock.elapsedTime) * 0.6 + kr.index);
     mat.color.copy(col).multiplyScalar(0.2 * grow * fade * breathe);
+    // screen extents of the (possibly rotated) run frame
+    const w = Math.abs(kr.side.x) * kr.hu + Math.abs(kr.axis.x) * kr.hv;
+    const h = Math.abs(kr.side.y) * kr.hu + Math.abs(kr.axis.y) * kr.hv;
     if (aura.current) {
-      aura.current.position.set(c.x, c.y, -1.2);
-      aura.current.scale.set(15, 11, 1);
+      aura.current.position.set(kr.origin.x, kr.origin.y, -1.2);
+      aura.current.scale.set(w * 2.6 + 3, h * 2.6 + 3, 1);
     }
-    lbl.current?.position.set(c.x, c.y + 2.9, c.z);
+    lbl.current?.position.set(kr.origin.x, kr.origin.y + h + 0.6, 0.5);
   });
   return (
     <>
       <sprite ref={aura} material={mat} />
-      <group ref={lbl}>
-        <RunLabel run={run} />
-      </group>
+      <group ref={lbl}>{kr.run && <RunLabel run={kr.run} />}</group>
     </>
   );
 }
@@ -51,32 +52,9 @@ function RunLabel({ run }: { run: Run }) {
       maxWidth={9}
       opacity={done ? 0.5 : 1}
       fadeMs={400}
+      anchorY="bottom"
       pxRange={[10, 15]}
     />
-  );
-}
-
-export function Swarms() {
-  const [list, setList] = useState<Run[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.runs;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // collapsed runs are drawn by their lane's swarm (Clusters.tsx)
-      setList([...m.values()].filter((r) => isRunExpanded(r.id)));
-    }
-  });
-  return (
-    <>
-      {list.map((r) => (
-        <Swarm key={r.id} run={r} />
-      ))}
-    </>
   );
 }
 
@@ -119,9 +97,13 @@ export function Motes() {
     });
     return { geo: g, mat: m };
   }, []);
+  const pts = useRef<THREE.Points>(null);
   useFrame(({ clock, size, gl }) => {
     mat.uniforms.uTime.value = reduced ? 0 : clock.elapsedTime;
-    mat.uniforms.uScale.value = size.height * gl.getPixelRatio();
+    // the mote field grows with the crowd (motes keep their screen size: uScale follows the field scale)
+    const k = Math.max(1, kit.core.r / 9);
+    pts.current?.scale.setScalar(k);
+    mat.uniforms.uScale.value = size.height * gl.getPixelRatio() * k;
   });
-  return <points geometry={geo} material={mat} frustumCulled={false} />;
+  return <points ref={pts} geometry={geo} material={mat} frustumCulled={false} />;
 }

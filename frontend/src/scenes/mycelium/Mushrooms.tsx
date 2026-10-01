@@ -10,11 +10,12 @@
  * Messages between agents travel as nutrient blobs along the hyphae.
  */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, energy, hash01, presence, roleScale, world, type Instance } from "../shared/world";
-import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
+import { TYPE_COLOR, energy, hash01, presence, roleScale, world } from "../shared/world";
+import { showLabel } from "../shared/lod";
+import { agentLive, fit, runLocal, type AgentSlotProps } from "../shared/kit";
 import {
   AMBER,
   ARROW_GEO,
@@ -22,20 +23,15 @@ import {
   DECAL_GEO,
   FLAT_RING_GEO,
   GILL_GEO,
-  MAT_R,
   RED,
   STEM_GEO,
+  STEM_H,
   TUBE_GEO,
   TYPE_C,
   WILT,
   additiveBasic,
-  agentBase,
-  runSlot,
   backOut,
-  basePos,
   capMaterial,
-  capPos,
-  capSize,
   clamp01,
   easeInOut,
   easeOut,
@@ -48,7 +44,7 @@ import {
   stemMaterial,
 } from "./fx";
 
-/** Lineage hypha of each instance (parent foot → child foot), so messages ride the same thread. */
+/** Lineage hypha of each instance (parent foot -> child foot), so messages ride the same thread. */
 export type Curve = { p0: THREE.Vector3; p1: THREE.Vector3; p2: THREE.Vector3; wob: number; seed: number };
 export const hyphaCurve = new Map<string, Curve>();
 
@@ -57,13 +53,15 @@ const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 
 const BABIES: [number, number, number][] = [
-  // angle, distance (× size), scale (× size)
+  // angle, distance (x size), scale (x size)
   [2.2, 0.62, 0.26],
   [3.6, 0.5, 0.18],
   [4.9, 0.7, 0.21],
 ];
 
-function Mushroom({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => void }) {
+/** Agent slot: one fruiting body whose foot stands on the kit's position (agent.live, y = 0). */
+export function Mushroom({ agent, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
   const tilt = useRef<THREE.Group>(null);
   const stem = useRef<THREE.Mesh>(null);
   const cap = useRef<THREE.Group>(null);
@@ -78,12 +76,14 @@ function Mushroom({ inst, onSelect }: { inst: Instance; onSelect: (id: string) =
   const seed = useMemo(() => hash01(inst.id, 21), [inst.id]);
   const color = TYPE_C[inst.type];
   const size = roleScale(inst);
-  const H = 1.75 * size;
-  const slot = runSlot(inst.run); // re-evaluated on each list refresh (lod.version) → re-base when LOD moves the run
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const base = useMemo(() => agentBase(inst), [inst, slot]);
+  const H = STEM_H * size;
   const root = useRef<THREE.Group>(null);
-  const yaw = useMemo(() => -Math.atan2(base.z, base.x) + (hash01(inst.id, 22) - 0.5) * 1.6, [base, inst.id]);
+  // lean away from the colony centre (decided once from the kit's target so it never flips)
+  const yaw = useMemo(() => {
+    const dx = agent.target.x - agent.run.target.x;
+    const dz = agent.target.z - agent.run.target.z;
+    return (dx * dx + dz * dz > 0.01 ? -Math.atan2(dz, dx) : -Math.PI / 2) + (hash01(inst.id, 22) - 0.5) * 1.6;
+  }, [agent, inst.id]);
   const m = useMemo(
     () => ({
       cap: capMaterial(),
@@ -98,17 +98,12 @@ function Mushroom({ inst, onSelect }: { inst: Instance; onSelect: (id: string) =
     [color, inst.parent, inst.subagent, seed],
   );
   m.cap.uniforms.uSpots.value = seed * 10;
-  const s = useMemo(() => ({ live: new THREE.Vector3(), c: new THREE.Color(), parentK: 0, ringK: 0, open: 0, curve: { p0: new THREE.Vector3(), p1: new THREE.Vector3(), p2: new THREE.Vector3(), wob: 0.35, seed } as Curve, p0set: false }), [seed]);
+  const s = useMemo(() => ({ c: new THREE.Color(), parentK: 0, ringK: 0, open: 0, curve: { p0: new THREE.Vector3(), p1: new THREE.Vector3(), p2: new THREE.Vector3(), wob: 0.35, seed } as Curve }), [seed]);
 
   useEffect(() => {
-    capPos.set(inst.id, s.live);
     hyphaCurve.set(inst.id, s.curve);
     return () => {
-      if (capPos.get(inst.id) === s.live) capPos.delete(inst.id);
       if (hyphaCurve.get(inst.id) === s.curve) hyphaCurve.delete(inst.id);
-      capSize.delete(inst.id);
-      // keep the base while children may still be placed from it; drop once the instance is gone
-      window.setTimeout(() => !world.instances.has(inst.id) && basePos.delete(inst.id), 0);
     };
   }, [inst.id, s]);
 
@@ -150,13 +145,13 @@ function Mushroom({ inst, onSelect }: { inst: Instance; onSelect: (id: string) =
       cap.current.scale.set(cr * (0.94 + s.open * 0.08), cr * (1.18 - s.open * 0.25) * (1 - wilt * 0.35), cr * (0.94 + s.open * 0.08));
     }
     if (tilt.current) tilt.current.rotation.y = yaw;
-    // live cap centre in stage space (for spores, graph threads, MCP)
-    const cy = Math.cos(yaw);
-    const sy = Math.sin(yaw);
-    const L = lodScale();
-    root.current?.scale.setScalar(L);
-    s.live.set(base.x + topX * cy * L, base.y + (Hs + 0.15 * cr) * L, base.z - topX * sy * L);
-    capSize.set(inst.id, cr * L);
+    // foot on the kit position; geometry is in role-size units, the kit's fit scale on top
+    const base = agent.live;
+    const L = agent.scale / size;
+    if (root.current) {
+      root.current.position.copy(base);
+      root.current.scale.setScalar(Math.max(0.0001, L));
+    }
 
     // ---- color / glow
     s.c.copy(color);
@@ -196,19 +191,17 @@ function Mushroom({ inst, onSelect }: { inst: Instance; onSelect: (id: string) =
         m.sel.color.setScalar(0.7 * pres);
       }
     }
-    if (labelG.current) labelG.current.position.set(topX, Hs + cr * 0.75 + 0.32, 0);
+    // label above the cap, outside the scaled group (Label3D fit handles its size)
+    if (labelG.current) labelG.current.position.set(base.x + topX * Math.cos(yaw) * L, base.y + (Hs + cr * 0.75) * L + 0.32, base.z - topX * Math.sin(yaw) * L);
     label.current?.setOpacity(showLabel(inst.id) ? clamp01(unfurl) * (1 - wilt) * 0.95 : 0);
 
-    // ---- lineage hypha: parent foot (or mat edge) → this foot
+    // ---- lineage hypha: parent foot (or, for a top-level agent, the colony's spawn point behind the run) -> this foot
     const parent = inst.parent ? world.instances.get(inst.parent) : undefined;
-    const pb = inst.parent ? basePos.get(inst.parent) : undefined;
+    const pb = inst.parent ? agentLive(inst.parent) : undefined;
     const cv = s.curve;
     if (pb && parent) cv.p0.copy(pb);
-    else if (!s.p0set) {
-      const l = Math.hypot(base.x, base.z) || 1;
-      cv.p0.set((base.x / l) * MAT_R * 0.92, 0.05, (base.z / l) * MAT_R * 0.92);
-    }
-    s.p0set = true;
+    else if (!inst.parent) runLocal(agent.run, 0, -2.4 * fit.spread, cv.p0).setY(0.05);
+    else if (cv.p0.lengthSq() === 0) cv.p0.copy(base);
     cv.p2.copy(base);
     cv.p1.copy(cv.p0).add(cv.p2).multiplyScalar(0.5);
     cv.p1.y += 0.35;
@@ -238,7 +231,7 @@ function Mushroom({ inst, onSelect }: { inst: Instance; onSelect: (id: string) =
         hyphaAt(cv.p0, cv.p1, cv.p2, cv.wob, cv.seed, 0.83, _b);
         arrow.current.position.copy(_a);
         arrow.current.quaternion.setFromUnitVectors(UP, _b.sub(_a).normalize());
-        const k = inst.subagent ? 0.8 : 1;
+        const k = (inst.subagent ? 0.8 : 1) * Math.min(1.3, fit.scale);
         arrow.current.scale.set(0.13 * k, 0.36 * k, 0.13 * k);
         m.arrow.color.copy(color).multiplyScalar(1.5 * s.parentK);
       }
@@ -256,7 +249,7 @@ function Mushroom({ inst, onSelect }: { inst: Instance; onSelect: (id: string) =
     <>
       <mesh geometry={TUBE_GEO} material={m.hypha} frustumCulled={false} />
       <mesh ref={arrow} geometry={ARROW_GEO} material={m.arrow} visible={false} />
-      <group ref={root} position={base}>
+      <group ref={root}>
         <mesh ref={pool} geometry={DECAL_GEO} material={m.pool} position={[0, 0.04, 0]} scale={0.0001} />
         <mesh ref={sel} geometry={FLAT_RING_GEO} material={m.sel} position={[0, 0.06, 0]} visible={false} />
         <group ref={tilt}>
@@ -273,43 +266,20 @@ function Mushroom({ inst, onSelect }: { inst: Instance; onSelect: (id: string) =
                 <mesh geometry={CAP_GEO} material={m.cap} position={[0.08, 1.45, 0]} scale={[0.75, 0.95, 0.75]} />
               </group>
             ))}
-          <group ref={labelG}>
-            <Label3D
-              ref={label}
-              offset={[0, 0.22]}
-              text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
-              color={TYPE_COLOR[inst.type]}
-              size={inst.subagent ? 0.22 : 0.28}
-              opacity={0}
-              pxRange={inst.subagent ? [8, 11.5] : [9, 13.5]}
-            />
-          </group>
         </group>
       </group>
-    </>
-  );
-}
-
-export function Mushrooms({ onSelect }: { onSelect: (id: string) => void }) {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.instances;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // parents first so children grow from their parent's foot; collapsed runs → their lane's cluster
-      setList([...m.values()].filter(isExpanded).sort((a, b) => a.bornAt - b.bornAt));
-    }
-  });
-  return (
-    <>
-      {list.map((i) => (
-        <Mushroom key={i.id} inst={i} onSelect={onSelect} />
-      ))}
+      <group ref={labelG}>
+        <Label3D
+          ref={label}
+          offset={[0, 0.22]}
+          text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
+          color={TYPE_COLOR[inst.type]}
+          size={inst.subagent ? 0.22 : 0.28}
+          opacity={0}
+          fit
+          pxRange={inst.subagent ? [8, 11.5] : [9, 13.5]}
+        />
+      </group>
     </>
   );
 }
@@ -328,9 +298,10 @@ export function Nutrients() {
       if (n >= MAX_MSG) break;
       const from = world.instances.get(cm.from);
       const to = world.instances.get(cm.to);
-      const pa = basePos.get(cm.from);
-      const pb = basePos.get(cm.to);
-      if (!from || !to || !pa || !pb || !isExpanded(from) || !isExpanded(to)) continue;
+      // collapsed agents have no foot: only between drawn mushrooms
+      const pa = agentLive(cm.from);
+      const pb = agentLive(cm.to);
+      if (!from || !to || !pa || !pb) continue;
       const t = clamp01((now - cm.start) / cm.dur);
       if (t >= 1) continue;
       // ride the lineage hypha when they are parent/child; otherwise arc over the soil

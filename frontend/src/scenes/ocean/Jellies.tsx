@@ -1,12 +1,12 @@
-/** Agent instances as jellyfish: bud from the parent as a larva, bloom into a bell, pulse while thinking, flash + dissolve on exit. */
+/** Agent slot: jellyfish. Bud from the parent as a larva, bloom into a bell, pulse while thinking, flash + dissolve on
+ * exit. The kit owns the home position; the jelly sways around it and writes the drawn position into `agent.live`. */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { TYPE_COLOR, energy, lingerMs, tick, world, type Instance } from "../shared/world";
-import { isExpanded, lod, lodScale, lodTick } from "../shared/lod";
-import { STEP_X, clamp01, currentPoint, dotTexture, easeOutBack, easeOutCubic, hash, homeOf, isScout, jellyPos, laneSlot, runOffset, selection } from "./layout";
+import { TYPE_COLOR, energy, lingerMs, world } from "../shared/world";
+import { agentLive, fit, kit, kitRoleU, runLocal, type AgentSlotProps } from "../shared/kit";
+import { MOTION, clamp01, dotTexture, easeOutBack, easeOutCubic, hash } from "./layout";
 import { makeBellMaterial } from "./materials";
-import { roleIndex } from "../shared/spread";
 
 const N_TENT = 9;
 const SEGS = 11;
@@ -14,13 +14,17 @@ const N_PUFF = 46;
 const BIRTH_MS = 1500;
 
 const _home = new THREE.Vector3();
+/** shared geometries (a crowd ungrouping mounts many jellies at once) */
+const BELL_GEO = new THREE.SphereGeometry(1, 36, 18, 0, Math.PI * 2, 0, Math.PI / 2);
+const CORE_GEO = new THREE.SphereGeometry(1, 16, 12);
 const _c = new THREE.Color();
 
-function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => void }) {
+export function Jelly({ agent, selected, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
   const id = inst.id;
-  const scout = isScout(inst.type);
+  const scout = agent.depth > 0;
+  /** bell radius at fit.scale 1 (the theme's own parent : subagent ratio) */
   const R = scout ? 0.42 : 0.62;
-  const k = useMemo(() => roleIndex(inst), [inst]); // stable slot among same-role agents of this run
   const seed = (hash(id) % 1000) / 1000;
   const color = TYPE_COLOR[inst.type];
 
@@ -78,36 +82,37 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
     [color, scout],
   );
 
-  // birth origin: the parent jelly (bud) or, for root agents, the Hatchet step buoy on its current
-  const pos = useMemo(() => new THREE.Vector3(), []);
+  // birth origin: the parent jelly (bud) or, for root agents, the plan buoy on the run's current
   const origin = useMemo(() => new THREE.Vector3(), []);
-  useEffect(() => {
-    const p = inst.parent ? jellyPos.get(inst.parent) : undefined;
-    const run = world.runs.get(inst.run);
-    if (p) origin.copy(p);
-    else currentPoint(laneSlot(run?.slot ?? 0), STEP_X.plan, performance.now() / 1000, origin).add(runOffset(inst.run, _home));
-    pos.copy(origin);
-    jellyPos.set(id, pos);
-    return () => {
-      jellyPos.delete(id);
+  const born = useRef(false);
+  useEffect(
+    () => () => {
       bellMat.dispose();
       coreMat.dispose();
       haloMat.dispose();
       tentGeo.dispose();
       puffData.g.dispose();
       puffMat.dispose();
-    };
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    [],
+  );
 
   useFrame(({ clock }, dt) => {
     const now = performance.now();
     const t = clock.elapsedTime;
-    const i = inst;
-    const run = world.runs.get(i.run);
-    homeOf(i, laneSlot(run?.slot ?? 0), k, t, _home);
-    _home.x += Math.sin(t * 0.4 + seed * 9) * 0.12;
-    _home.y += Math.sin(t * 0.7 + seed * 5) * 0.12;
+    const i = agent.inst;
+    if (!born.current) {
+      born.current = true;
+      const p = i.parent ? agentLive(i.parent) : undefined;
+      if (p) origin.copy(p);
+      else runLocal(agent.run, kitRoleU("planner"), CURRENT_V * fit.spread, origin);
+    }
+    // home = the kit's eased slot + a slow sway (the drawn position is the kit's `live`)
+    const sway = 0.12 * MOTION * Math.max(1, fit.spread);
+    _home.copy(agent.pos);
+    _home.x += Math.sin(t * 0.4 + seed * 9) * sway;
+    _home.y += Math.sin(t * 0.7 + seed * 5) * sway;
 
     const birth = clamp01((now - i.bornAt) / BIRTH_MS);
     const travel = easeOutCubic(clamp01(birth / 0.8));
@@ -124,7 +129,8 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
     for (const p of world.mcpPending.values()) if (p.instance === id) mcpWait = true;
     const thinking = (i.status === "thinking" || i.status === "spawning") && !mcpWait;
     const en = energy(i, now);
-    const sel = selection.id === id;
+    const sel = selected;
+    const fs = fit.scale;
 
     // bell rhythm: fast contractions while thinking, slow breathing while waiting / on a tool
     const speed = exiting ? 0.8 : thinking ? 4.6 : mcpWait ? 1.8 : 1.1;
@@ -132,15 +138,16 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
     const c = Math.pow(0.5 + 0.5 * Math.sin(phase.current), 3);
     const amp = thinking ? 1 : 0.45;
 
+    const pos = agent.live;
     pos.lerpVectors(origin, _home, travel);
-    pos.y += c * 0.12 * amp + (exiting ? exitAge * 1.2 : 0);
+    pos.y += c * 0.12 * amp * fs + (exiting ? exitAge * 1.2 * fs : 0);
     if (group.current) {
       group.current.position.copy(pos);
       group.current.rotation.z = Math.sin(t * 0.5 + seed * 7) * 0.12;
       group.current.rotation.x = Math.sin(t * 0.37 + seed * 3) * 0.08;
     }
 
-    const s = R * lodScale() * bloom * (1 + en * 0.14) * (1 + (exiting ? exitAge * 0.6 : 0));
+    const s = R * fs * bloom * (1 + en * 0.14) * (1 + (exiting ? exitAge * 0.6 : 0)) * (sel ? 1.12 : 1);
     const sxz = 1 + c * 0.14 * amp;
     const sy = 0.8 * (1 - c * 0.24 * amp);
     if (body.current) body.current.visible = !(exiting && fade <= 0.001);
@@ -149,12 +156,12 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
     const dim = thinking ? 1.25 : mcpWait ? 0.7 + 0.35 * Math.sin(t * 2.2) : 0.45;
     bellMat.uniforms.uIntensity.value = dim + en * 1.7 + flash * 5 + (sel ? 0.7 : 0);
     bellMat.uniforms.uOpacity.value = fade * (0.4 + 0.6 * clamp01(bloom));
-    bellMat.uniforms.uFlash.value = flash + (failed ? 0 : 0);
+    bellMat.uniforms.uFlash.value = flash;
     if (failed && exiting) (bellMat.uniforms.uColor.value as THREE.Color).set("#ef4444");
 
     // glowing core: the larva while budding, then the jelly's heart
     if (core.current) {
-      const ls = lodScale() * (larva ? R * (0.32 + 0.08 * Math.sin(now / 50)) : R * (0.22 + en * 0.06) * Math.min(1, bloom + 0.3));
+      const ls = fs * (larva ? R * (0.32 + 0.08 * Math.sin(now / 50)) : R * (0.22 + en * 0.06) * Math.min(1, bloom + 0.3));
       core.current.scale.setScalar(Math.max(1e-4, ls * (1 - (exiting ? exitAge : 0))));
       core.current.position.y = larva ? 0 : s * sy * 0.35;
       _c.copy(base).multiplyScalar((larva ? 5 : 1.6 + en * 3) * dim + flash * 8);
@@ -162,7 +169,7 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
       coreMat.opacity = fade;
     }
     if (halo.current) {
-      halo.current.scale.setScalar(R * lodScale() * (larva ? 3 : 4.2 + en * 2 + flash * 4));
+      halo.current.scale.setScalar(R * fs * (larva ? 3 : 4.2 + en * 2 + flash * 4));
       haloMat.opacity = (0.12 + en * 0.16 + (larva ? 0.5 : 0) + flash * 0.6 + (sel ? 0.2 : 0)) * fade;
     }
 
@@ -170,9 +177,9 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
     const tg = tentGeo.getAttribute("position") as THREE.BufferAttribute;
     const arr = tg.array as Float32Array;
     const rim = s * sxz * 0.88;
-    const L = R * lodScale() * (scout ? 3.0 : 3.6) * clamp01(bloom) * (0.85 + 0.15 * (1 - c));
+    const L = R * fs * (scout ? 3.0 : 3.6) * clamp01(bloom) * (0.85 + 0.15 * (1 - c));
     const freq = thinking ? 3.2 : 1.1;
-    const sway = R * lodScale() * (thinking ? 0.55 : 0.35);
+    const swayT = R * fs * (thinking ? 0.55 : 0.35);
     for (let n = 0; n < N_TENT; n++) {
       const th = (n / N_TENT) * Math.PI * 2;
       const cx = Math.cos(th);
@@ -184,9 +191,9 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
           const w = t * freq * (0.85 + (n % 4) * 0.08) - q * 5 + n * 1.7;
           const r = rim * inner * (1 - q * 0.4);
           const v = ((n * SEGS + sg) * 2 + e) * 3;
-          arr[v] = cx * r + Math.sin(w) * sway * q;
+          arr[v] = cx * r + Math.sin(w) * swayT * q;
           arr[v + 1] = -q * L * (inner < 1 ? 0.7 : 1);
-          arr[v + 2] = cz * r + Math.cos(w * 0.8) * sway * q * 0.7;
+          arr[v + 2] = cz * r + Math.cos(w * 0.8) * swayT * q * 0.7;
         }
     }
     tg.needsUpdate = true;
@@ -200,12 +207,13 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
         const pr = pa.array as Float32Array;
         const age = (now - i.exitAt) / 1000;
         const spread = 1 - Math.exp(-age * 3.5);
+        const Rs = R * fs;
         for (let p = 0; p < N_PUFF; p++) {
           const d = puffData.dirs;
           const sp = d[p * 4 + 3];
-          pr[p * 3] = d[p * 4] * R * 2.2 * spread * sp + Math.sin(age * 2 + p) * 0.08;
-          pr[p * 3 + 1] = d[p * 4 + 1] * R * 1.6 * spread * sp + age * 0.9 * sp;
-          pr[p * 3 + 2] = d[p * 4 + 2] * R * 2.2 * spread * sp;
+          pr[p * 3] = d[p * 4] * Rs * 2.2 * spread * sp + Math.sin(age * 2 + p) * 0.08;
+          pr[p * 3 + 1] = d[p * 4 + 1] * Rs * 1.6 * spread * sp + age * 0.9 * sp;
+          pr[p * 3 + 2] = d[p * 4 + 2] * Rs * 2.2 * spread * sp;
         }
         pa.needsUpdate = true;
         puffMat.opacity = Math.max(0, 1 - exitAge) * Math.min(1, age * 6);
@@ -218,16 +226,14 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
       <group ref={body}>
         <mesh
           ref={bell}
+          geometry={BELL_GEO}
           material={bellMat}
           onClick={(e) => (e.stopPropagation(), onSelect(id))}
           onPointerOver={() => (document.body.style.cursor = "pointer")}
           onPointerOut={() => (document.body.style.cursor = "")}
         >
-          <sphereGeometry args={[1, 36, 18, 0, Math.PI * 2, 0, Math.PI / 2]} />
         </mesh>
-        <mesh ref={core} material={coreMat}>
-          <sphereGeometry args={[1, 16, 12]} />
-        </mesh>
+        <mesh ref={core} geometry={CORE_GEO} material={coreMat} />
         <sprite ref={halo} material={haloMat} />
         <lineSegments ref={tent} geometry={tentGeo} material={tentMat} frustumCulled={false} />
       </group>
@@ -236,42 +242,12 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
   );
 }
 
-/** keeps a React list of live instances, refreshed only when membership changes (allocation-free check) */
-export function Jellies({ onSelect }: { onSelect: (id: string) => void }) {
-  const [list, setList] = useState<Instance[]>([]);
-  const prev = useRef<string[]>([]);
-  const seen = useRef(-1);
-  useFrame(() => {
-    tick();
-    lodTick();
-    const p = prev.current;
-    let same = p.length === world.instances.size && seen.current === lod.version;
-    if (same) {
-      let n = 0;
-      for (const id of world.instances.keys()) if (p[n++] !== id) {
-        same = false;
-        break;
-      }
-    }
-    if (!same) {
-      prev.current = [...world.instances.keys()];
-      seen.current = lod.version;
-      setList([...world.instances.values()].filter(isExpanded));
-    }
-  });
-  return (
-    <group>
-      {list.map((i) => (
-        <Jelly key={i.id} inst={i} onSelect={onSelect} />
-      ))}
-      <Tethers />
-    </group>
-  );
-}
+/** run-local v of a run's current below its top-level jellies (the jellies hover just above it) */
+export const CURRENT_V = 1.25;
 
-/** silk threads parent → child: a bright bud-line during birth, a faint thread while both live (makes fan-out read) */
-function Tethers() {
-  const MAX = 48;
+/** silk threads parent -> child: a bright bud-line during birth, a faint thread while both live (makes fan-out read) */
+export function Tethers() {
+  const MAX = 64;
   const SUB = 10;
   const geo = useMemo(() => {
     const g = new THREE.BufferGeometry();
@@ -287,14 +263,16 @@ function Tethers() {
     const C = geo.getAttribute("color") as THREE.BufferAttribute;
     const pa = P.array as Float32Array;
     const ca = C.array as Float32Array;
+    const fs = fit.scale;
     let k = 0;
-    for (const i of world.instances.values()) {
+    for (const ka of kit.agents.values()) {
       if (k >= MAX) break;
+      const i = ka.inst;
       if (!i.parent) continue;
-      const a = jellyPos.get(i.parent);
-      const b = jellyPos.get(i.id);
+      const a = agentLive(i.parent);
+      const b = ka.live;
       const par = world.instances.get(i.parent);
-      if (!a || !b || !par) continue;
+      if (!a || !par) continue;
       const birth = clamp01((now - i.bornAt) / BIRTH_MS);
       const alive = (i.exitAt ? Math.max(0, 1 - (now - i.exitAt) / 900) : 1) * (par.exitAt ? Math.max(0, 1 - (now - par.exitAt) / 900) : 1);
       if (alive <= 0) continue;
@@ -304,9 +282,9 @@ function Tethers() {
         for (let e = 0; e < 2; e++) {
           const q = (s + e) / SUB;
           const v = ((k * SUB + s) * 2 + e) * 3;
-          const sag = Math.sin(q * Math.PI) * (0.35 + 0.1 * Math.sin(t * 1.3 + k));
+          const sag = Math.sin(q * Math.PI) * (0.35 + 0.1 * Math.sin(t * 1.3 + k)) * fs;
           pa[v] = a.x + (b.x - a.x) * q;
-          pa[v + 1] = a.y - 0.25 + (b.y - a.y + 0.25) * q - sag;
+          pa[v + 1] = a.y - 0.25 * fs + (b.y - a.y + 0.25 * fs) * q - sag;
           pa[v + 2] = a.z + (b.z - a.z) * q;
           // a bead of light runs from parent to child while it buds
           const bead = birth < 1 ? Math.exp(-Math.pow((q - birth * 1.1) * 7, 2)) * 3 : 0;

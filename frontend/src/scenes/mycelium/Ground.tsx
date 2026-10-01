@@ -1,12 +1,14 @@
 /**
- * The forest floor: a dark mottled substrate, and a sprawling background mycelium - hundreds of branching
- * hyphae that radiate from the knowledge mat with slow nutrient pulses travelling outward. The pulses quicken
- * and brighten with how many agents are working.
+ * Background: the forest floor, a dark mottled substrate, and a sprawling ambient mycelium - hundreds of
+ * branching hyphae that radiate out from under the colonies with slow nutrient pulses travelling outward. The
+ * pulses quicken and brighten with how many agents are working. Grows with the kit's core so a crowded
+ * session never runs off the edge of the floor.
  */
 import { useFrame } from "@react-three/fiber";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { world } from "../shared/world";
+import { kit } from "../shared/kit";
 import { MAT_R, reduced } from "./fx";
 
 const GROUND_R = 36;
@@ -117,7 +119,10 @@ export function Ground() {
       }),
     [],
   );
+  const floor = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
+    // the floor (and its web) is sized to the content: never smaller than its natural size
+    floor.current?.scale.setScalar(Math.max(1, (kit.core.r + 12) / (GROUND_R * 0.62)));
     let working = 0;
     for (const i of world.instances.values()) if (!i.exitAt && i.status === "thinking") working++;
     const u = webMat.uniforms;
@@ -125,9 +130,9 @@ export function Ground() {
     u.uTime.value = reduced ? 0 : clock.elapsedTime;
   });
   return (
-    <>
+    <group ref={floor}>
       <mesh geometry={geo} material={ground} position={[0, -0.02, 0]} renderOrder={-10} />
       <lineSegments geometry={web} material={webMat} frustumCulled={false} />
-    </>
+    </group>
   );
 }

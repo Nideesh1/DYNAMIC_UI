@@ -11,8 +11,9 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, TYPE_LABEL, energy, lingerMs, presence, roleScale, world, type Comet, type Instance } from "../shared/world";
-import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
+import { TYPE_COLOR, energy, lingerMs, presence, world, type Comet } from "../shared/world";
+import { isExpanded, lod, showLabel } from "../shared/lod";
+import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
   CONE_GEO,
   SPHERE_GEO,
@@ -29,9 +30,6 @@ import {
   glowSpriteMaterial,
   isScout,
   reduced,
-  slotOf,
-  somaPos,
-  somaTarget,
   tubeMaterial,
 } from "./fx";
 
@@ -55,7 +53,9 @@ function spikeDirs(seed: number) {
 }
 const ringGeo = new THREE.TorusGeometry(1.25, 0.05, 8, 64);
 
-function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => void }) {
+/** Agent slot: one soma neuron at the kit's position (`agent.live` gets a slow drift on top). */
+export function Soma({ agent, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
   const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
   const spikesG = useRef<THREE.Group>(null);
@@ -63,6 +63,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   const arrow = useRef<THREE.Mesh>(null);
   const halo = useRef<THREE.Sprite>(null);
   const label = useRef<Label3DHandle>(null);
+  const labelG = useRef<THREE.Group>(null);
   const seed = useMemo(() => [...inst.id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 9973, 7) / 9973, [inst.id]);
   const spikes = useMemo(() => spikeDirs(seed), [seed]);
   const color = TYPE_C[inst.type];
@@ -78,16 +79,11 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     }),
     [color, inst.type],
   );
-  const s = useMemo(
-    () => ({ pos: new THREE.Vector3(), target: new THREE.Vector3(), live: new THREE.Vector3(), p0: new THREE.Vector3(), p1: new THREE.Vector3(), seedP: new THREE.Vector3(), init: false, p0set: false, labelK: 1, spik: 0, ringK: 0, parentK: 1, c: new THREE.Color() }),
-    [],
-  );
+  const s = useMemo(() => ({ p0: new THREE.Vector3(), p1: new THREE.Vector3(), seedP: new THREE.Vector3(), p0set: false, labelK: 1, spik: 0, ringK: 0, parentK: 1, c: new THREE.Color() }), []);
 
   useEffect(() => {
-    somaPos.set(inst.id, s.live);
     synCtrl.set(inst.id, s.p1);
     return () => {
-      if (somaPos.get(inst.id) === s.live) somaPos.delete(inst.id);
       if (synCtrl.get(inst.id) === s.p1) synCtrl.delete(inst.id);
     };
   }, [inst.id, s]);
@@ -95,21 +91,19 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   useFrame(({ clock }) => {
     const now = performance.now();
     const t = clock.elapsedTime;
-    somaTarget(inst, s.target);
-    if (!s.init) s.pos.copy(s.target), (s.init = true);
-    else s.pos.lerp(s.target, 0.04);
-    const drift = reduced ? 0 : 0.08;
-    s.live.set(s.pos.x + Math.sin(t * 0.35 + seed * 20) * drift, s.pos.y + Math.cos(t * 0.3 + seed * 13) * drift, s.pos.z);
+    // kit home + a slow drift (drawn position; synapses, beams and tethers read it via agentLive)
+    const drift = reduced ? 0 : 0.08 * fit.spread;
+    agent.live.set(agent.pos.x + Math.sin(t * 0.35 + seed * 20) * drift, agent.pos.y + Math.cos(t * 0.3 + seed * 13) * drift, agent.pos.z);
+    const live = agent.live;
 
     // parent anchor (synapse source)
     const parent = inst.parent ? world.instances.get(inst.parent) : undefined;
-    const pp = inst.parent ? somaPos.get(inst.parent) : undefined;
+    const pp = inst.parent ? agentLive(inst.parent) : undefined;
     if (pp) s.p0.copy(pp), (s.p0set = true);
-    else if (!s.p0set) s.p0.copy(s.live), (s.p0set = true);
-    if (isScout(inst.type)) {
-      const run = world.runs.get(inst.run);
-      s.p1.copy(s.p0).addScaledVector(slotOf(run ? run.slot : 0).dir, 1.7); // shared trunk → branching fan-out
-    } else bowControl(s.p0, s.live, 0.6, s.p1);
+    else if (!s.p0set) s.p0.copy(live), (s.p0set = true);
+    // subagents: shared trunk along the run's fan axis, then branch out; others bow gently
+    if (isScout(inst.type) || inst.subagent) s.p1.copy(s.p0).addScaledVector(agent.run.axis, 1.7 * fit.spread);
+    else bowControl(s.p0, live, 0.6, s.p1);
 
     // ---- lifecycle
     const tb = (now - inst.bornAt) / 1000;
@@ -132,11 +126,11 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
 
     // seed rides the growing synapse, then the soma swells in place
     if (root.current) {
-      if (grow < 1) root.current.position.copy(bezier(s.p0, s.p1, s.live, grow, s.seedP));
-      else root.current.position.copy(s.live);
+      if (grow < 1) root.current.position.copy(bezier(s.p0, s.p1, live, grow, s.seedP));
+      else root.current.position.copy(live);
     }
     const seedScale = grow < 1 ? 0.18 : 0;
-    const sc = Math.max(seedScale, 0.18 + 0.82 * swell) * (1 - wither * wither * 0.95) * roleScale(inst) * lodScale();
+    const sc = Math.max(seedScale, 0.18 + 0.82 * swell) * (1 - wither * wither * 0.95) * agent.scale;
     body.current?.scale.setScalar(Math.max(0.0001, sc * (0.55 + e * 0.06 + (thinking ? pulse * 0.05 : breath * 0.04))));
     spikesG.current?.scale.setScalar(Math.max(0.0001, s.spik * (0.85 + pulse * 0.15)));
 
@@ -158,6 +152,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       halo.current.scale.setScalar(Math.max(0.0001, sc * (thinking ? 2.3 + pulse * 0.3 : 1.6) + e * 0.35));
       m.halo.color.copy(color).multiplyScalar((thinking ? 0.22 : 0.09) * (1 - wither) + e * 0.06);
     }
+    labelG.current?.position.set(0, -0.78 * agent.scale - 0.25, 0);
     if (label.current) {
       const on = showLabel(inst.id);
       s.labelK += ((on ? 1 : 0) - s.labelK) * 0.12;
@@ -171,7 +166,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     const u = m.syn.uniforms;
     u.uP0.value.copy(s.p0);
     u.uP1.value.copy(s.p1);
-    u.uP2.value.copy(s.live);
+    u.uP2.value.copy(live);
     const retract = te >= 0 ? easeInOut(te / (fadeS * 0.64)) : 0;
     u.uGrow.value = inst.parent ? grow * (1 - retract) : 0;
     u.uSpark.value = 0;
@@ -186,12 +181,12 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       const vis = inst.parent && grow >= 1 && s.parentK > 0.05 && u.uGrow.value > 0.9;
       arrow.current.visible = !!vis;
       if (vis) {
-        bezier(s.p0, s.p1, s.live, 0.8, ARROW_A);
-        bezier(s.p0, s.p1, s.live, 0.86, ARROW_B);
+        bezier(s.p0, s.p1, live, 0.8, ARROW_A);
+        bezier(s.p0, s.p1, live, 0.86, ARROW_B);
         arrow.current.position.copy(ARROW_A);
         ARROW_DIR.subVectors(ARROW_B, ARROW_A).normalize();
         arrow.current.quaternion.setFromUnitVectors(UP, ARROW_DIR);
-        const k = isScout(inst.type) ? 0.75 : 1;
+        const k = (isScout(inst.type) ? 0.75 : 1) * Math.min(1.3, fit.scale);
         arrow.current.scale.set(0.16 * k, 0.42 * k, 0.16 * k);
         m.arrow.color.copy(color).multiplyScalar(1.6 * s.parentK);
       }
@@ -219,15 +214,17 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
         </group>
         <mesh ref={ring} geometry={ringGeo} material={m.ring} visible={false} />
         <sprite ref={halo} material={m.halo} />
-        <Label3D
-          ref={label}
-          position={[0, -1.05 * roleScale(inst), 0]}
-          text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
-          color={TYPE_COLOR[inst.type]}
-          size={inst.subagent ? 0.22 : 0.3}
-          opacity={0}
-          pxRange={inst.subagent ? [8, 11.5] : [9, 13.5]}
-        />
+        <group ref={labelG}>
+          <Label3D
+            ref={label}
+            text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
+            color={TYPE_COLOR[inst.type]}
+            size={inst.subagent ? 0.22 : 0.3}
+            opacity={0}
+            fit
+            pxRange={inst.subagent ? [8, 12] : [9, 14]}
+          />
+        </group>
       </group>
     </>
   );
@@ -238,29 +235,6 @@ const ARROW_B = new THREE.Vector3();
 const ARROW_DIR = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 
-export function Somas({ onSelect }: { onSelect: (id: string) => void }) {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.instances;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      setList([...m.values()].filter(isExpanded));
-    }
-  });
-  return (
-    <>
-      {list.map((i) => (
-        <Soma key={i.id} inst={i} onSelect={onSelect} />
-      ))}
-    </>
-  );
-}
-
 // ------------------------------------------------------------------ messages: one calm pulse along the synapse
 
 function Pulse({ comet }: { comet: Comet }) {
@@ -270,8 +244,8 @@ function Pulse({ comet }: { comet: Comet }) {
   const mat = useMemo(() => glowSpriteMaterial(new THREE.Color(color).multiplyScalar(1.8).addScalar(0.3)), [color]);
   const s = useMemo(() => ({ a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), h: new THREE.Vector3() }), []);
   useFrame(() => {
-    const pa = somaPos.get(comet.from);
-    const pb = somaPos.get(comet.to);
+    const pa = agentLive(comet.from);
+    const pb = agentLive(comet.to);
     if (!pa || !pb || !head.current) {
       if (head.current) head.current.visible = false;
       return;

@@ -4,8 +4,8 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { energy, lingerMs, presence, TYPE_COLOR, world } from "../shared/world";
-import { lodScale } from "../shared/lod";
-import { displaySlot, hdr, homeROf, isScout, laneOffset, lineAngle, linePoint, R, reduced, scoutCount, scoutLane, spurShape, trainPos, TRAIN_Y } from "./layout";
+import { fit, type AgentSlotProps } from "../shared/kit";
+import { hdr, isScout, reduced, spurOf, trackPoint, trainPos, trunkSpan, trunkV, TRAIN_Y, type Spur } from "./layout";
 
 // shared geometries
 const G = {
@@ -24,13 +24,14 @@ const WIN_X = [-0.48, -0.16, 0.16, 0.48];
 
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
+const SPAN = { u0: 0, u1: 0 };
 
-export function Train({ id, selected, onSelect }: { id: string; selected: boolean; onSelect: (id: string) => void }) {
-  const inst0 = world.instances.get(id)!;
+/** Agent slot: a train on its run's line (top-level agents on the trunk, subagents on their spur). */
+export function Train({ agent, selected, onSelect }: AgentSlotProps) {
+  const id = agent.id;
+  const inst0 = agent.inst;
   const color = TYPE_COLOR[inst0.type];
-  const scout = isScout(inst0.type);
-  const lane = useMemo(() => (scout ? scoutLane(inst0) : 0), [inst0, scout]);
-  const home = useMemo(() => homeROf(inst0), [inst0]);
+  const scout = agent.depth > 0 || isScout(inst0.type);
   const group = useRef<THREE.Group>(null);
   const car = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Mesh>(null);
@@ -56,35 +57,34 @@ export function Train({ id, selected, onSelect }: { id: string; selected: boolea
   const winColor = useMemo(() => new THREE.Color(color), [color]);
   const white = useMemo(() => new THREE.Color("#ffffff"), []);
 
-  const s = useRef({ r: -1, phase: Math.random() * 6, dir: 1, exitR: 0, exitYaw: 0, exitPos: new THREE.Vector3(), yaw: 0, slot: 0 });
+  const s = useRef({ r: -Infinity, phase: Math.random() * 6, dir: 1, exitR: 0, exitPos: new THREE.Vector3(), spur: { u0: 0, u1: 0, div: 1, base: 0, off: 0 } as Spur });
 
   useEffect(() => {
-    const entry = { pos: new THREE.Vector3(), r: 0 };
+    const entry = { pos: new THREE.Vector3(), u: 0 };
     trainPos.set(id, entry);
     return () => void trainPos.delete(id);
   }, [id]);
 
   useFrame(({ clock }, dtRaw) => {
-    const inst = world.instances.get(id);
+    const inst = agent.inst;
     const g = group.current;
-    if (!inst || !g) return;
-    const run = world.runs.get(inst.run);
+    if (!g) return;
+    const kr = agent.run;
     const st = s.current;
-    if (run) st.slot = run.slot;
-    const angle = lineAngle(inst.run, displaySlot(inst.run, st.slot));
+    const sp = scout ? spurOf(agent, st.spur) : null;
+    const v0 = trunkV(agent);
+    const home = agent.eu;
     const dt = Math.min(0.05, dtRaw);
     const now = performance.now();
     const p = presence(inst, now);
     const e = energy(inst, now);
-    const n = scoutCount.get(inst.run) ?? lane + 1;
-    const off = scout ? laneOffset(lane, n) : 0;
     let pending = false;
     for (const pd of world.mcpPending.values()) if (pd.instance === id) pending = true;
 
-    // birth: start where the parent train is (or emerge from the hub for root instances)
-    if (st.r < 0) {
+    // birth: start where the parent train is (or roll in from the start of the line for root instances)
+    if (st.r === -Infinity) {
       const parent = inst.parent ? trainPos.get(inst.parent) : null;
-      st.r = parent ? parent.r : R.STEM;
+      st.r = parent ? parent.u : trunkSpan(kr, SPAN).u0;
     }
     const prevR = st.r;
     let target = home;
@@ -97,7 +97,9 @@ export function Train({ id, selected, onSelect }: { id: string; selected: boolea
       k = 1.6;
     } else if (inst.status === "thinking") {
       st.phase += dt * (reduced ? 0.25 : 0.8 + e * 2.4) * (pending ? 0.25 : 1);
-      const amp = scout ? 1.05 : inst.type === "researcher" ? 1.5 : 1.6;
+      // shuttle around home (scouts stay on the parallel part of their spur)
+      const room = sp ? Math.max(0.2, (sp.u1 - sp.u0) / 2 - sp.div) : 1.6 * fit.spread;
+      const amp = Math.min(room, scout ? 1.05 : inst.type === "researcher" ? 1.5 : 1.6) * Math.max(0.8, fit.spread);
       target = home + amp * Math.sin(st.phase);
       k = 3;
     }
@@ -105,17 +107,16 @@ export function Train({ id, selected, onSelect }: { id: string; selected: boolea
     const v = st.r - prevR;
     if (Math.abs(v) > 0.0015) st.dir = v > 0 ? 1 : -1;
 
-    // place on the track (scouts on their spur)
-    linePoint(angle, st.r, off * spurShape(st.r), TRAIN_Y, _a);
-    linePoint(angle, st.r + 0.05, off * spurShape(st.r + 0.05), TRAIN_Y, _b);
+    // place on the track (scouts on their spur); the drawn position is the kit's `live`
+    trackPoint(kr, st.r, sp, v0, TRAIN_Y, _a);
+    trackPoint(kr, st.r + 0.05, sp, v0, TRAIN_Y, _b);
     g.position.copy(_a);
-    const yaw = Math.atan2(-(_b.z - _a.z), _b.x - _a.x);
-    st.yaw = yaw;
-    g.rotation.y = yaw;
+    g.rotation.y = Math.atan2(-(_b.z - _a.z), _b.x - _a.x);
+    agent.live.copy(_a);
     const entry = trainPos.get(id);
     if (entry) {
       entry.pos.copy(_a);
-      entry.r = st.r;
+      entry.u = st.r;
     }
 
     const t = clock.elapsedTime;
@@ -125,7 +126,7 @@ export function Train({ id, selected, onSelect }: { id: string; selected: boolea
 
     // car: grow in, then stretch & thin into the portal
     if (car.current) {
-      const sc = (scout ? 1.1 : 1.35) * lodScale();
+      const sc = (scout ? 1.1 : 1.35) * fit.scale;
       if (inst.exitAt) car.current.scale.set(sc * (1 + exitAge * 1.8), sc * Math.max(0.05, 1 - exitAge), sc * Math.max(0.05, 1 - exitAge));
       else car.current.scale.setScalar(sc * Math.max(0.001, p) * (1 + e * 0.06) * (pending ? 1 + breathe * 0.06 : 1));
       car.current.scale.x *= st.dir;
@@ -163,7 +164,7 @@ export function Train({ id, selected, onSelect }: { id: string; selected: boolea
       const vis = !!inst.exitAt;
       portal.current.visible = vis;
       if (vis) {
-        if (!st.exitPos.lengthSq()) linePoint(angle, st.exitR + 2.7, off * spurShape(st.exitR + 2.7), TRAIN_Y + 0.15, st.exitPos);
+        if (!st.exitPos.lengthSq()) trackPoint(kr, st.exitR + 2.7, sp, v0, TRAIN_Y + 0.15, st.exitPos);
         portal.current.position.copy(st.exitPos);
         portal.current.rotation.set(0, Math.atan2(_b.x - _a.x, _b.z - _a.z), 0);
         const open = Math.sin(Math.PI * Math.min(1, exitAge * 1.15));

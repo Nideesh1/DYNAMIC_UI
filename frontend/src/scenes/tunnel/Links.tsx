@@ -1,11 +1,12 @@
-/** Messages (arcing bolts ship → ship), MCP stations outside the shell, MCP packets punching through the wall, and live tethers for pending MCP calls. */
+/** Messages (arcing bolts ship -> ship), MCP stations just outside the tunnel wall, MCP packets punching through the
+ * wall, and live tethers for pending MCP calls. Positions come from the kit (agentLive / serverPos). */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D } from "../shared/Label3D";
-import { waitSeconds, world } from "../shared/world";
-import { MOTION, TUBE_R, glowTexture, ships, stationPos, stations } from "./lanes";
-import { useLiveKeys } from "./Runs";
+import { TYPE_COLOR, waitSeconds, world } from "../shared/world";
+import { agentLive, serverPos, type McpServerSlotProps } from "../shared/kit";
+import { MOTION, glowTexture, ships, tube } from "./lanes";
 
 const TRAIL = 12;
 const MAXB = 40;
@@ -17,13 +18,20 @@ const RED = new THREE.Color("#ef4444");
 const bez = (a: number, c: number, b: number, t: number) => (1 - t) * (1 - t) * a + 2 * (1 - t) * t * c + t * t * b;
 const easeIO = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 
-/** t along segment A→B (xy only) where it crosses the tunnel wall, or -1 */
-function wallCross(ax: number, ay: number, bx: number, by: number) {
+const TYPE_C = Object.fromEntries(Object.entries(TYPE_COLOR).map(([k, v]) => [k, new THREE.Color(v)])) as Record<keyof typeof TYPE_COLOR, THREE.Color>;
+
+/** t along segment A->B (xy only) where it crosses the (elliptic) tunnel wall, or -1 */
+function wallCross(ax0: number, ay0: number, bx0: number, by0: number) {
+  // in units of the wall's half axes the wall is the unit circle
+  const ax = ax0 / tube.ax;
+  const ay = ay0 / tube.ay;
+  const bx = bx0 / tube.ax;
+  const by = by0 / tube.ay;
   const dx = bx - ax;
   const dy = by - ay;
   const A = dx * dx + dy * dy;
   const B = 2 * (ax * dx + ay * dy);
-  const C = ax * ax + ay * ay - TUBE_R * TUBE_R;
+  const C = ax * ax + ay * ay - 1;
   const disc = B * B - 4 * A * C;
   if (A < 1e-6 || disc < 0) return -1;
   const s = Math.sqrt(disc);
@@ -71,18 +79,18 @@ export function Bolts() {
     // agent → agent messages: arc across the tunnel through the axis
     for (const cm of world.comets) {
       if (bolts >= MAXB) break;
-      const f = ships.get(cm.from);
-      const to = ships.get(cm.to);
+      const f = agentLive(cm.from);
+      const to = agentLive(cm.to);
       if (!f || !to) continue;
       const t = (now - cm.start) / cm.dur;
       if (t > 1.05) continue;
-      a.copy(f.pos);
-      b.copy(to.pos);
+      a.copy(f);
+      b.copy(to);
+      // arc down into the tunnel and back
       c.copy(a).add(b).multiplyScalar(0.5);
-      c.x *= 0.12;
-      c.y *= 0.12;
-      c.z -= 3;
-      base.copy(f.color);
+      c.z -= 3 + a.distanceTo(b) * 0.25;
+      const fi = world.instances.get(cm.from);
+      base.copy(fi ? TYPE_C[fi.type] : WHITE);
       put(t, 0.2, 1);
       bolts++;
     }
@@ -90,16 +98,15 @@ export function Bolts() {
     // MCP packets: punch through the wall out to the station ("call") and back ("result")
     for (const pk of world.mcpCalls) {
       if (bolts >= MAXB) break;
-      const s = ships.get(pk.instance);
-      const st = stations.get(pk.server);
+      const s = agentLive(pk.instance);
+      const st = serverPos(pk.server);
       if (!s || !st) continue;
       const t = (now - pk.start) / pk.dur;
       if (t > 1.05) continue;
-      if (pk.phase === "call") (a.copy(s.pos), b.copy(st));
-      else (a.copy(st), b.copy(s.pos));
+      if (pk.phase === "call") (a.copy(s), b.copy(st));
+      else (a.copy(st), b.copy(s));
       c.copy(a).add(b).multiplyScalar(0.5);
-      c.x *= 1.08;
-      c.y *= 1.08;
+      c.z -= 2;
       let sc = srvCol.get(pk.server);
       if (!sc) srvCol.set(pk.server, (sc = new THREE.Color(world.mcpServers.get(pk.server)?.color ?? "#94a3b8")));
       base.copy(sc);
@@ -184,9 +191,9 @@ export function Tethers() {
 
     for (const p of world.mcpPending.values()) {
       if (nb >= MAXT) break;
-      const s = ships.get(p.instance);
-      const st = stations.get(p.server);
-      if (!s || !st || s.presence < 0.02) continue;
+      const s = agentLive(p.instance);
+      const st = serverPos(p.server);
+      if (!s || !st || (ships.get(p.instance)?.presence ?? 0) < 0.02) continue;
       const w = waitSeconds(p, now);
       const intro = Math.min(1, w / 0.35);
       col.copy(colorOf(p.server));
@@ -194,26 +201,26 @@ export function Tethers() {
       if (w > 1.6) col.lerp(RED, Math.min(1, (w - 1.6) / 0.8));
       const glow = (0.9 + Math.min(2.2, w * 0.7)) * intro * (0.85 + 0.15 * Math.sin(t * 9));
       col.multiplyScalar(glow);
-      beam(s.pos, st, 0.6 + Math.min(1.4, w * 0.4));
+      beam(s, st, 0.6 + Math.min(1.4, w * 0.4));
       col.multiplyScalar(1.8);
       for (let k = 0; k < BEADS && nd < MAXT * BEADS; k++) {
         const ph = (t * (0.7 + Math.min(1.2, w * 0.35)) + k / BEADS) % 1;
         if (ph > intro) continue;
-        bead(s.pos, st, ph, 0.09 + Math.min(0.08, w * 0.03));
+        bead(s, st, ph, 0.09 + Math.min(0.08, w * 0.03));
       }
     }
     // resolved: a bright flash snaps back along the tether, then it dissolves
     for (const r of world.mcpResolved) {
       if (nb >= MAXT) break;
-      const s = ships.get(r.instance);
-      const st = stations.get(r.server);
+      const s = agentLive(r.instance);
+      const st = serverPos(r.server);
       if (!s || !st) continue;
       const k = Math.min(1, (now - r.resolvedAt) / 700);
       col.copy(colorOf(r.server)).lerp(WHITE, 0.6).multiplyScalar(2.6 * (1 - k));
-      beam(s.pos, st, 1.6 * (1 - k * 0.7));
+      beam(s, st, 1.6 * (1 - k * 0.7));
       col.copy(WHITE).multiplyScalar(6);
       const e = 1 - Math.pow(1 - k, 2);
-      for (let j = 0; j < 5 && nd < MAXT * BEADS; j++) bead(st, s.pos, Math.max(0, e - j * 0.035), 0.26 * (1 - j / 5));
+      for (let j = 0; j < 5 && nd < MAXT * BEADS; j++) bead(st, s, Math.max(0, e - j * 0.035), 0.26 * (1 - j / 5));
     }
     bm.count = nb;
     bd.count = nd;
@@ -237,10 +244,12 @@ export function Tethers() {
   );
 }
 
-function Station({ name }: { name: string }) {
-  const srv = world.mcpServers.get(name);
+/** McpServer slot: a space station floating just outside the tunnel wall at the kit's server slot. */
+export function Station({ mcp }: McpServerSlotProps) {
+  const name = mcp.name;
+  const srv = mcp.srv;
   const color = useMemo(() => new THREE.Color(srv?.color ?? "#94a3b8"), [srv?.color]);
-  const pos = useMemo(() => stationPos(srv?.slot ?? 0, new THREE.Vector3()), [srv?.slot]);
+  const root = useRef<THREE.Group>(null);
   const glow = useMemo(() => glowTexture(), []);
   const ring1 = useRef<THREE.Mesh>(null);
   const ring2 = useRef<THREE.Mesh>(null);
@@ -248,12 +257,9 @@ function Station({ name }: { name: string }) {
   const halo = useRef<THREE.Mesh>(null);
   const beacon = useRef<THREE.Mesh>(null);
   const body = useRef<THREE.Group>(null);
-  useEffect(() => {
-    stations.set(name, pos);
-    return () => void stations.delete(name);
-  }, [name, pos]);
-
   useFrame(({ clock }, dt) => {
+    // the kit places the station (it eases when the periphery re-lays out)
+    root.current?.position.copy(mcp.pos);
     const s = world.mcpServers.get(name);
     if (!s) return;
     const now = performance.now();
@@ -275,7 +281,7 @@ function Station({ name }: { name: string }) {
   });
 
   return (
-    <group position={pos}>
+    <group ref={root}>
       <group ref={body}>
         <mesh ref={core}>
           <octahedronGeometry args={[0.55, 0]} />
@@ -311,17 +317,6 @@ function Station({ name }: { name: string }) {
       <group position={[0, -1.55, 0]}>
         <Label3D text={`mcp · ${name}`} color={srv?.color ?? "#94a3b8"} size={0.36} pxRange={[9, 13]} />
       </group>
-    </group>
-  );
-}
-
-export function Stations() {
-  const names = useLiveKeys(() => world.mcpServers);
-  return (
-    <group>
-      {names.map((n) => (
-        <Station key={n} name={n} />
-      ))}
     </group>
   );
 }

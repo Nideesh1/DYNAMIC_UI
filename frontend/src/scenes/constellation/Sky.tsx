@@ -1,6 +1,6 @@
 /** The night sky: deep indigo dome with a faint Milky Way band, and a twinkling field of background stars (one Points draw). */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { reduced } from "./fx";
 
@@ -95,16 +95,19 @@ export function Sky() {
     }),
     [],
   );
+  // the sky is infinitely far: it travels with the camera (the kit dollies in and out with the agent count)
+  const sky = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
+    sky.current?.position.copy(camera.position);
     mats.stars.uniforms.uTime.value = reduced ? 0 : clock.elapsedTime;
     mats.stars.uniforms.uScale.value = (size.height * gl.getPixelRatio()) / (2 * Math.tan(((camera as THREE.PerspectiveCamera).fov * Math.PI) / 360)) * 0.22;
   });
   return (
-    <>
+    <group ref={sky}>
       <mesh material={mats.dome} renderOrder={-10} frustumCulled={false}>
         <sphereGeometry args={[400, 48, 32]} />
       </mesh>
       <points geometry={data} material={mats.stars} frustumCulled={false} renderOrder={-9} />
-    </>
+    </group>
   );
 }

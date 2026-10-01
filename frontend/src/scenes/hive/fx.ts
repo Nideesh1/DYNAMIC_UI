@@ -1,8 +1,6 @@
-/** Hive scene: palette, shared geometries/materials, easing, and the spatial layout (comb, bees, flowers). */
+/** Hive scene: palette, shared geometries/materials, easing, comb geometry constants (placement is the kit's). */
 import * as THREE from "three";
-import { alt, roleIndex, spreadIndex } from "../shared/spread";
-import { TYPE_COLOR, hash01, world, type AgentType, type Instance } from "../shared/world";
-import { laneOfRun, laneRank, lod } from "../shared/lod";
+import { TYPE_COLOR, type AgentType } from "../shared/world";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -200,112 +198,13 @@ export class ArrowPool {
   }
 }
 
-// ------------------------------------------------------------------ comb layout (stage space; comb face ≈ z 0, bowl curving away)
+// ------------------------------------------------------------------ comb geometry (comb-local; face ~ z 0, bowl curving away)
 export const CELL_R = 0.64;
 export const COMB_A = 17.8;
 export const COMB_B = 11.4;
-/** Comb surface depth at (x, y): a shallow bowl so the comb wraps around the bees. */
-export const combZ = (x: number, y: number) => -0.0105 * x * x - 0.016 * y * y;
 
-// ------------------------------------------------------------------ run + bee layout
-const RUN_SPOTS: [number, number][] = [
-  [-8.5, 3.6],
-  [8, -4.4],
-  [8, 4.2],
-  [-8.5, -4.6],
-  [-0.5, 0],
-  [-13.5, 0],
-  [13, 0],
-];
-const BEE_Z = 4.2;
-/** Centre of a run's swarm (varies per run id; stable over its lifetime). */
-export function runCenter(runId: string, out: THREE.Vector3) {
-  if (lod.grouped) {
-    // grouped: expanded runs sit on their lane's spot; extra runs of the same lane fan out above/below it
-    const s = RUN_SPOTS[laneOfRun(runId)];
-    const k = laneRank(runId);
-    return out.set(s[0] + (k ? (s[0] < 0 ? -1.5 : 1.5) : 0), s[1] + alt(k) * 4.2, BEE_Z + (hash01(runId, 3) - 0.5) * 0.8);
-  }
-  const run = world.runs.get(runId);
-  const slot = run ? run.slot : Math.floor(hash01(runId, 9) * RUN_SPOTS.length);
-  const s = RUN_SPOTS[slot % RUN_SPOTS.length];
-  return out.set(s[0] + (hash01(runId, 1) - 0.5) * 2.4, s[1] + (hash01(runId, 2) - 0.5) * 1.6, BEE_Z + (hash01(runId, 3) - 0.5) * 1.2);
-}
-/** Lane spot (stage space) for LOD clusters. */
-export function laneSpot(lane: number, out: THREE.Vector3) {
-  const s = RUN_SPOTS[lane % RUN_SPOTS.length];
-  return out.set(s[0], s[1], BEE_Z - 0.6);
-}
-
-const ROLE_X: Record<AgentType, number> = { planner: -4.2, researcher: 0, writer: 4.2, graph_scout: 0, records_scout: 0, data_scout: 0 };
-const _c = new THREE.Vector3();
-const _p = new THREE.Vector3();
-
-const workerK = new Map<string, number>();
-/** Forget per-bee layout caches once a bee is gone. */
-export function forgetBee(id: string) {
-  workerK.delete(id);
-}
-
-/** Hover target for a top-level (queen) bee or a worker bee fanned out around its parent. */
-export function beeTarget(inst: Instance, out: THREE.Vector3): THREE.Vector3 {
-  runCenter(inst.run, _c);
-  const parent = inst.parent ? world.instances.get(inst.parent) ?? world.archive.get(inst.parent) : undefined;
-  if (!inst.subagent || !parent) {
-    // queens: role lanes inside the run's swarm; same-role queens stack vertically apart
-    const k = roleIndex(inst);
-    out.set(_c.x + ROLE_X[inst.type] + (hash01(inst.id, 4) - 0.5) * 0.8, _c.y - ROLE_X[inst.type] * 0.25 + alt(k) * 2.9 + (hash01(inst.id, 5) - 0.5) * 0.6, _c.z + (hash01(inst.id, 6) - 0.5) * 0.8);
-    return out;
-  }
-  // workers: fan out on a ring around their parent, pointing away from the hive centre (per-run tilt)
-  const pp = beeHome.get(parent.id) ?? beeTarget(parent, _p);
-  let k = workerK.get(inst.id);
-  if (k === undefined) workerK.set(inst.id, (k = spreadIndex(inst, `w:${parent.id}`)));
-  const base = Math.atan2(pp.y + 0.001, pp.x) + (hash01(inst.run, 7) - 0.5) * 0.9;
-  const th = base + alt(k) * 0.72;
-  const r = 3.3 + (hash01(inst.id, 8) - 0.5) * 0.8 + Math.floor(k / 6) * 1.5;
-  out.set(pp.x + Math.cos(th) * r, pp.y + Math.sin(th) * r * 0.8, pp.z + 1.4 + (hash01(inst.id, 10) - 0.5) * 1.2);
-  return out;
-}
-
-/** Live bee positions (stage space), written every frame by each Bee. */
-export const beePos = new Map<string, THREE.Vector3>();
-/** Settled home (hover target) per bee, so children can fan out around it. */
-export const beeHome = new Map<string, THREE.Vector3>();
 /** Flight-path control point per child bee (so messages ride the same arc). */
 export const flightCtrl = new Map<string, THREE.Vector3>();
-
-// ------------------------------------------------------------------ MCP flowers
-const FLOWER_SPOTS: [number, number, number][] = [
-  [-20.2, -2.2, 2.5],
-  [20.2, -1.6, 2.5],
-  [-20.6, 6.0, 1.5],
-  [21.2, -8.4, 2.5],
-  [15.5, -10, 4],
-  [-21, -8.5, 3],
-  [-6, -13.6, 4],
-  [21.5, 6.5, 1],
-];
-export function flowerPos(slot: number, out: THREE.Vector3) {
-  const s = FLOWER_SPOTS[slot % FLOWER_SPOTS.length];
-  const ring = Math.floor(slot / FLOWER_SPOTS.length);
-  return out.set(s[0] * (1 + ring * 0.12), s[1] * (1 + ring * 0.1), s[2] - ring * 2);
-}
-export const PETAL_LEN = 1.55;
-/** Petal angle for backend k of n (petals open away from the comb centre). */
-export function petalAngle(slot: number, k: number, n: number) {
-  const s = FLOWER_SPOTS[slot % FLOWER_SPOTS.length];
-  const out = Math.atan2(s[1] + 9, s[0] * 0.22); // fan opens outward and upward (stays on screen)
-  if (n <= 1) return out;
-  const span = Math.min(Math.PI * 1.25, (n - 1) * 1.05);
-  return out - span / 2 + (span * k) / (n - 1);
-}
-/** Petal tip (where the backend label sits) for backend k of n. */
-export function petalTip(slot: number, k: number, n: number, out: THREE.Vector3) {
-  flowerPos(slot, out);
-  const a = petalAngle(slot, k, n);
-  return out.set(out.x + Math.cos(a) * PETAL_LEN * 1.9, out.y + Math.sin(a) * PETAL_LEN * 1.9, out.z + 0.1);
-}
 
 /** c += src * k */
 export function addScaled(c: THREE.Color, src: THREE.Color, k: number) {

@@ -38,6 +38,7 @@ call_model, should_continue): only spans whose kind is LLM (or unknown) produce 
 from __future__ import annotations
 
 import json
+import os
 import logging
 import re
 from dataclasses import dataclass, field
@@ -51,7 +52,13 @@ RESOURCE_KINDS = {"db", "warehouse", "spark", "api", "storage", "queue"}
 WRITE_RE = re.compile(r"\b(CREATE|MERGE|SET|DELETE|INSERT|UPDATE|REMOVE|DROP)\b", re.I)
 TEXT_RE = re.compile(r'"(?:content|text)":\s*"((?:[^"\\]|\\.)+)"')
 log = logging.getLogger("agentglow")
-HATCHET_GRACE_MS = 5000  # Hatchet runs have idle gaps between steps; complete after this much quiet
+# Hatchet runs have idle gaps between steps (the next step sits in Hatchet's queue), so a quiet gap does NOT mean the
+# run is over. Complete quickly once the run has produced its final answer, otherwise only after a long quiet period.
+HATCHET_GRACE_MS = int(os.environ.get("AGENTGLOW_HATCHET_IDLE_MS", "60000"))
+HATCHET_FINAL_GRACE_MS = 3000
+
+
+MAX_SCOPED_RUNS = 20_000
 
 
 def is_lg_node(name: str) -> bool:
@@ -168,6 +175,19 @@ class Mapper:
         self.agents: dict[str, Agent] = {}
         self.seen_ended: dict[str, None] = {}  # FIFO set of ended span ids (dedupe live + OTLP)
         self.mcp_known: set[tuple] = set()
+        self.scopes: dict[str, str] = {}  # run_id -> scope (first `agentglow.scope` seen wins); insertion-ordered, bounded
+        self.newly_scoped: list[str] = []  # runs whose scope became known since the Hub last looked
+
+    def _note_scope(self, s: "Span") -> None:
+        if s.run in self.scopes:
+            return
+        v = s.attrs.get("agentglow.scope") or s.attrs.get("agentglow.run.scope")
+        if v is None or v == "":
+            return
+        self.scopes[s.run] = str(v)
+        self.newly_scoped.append(s.run)
+        while len(self.scopes) > MAX_SCOPED_RUNS:
+            self.scopes.pop(next(iter(self.scopes)))
 
     # ------------------------------------------------------------------ public
     def feed(self, kind: str, span: dict) -> list[dict]:
@@ -219,6 +239,7 @@ class Mapper:
         run_id = str(a.get("hatchet.workflow_run_id") or a.get("agentglow.run.id") or (parent.run if parent else d["trace_id"]))
         s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a, run_id)
         self.spans[s.id] = s
+        self._note_scope(s)
         if len(self.spans) > 200_000:  # memory guard for spans that never end
             for k in list(self.spans)[:50_000]:
                 self.spans.pop(k, None)
@@ -271,6 +292,7 @@ class Mapper:
             for k in list(self.seen_ended)[:20_000]:
                 del self.seen_ended[k]
         s.attrs.update(d.get("attributes") or {})
+        self._note_scope(s)
         s.end = d.get("end_time_ms") or s.start
         s.status = d.get("status") or "unset"
         a, ts, run = s.attrs, s.end, self.runs.get(s.run)
@@ -293,7 +315,12 @@ class Mapper:
             owner = self._owner(s, out)
             tin = int(a.get("gen_ai.usage.input_tokens") or a.get("llm.token_count.prompt") or a.get("gen_ai.usage.prompt_tokens") or 0)
             tout = int(a.get("gen_ai.usage.output_tokens") or a.get("llm.token_count.completion") or a.get("gen_ai.usage.completion_tokens") or 0)
-            out.append({"type": "llm", "run_id": s.run, "id": owner, "tokens_in": tin, "tokens_out": tout, "latency_ms": max(0, s.end - s.start), "ts": ts})
+            if a.get("agentglow.llm.pulse") is not False:  # False: tokens come from elsewhere (Claude Code traces)
+                ev = {"type": "llm", "run_id": s.run, "id": owner, "tokens_in": tin, "tokens_out": tout, "latency_ms": max(0, s.end - s.start), "ts": ts}
+                cached = int(a.get("gen_ai.usage.cache_read_input_tokens") or 0)
+                if cached:
+                    ev["tokens_cached"] = cached
+                out.append(ev)
             self._remember_tool_calls(owner, a)
             ag = self.agents.get(owner)
             text = self._llm_text(a)
@@ -339,7 +366,7 @@ class Mapper:
                 run.failed = True
             if run.open == 0:
                 if run.hatchet:
-                    run.done_at = ts + HATCHET_GRACE_MS
+                    run.done_at = ts + (HATCHET_FINAL_GRACE_MS if run.final else HATCHET_GRACE_MS)
                 else:
                     self._complete(run, ts, out)
 
@@ -406,7 +433,8 @@ class Mapper:
         s.agent, s.candidate = name, None
         parent, via_tool = self._ancestor_agent(s)
         run = self.runs.get(s.run)
-        s.subagent = bool(parent and via_tool)
+        hint = s.attrs.get("agentglow.subagent")  # manual API: an agent nested directly in an agent
+        s.subagent = bool(parent and (via_tool or hint is True or str(hint).lower() == "true"))
         text = ""
         if parent:
             pa = self.agents.get(parent)

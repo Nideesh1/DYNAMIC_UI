@@ -1,15 +1,17 @@
 /**
- * MCP servers are planets on the rim of the sky (banded, sun-lit, with a thin atmosphere); each backend behind a
- * server (Postgres, Snowflake, Spark…) is a moon on its own tilted orbit. A pending call = a thin tether from the agent
+ * MCP servers are planets on the outskirts of the sky (scene-kit McpServer/Backend slots, placed by the kit; banded,
+ * sun-lit, with a thin atmosphere); each backend behind a
+ * server (Postgres, Snowflake, Spark…) is a moon on a faint arc of its orbit. A pending call = a thin tether from the agent
  * star to the planet with dashes flowing out (server color → amber → red the longer it waits); the planet → moon leg
  * lights the specific backend, which glows and names the tool; the result is a bright spark flying back to the star.
  */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { hash01, waitSeconds, world, type McpCall, type McpResource, type McpServer } from "../shared/world";
-import { AMBER, ArrowPool, CurvePool, RED, SPHERE_GEO, SparkPool, WHITE, bezier, bow, clamp01, easeInOut, easeOut, glowTexture, moonPos, planetPos, reduced, spriteMat, starPos } from "./fx";
+import { hash01, waitSeconds, world, type McpCall } from "../shared/world";
+import { AMBER, ArrowPool, CurvePool, RED, SPHERE_GEO, SparkPool, WHITE, bezier, bow, clamp01, easeInOut, easeOut, glowTexture, reduced, spriteMat } from "./fx";
+import { agentLive, backendPos, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 
 const bodyVert = /* glsl */ `
 varying vec3 vN; varying vec3 vV; varying vec3 vObj;
@@ -47,42 +49,46 @@ function bodyMat(col: THREE.Color, atmo: THREE.Color, bands: number, seed: numbe
 }
 
 const MOON_GREY = new THREE.Color("#8792b5");
-const ORBIT_SEG = 96;
+const ARC_SEG = 32;
+/** half span of the visible orbit arc through each moon (radians) */
+const ARC_HALF = 0.42;
+const _d = new THREE.Vector3();
 
-function orbitFrame(srv: McpServer, res: McpResource, k: number) {
-  const tilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.15 + (hash01(res.name, 1) - 0.5) * 0.5, (hash01(res.name, 2) - 0.5) * 0.6, (hash01(srv.name, 3) - 0.5) * 0.5 + k * 0.25));
-  return { tilt, r: 2.3 + k * 0.85, phase: hash01(res.name, 4) * Math.PI * 2, speed: (0.09 / (1 + k * 0.5)) * (hash01(res.name, 5) < 0.5 ? 1 : -1) };
-}
-
-function Moon({ srv, res, k, center }: { srv: McpServer; res: McpResource; k: number; center: THREE.Vector3 }) {
-  const key = `${srv.name}|${res.name}`;
-  const f = useMemo(() => orbitFrame(srv, res, k), [srv, res, k]);
+/** Backend slot: a moon at the kit's backend position, on a faint arc of its orbit round the server planet. */
+export function Moon({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
   const srvCol = useMemo(() => new THREE.Color(srv.color), [srv.color]);
   const mat = useMemo(() => bodyMat(MOON_GREY, new THREE.Color(srv.color).lerp(WHITE, 0.3), 0, hash01(res.name, 6)), [srv.color, res.name]);
   const haloMat = useMemo(() => spriteMat(glowTexture(), "#000"), []);
   const orbitMat = useMemo(() => new THREE.LineBasicMaterial({ color: "#000", transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), []);
   const orbitGeo = useMemo(() => {
-    const p = new Float32Array((ORBIT_SEG + 1) * 3);
-    const v = new THREE.Vector3();
-    for (let i = 0; i <= ORBIT_SEG; i++) {
-      const a = (i / ORBIT_SEG) * Math.PI * 2;
-      v.set(Math.cos(a) * f.r, Math.sin(a) * f.r, 0).applyQuaternion(f.tilt);
-      p.set([v.x, v.y, v.z], i * 3);
-    }
-    return new THREE.BufferGeometry().setAttribute("position", new THREE.BufferAttribute(p, 3));
-  }, [f]);
-  const live = useMemo(() => new THREE.Vector3(), []);
+    const g = new THREE.BufferGeometry().setAttribute("position", new THREE.BufferAttribute(new Float32Array((ARC_SEG + 1) * 3), 3));
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e4);
+    return g;
+  }, []);
+  const orbit = useMemo(() => Object.assign(new THREE.Line(orbitGeo, orbitMat), { frustumCulled: false }), [orbitGeo, orbitMat]);
+  const spinDir = useMemo(() => (hash01(res.name, 5) < 0.5 ? 1 : -1), [res.name]);
   const g = useRef<THREE.Group>(null);
+  const body = useRef<THREE.Mesh>(null);
   const halo = useRef<THREE.Sprite>(null);
   const label = useRef<Label3DHandle>(null);
   const last = useRef("");
-  useMemo(() => moonPos.set(key, live), [key, live]);
 
   useFrame(({ clock }) => {
     const now = performance.now();
-    const a = f.phase + (reduced ? 0 : clock.elapsedTime * f.speed);
-    live.set(Math.cos(a) * f.r, Math.sin(a) * f.r, 0).applyQuaternion(f.tilt).add(center);
-    g.current?.position.copy(live);
+    g.current?.position.copy(backend.pos);
+    if (body.current && !reduced) body.current.rotation.y = clock.elapsedTime * 0.3 * spinDir;
+    // orbit arc: circle round the planet through the moon (both ease when the periphery re-lays out)
+    _d.subVectors(backend.pos, mcp.pos);
+    const r = Math.hypot(_d.x, _d.y);
+    const a0 = Math.atan2(_d.y, _d.x);
+    const P = orbitGeo.getAttribute("position") as THREE.BufferAttribute;
+    for (let i = 0; i <= ARC_SEG; i++) {
+      const a = a0 + (i / ARC_SEG - 0.5) * 2 * ARC_HALF;
+      P.setXYZ(i, mcp.pos.x + Math.cos(a) * r, mcp.pos.y + Math.sin(a) * r, backend.pos.z);
+    }
+    P.needsUpdate = true;
     const busy = res.inflight > 0;
     const act = Math.exp(-((now - res.activeAt) / 1000) * 1.4);
     const beat = busy ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 5) : 0;
@@ -91,7 +97,7 @@ function Moon({ srv, res, k, center }: { srv: McpServer; res: McpResource; k: nu
     mat.uniforms.uCol.value.copy(MOON_GREY).lerp(srvCol, busy ? 0.6 : act * 0.5);
     haloMat.color.copy(srvCol).lerp(WHITE, 0.3).multiplyScalar(busy ? 0.55 + beat * 0.25 : act * 0.35);
     halo.current?.scale.setScalar(busy ? 2.6 + beat * 0.4 : 1.6 + act);
-    orbitMat.color.copy(srvCol).lerp(WHITE, 0.3).multiplyScalar(0.12 + (busy ? 0.2 : act * 0.12));
+    orbitMat.color.copy(srvCol).lerp(WHITE, 0.3).multiplyScalar(0.16 + (busy ? 0.2 : act * 0.12));
     let txt = res.name;
     if (busy) {
       let tool = "";
@@ -107,40 +113,37 @@ function Moon({ srv, res, k, center }: { srv: McpServer; res: McpResource; k: nu
   const sz = res.kind === "warehouse" || res.kind === "spark" ? 0.36 : 0.3;
   return (
     <>
-      <lineLoop geometry={orbitGeo} material={orbitMat} position={center} />
+      <primitive object={orbit} />
       <group ref={g}>
         <sprite ref={halo} material={haloMat} />
-        <mesh geometry={SPHERE_GEO} material={mat} scale={sz} />
+        <mesh ref={body} geometry={SPHERE_GEO} material={mat} scale={sz} />
         <Label3D ref={label} position={[0, -0.62, 0]} text={res.name} color={srv.color} size={0.2} opacity={0.5} pxRange={[7.5, 11.5]} />
       </group>
     </>
   );
 }
 
-function Planet({ srv }: { srv: McpServer }) {
-  const center = useMemo(() => planetPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+/** McpServer slot: a banded, sun-lit planet (some ringed) at the kit's server position. */
+export function Planet({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
   const col = useMemo(() => new THREE.Color(srv.color), [srv.color]);
   const seed = useMemo(() => hash01(srv.name, 7), [srv.name]);
-  const R = 1.0 + seed * 0.4;
+  const R = 0.72 + seed * 0.28;
   const ringed = hash01(srv.name, 8) > 0.45;
   const m = useMemo(
     () => ({
-      body: bodyMat(col.clone().lerp(new THREE.Color('#8090c0'), 0.35).multiplyScalar(0.45), col.clone().lerp(WHITE, 0.25).multiplyScalar(0.7), 1, seed),
+      body: bodyMat(col.clone().lerp(new THREE.Color("#8090c0"), 0.35).multiplyScalar(0.45), col.clone().lerp(WHITE, 0.25).multiplyScalar(0.7), 1, seed),
       halo: spriteMat(glowTexture(), "#000"),
       ring: new THREE.MeshBasicMaterial({ color: col.clone().lerp(WHITE, 0.4).multiplyScalar(0.22), side: THREE.DoubleSide, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
     }),
     [col, seed],
   );
-  const ringGeo = useMemo(() => new THREE.RingGeometry(R * 1.45, R * 2.05, 96, 1), [R]);
+  const ringGeo = useMemo(() => new THREE.RingGeometry(R * 1.4, R * 1.9, 96, 1), [R]);
+  const g = useRef<THREE.Group>(null);
   const spin = useRef<THREE.Mesh>(null);
   const halo = useRef<THREE.Sprite>(null);
-  const [res, setRes] = useState<McpResource[]>([]);
-  const nRes = useRef(0);
   useFrame(({ clock }) => {
-    if (srv.resources.size !== nRes.current) {
-      nRes.current = srv.resources.size;
-      setRes([...srv.resources.values()]);
-    }
+    g.current?.position.copy(mcp.pos);
     const now = performance.now();
     const busy = srv.inflight > 0;
     const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.4);
@@ -150,26 +153,22 @@ function Planet({ srv }: { srv: McpServer }) {
     if (spin.current && !reduced) spin.current.rotation.y = clock.elapsedTime * 0.05;
   });
   return (
-    <>
-      <group position={center}>
-        <sprite ref={halo} material={m.halo} />
-        <group rotation={[0.25, 0, -0.32 + seed * 0.3]}>
-          <mesh ref={spin} geometry={SPHERE_GEO} material={m.body} scale={R} />
-          {ringed && <mesh geometry={ringGeo} material={m.ring} rotation={[Math.PI / 2 - 0.25, 0, 0]} />}
-        </group>
-        <Label3D position={[0, R + 0.75, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.28} pxRange={[9, 13]} />
+    <group ref={g}>
+      <sprite ref={halo} material={m.halo} />
+      <group rotation={[0.25, 0, -0.32 + seed * 0.3]}>
+        <mesh ref={spin} geometry={SPHERE_GEO} material={m.body} scale={R} />
+        {ringed && <mesh geometry={ringGeo} material={m.ring} rotation={[Math.PI / 2 - 0.25, 0, 0]} />}
       </group>
-      {res.map((r, k) => (
-        <Moon key={r.name} srv={srv} res={r} k={k} center={center} />
-      ))}
-    </>
+      <Label3D position={[0, R + 0.75, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.28} pxRange={[9, 13]} />
+    </group>
   );
 }
 
 // ------------------------------------------------------------------ tethers + packets (pooled)
 const MAX_T = 48;
 
-function Tethers() {
+/** Pending MCP calls: tether star -> planet (-> moon); results fly back as a spark. Mounted as a KitScene child. */
+export function Tethers() {
   const { size, gl, camera } = useThree();
   const pool = useMemo(() => new CurvePool(MAX_T, 36), []);
   const arrows = useMemo(() => new ArrowPool(MAX_T), []);
@@ -187,10 +186,11 @@ function Tethers() {
 
     // agent → planet (pending): dashes flowing out to the planet, arrow at the planet
     for (const p of world.mcpPending.values()) {
-      const sp = starPos.get(p.instance);
+      const sp = agentLive(p.instance);
+      const sv = serverPos(p.server);
       const srv = world.mcpServers.get(p.server);
-      if (!sp || !srv) continue;
-      planetPos(srv.slot, b);
+      if (!sp || !srv || !sv) continue;
+      b.copy(sv);
       a.copy(sp);
       bow(a, b, 1.5, 1.2, c);
       const w = waitSeconds(p, now);
@@ -202,7 +202,7 @@ function Tethers() {
       if (w > 0.45) arrows.add(a, c, b, 0.9, 1, 0.42, col, 0.6 + base);
       // planet → moon leg to the specific backend
       if (p.resource) {
-        const mp = moonPos.get(`${p.server}|${p.resource}`);
+        const mp = backendPos(p.server, p.resource);
         if (mp) {
           bow(b, mp, 0.3, 0.2, c);
           pool.add(b, c, mp, col, base * 0.9, 0.12, 0.88, 0.9, 1, time, -1, 0);
@@ -215,12 +215,13 @@ function Tethers() {
       if (r.phase !== "result") continue;
       const u = clamp01((now - r.start) / r.dur);
       if (u >= 1) continue;
-      const sp = starPos.get(r.instance);
+      const sp = agentLive(r.instance);
+      const sv = serverPos(r.server);
       const srv = world.mcpServers.get(r.server);
-      if (!sp || !srv) continue;
-      planetPos(srv.slot, b);
+      if (!sp || !srv || !sv) continue;
+      b.copy(sv);
       col.set(srv.color).lerp(WHITE, 0.4);
-      const mp = r.resource ? moonPos.get(`${r.server}|${r.resource}`) : undefined;
+      const mp = r.resource ? backendPos(r.server, r.resource) : undefined;
       const split = mp ? 0.3 : 0;
       if (mp && u < split) {
         const k = easeInOut(u / split);
@@ -252,21 +253,3 @@ function Tethers() {
   );
 }
 
-export function Planets() {
-  const [servers, setServers] = useState<McpServer[]>([]);
-  const n = useRef(-1);
-  useFrame(() => {
-    if (world.mcpServers.size !== n.current) {
-      n.current = world.mcpServers.size;
-      setServers([...world.mcpServers.values()]);
-    }
-  });
-  return (
-    <>
-      {servers.map((s) => (
-        <Planet key={s.name} srv={s} />
-      ))}
-      <Tethers />
-    </>
-  );
-}

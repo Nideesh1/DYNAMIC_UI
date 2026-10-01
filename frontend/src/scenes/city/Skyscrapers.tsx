@@ -1,19 +1,17 @@
 /** Agent instances = skyscrapers that rise out of the street on spawn, work, and sink back on exit. */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { energy, lingerMs, presence, TYPE_COLOR, world, type Instance } from "../shared/world";
+import { energy, lingerMs, presence, TYPE_COLOR, world } from "../shared/world";
+import { fit, kit, type AgentSlotProps } from "../shared/kit";
 import { makeBuildingMaterial } from "./buildingMaterial";
-import { bases, buildingSpec, clamp01, displaySlot, easeInOut, easeOut, homeOf, reduced, roofs } from "./layout";
-import { isExpanded, lod, lodScale } from "../shared/lod";
+import { buildingSpec, clamp01, easeInOut, easeOut, reduced, roofH, roofOf } from "./layout";
 
-type SelectProps = { selectedRef: MutableRefObject<string | null>; onSelect: (id: string) => void };
-
-function Skyscraper({ inst, selectedRef, onSelect }: { inst: Instance } & SelectProps) {
-  const run = world.runs.get(inst.run);
-  const spec = useMemo(() => buildingSpec(inst), [inst]);
-  const dslot = run ? displaySlot(run.id, run.slot) : 0; // layout slot (compact while grouped)
-  const home = useMemo(() => (run ? homeOf(inst, run, new THREE.Vector3()) : new THREE.Vector3()), [inst, run, dslot]);
+/** Agent slot: a skyscraper at the agent's kit home (its own parent/sub ratio via buildingSpec, sized by fit.scale). */
+export function Skyscraper({ agent, selected, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
+  const runColor = agent.run.color;
+  const spec = useMemo(() => buildingSpec(inst, agent.depth === 0 ? agent.sib : 0), [inst, agent]);
   const color = TYPE_COLOR[inst.type];
   const { h, w, d } = spec;
 
@@ -36,12 +34,12 @@ function Skyscraper({ inst, selectedRef, onSelect }: { inst: Instance } & Select
     return g;
   }, [w, h, d]);
   const mat = useMemo(() => {
-    const m = makeBuildingMaterial({ color, edge: run?.color });
+    const m = makeBuildingMaterial({ color, edge: runColor });
     m.uniforms.uHalf.value.set(w / 2, d / 2);
     m.uniforms.uH.value = h;
     m.uniforms.uLit.value = 0.2;
     return m;
-  }, [color, run?.color, w, d, h]);
+  }, [color, runColor, w, d, h]);
   useEffect(() => () => (geo.dispose(), edges.dispose(), mat.dispose()), [geo, edges, mat]);
 
   const body = useRef<THREE.Group>(null);
@@ -59,25 +57,19 @@ function Skyscraper({ inst, selectedRef, onSelect }: { inst: Instance } & Select
   const lit = useRef(0.2);
   const holoS = useRef(0);
 
-  useEffect(() => {
-    const r = new THREE.Vector3(home.x, 0, home.z);
-    roofs.set(inst.id, r);
-    bases.set(inst.id, home);
-    return () => {
-      // keep anchors briefly so in-flight comets/packets can still land
-      window.setTimeout(() => {
-        if (!world.instances.has(inst.id)) (roofs.delete(inst.id), bases.delete(inst.id));
-      }, 1500);
-    };
-  }, [inst.id, home]);
+  useEffect(() => () => void roofH.delete(inst.id), [inst.id]);
 
   const root = useRef<THREE.Group>(null);
   useFrame(({ clock }, dt) => {
     const now = performance.now();
     const t = clock.elapsedTime;
     const age = (now - inst.bornAt) / 1000;
-    const ls = lodScale();
-    if (root.current && root.current.scale.x !== ls) root.current.scale.setScalar(ls);
+    // buildingSpec already carries the parent/sub ratio: scale by the kit fit only (no double shrinking)
+    const ls = fit.scale;
+    if (root.current) {
+      root.current.position.copy(agent.live);
+      if (root.current.scale.x !== ls) root.current.scale.setScalar(ls);
+    }
     // exit timeline was authored for a 2.5s fade; compress it when lingerMs() is shorter (crowded)
     const ex = inst.exitAt ? ((now - inst.exitAt) / 1000) * (2500 / lingerMs(inst)) : -1;
     const rise = easeOut(clamp01((age - 0.25) / 1.25));
@@ -148,18 +140,16 @@ function Skyscraper({ inst, selectedRef, onSelect }: { inst: Instance } & Select
       } else ring.current.visible = false;
     }
     if (sel.current) {
-      sel.current.visible = selectedRef.current === inst.id;
+      sel.current.visible = selected;
       if (sel.current.visible) sel.current.rotation.z += dt * 1.2;
     }
-    const r = roofs.get(inst.id);
-    if (r) r.set(home.x, Math.max(0.3, (roofY + 0.75) * ls), home.z);
+    roofH.set(inst.id, Math.max(0.3, (roofY + 0.75) * ls));
   });
 
-  if (!run) return null;
   const over = () => (document.body.style.cursor = "pointer");
   const out = () => (document.body.style.cursor = "");
   return (
-    <group position={home} ref={root}>
+    <group ref={root}>
       <group ref={body}>
         <mesh geometry={geo} material={mat} onClick={(e) => (e.stopPropagation(), onSelect(inst.id))} onPointerOver={over} onPointerOut={out} />
         {/* mast */}
@@ -206,7 +196,7 @@ function Skyscraper({ inst, selectedRef, onSelect }: { inst: Instance } & Select
 }
 
 /** Fan-out / lineage arcs: parent rooftop → child rooftop, shooting out at the child's birth. */
-function Lineage() {
+export function Lineage() {
   const SEG = 10;
   const MAX = 40;
   const geo = useMemo(() => {
@@ -229,16 +219,13 @@ function Lineage() {
     const col = geo.getAttribute("color") as THREE.BufferAttribute;
     const now = performance.now();
     let k = 0;
-    world.instances.forEach((i) => {
-      if (!i.parent || k >= MAX * SEG) return;
-      const pr = roofs.get(i.parent);
-      const cr = roofs.get(i.id);
-      if (!pr || !cr) return;
+    for (const ag of kit.agents.values()) {
+      const i = ag.inst;
+      if (!i.parent || k >= MAX * SEG) continue;
+      if (!roofOf(i.parent, a) || !roofOf(i.id, b)) continue;
       const pres = presence(i, now);
-      if (pres < 0.02) return;
+      if (pres < 0.02) continue;
       const birth = clamp01((now - i.bornAt) / 650);
-      a.copy(pr);
-      b.copy(cr);
       mid.copy(a).add(b).multiplyScalar(0.5);
       mid.y = Math.max(a.y, b.y) + 1.2 + a.distanceTo(b) * 0.12;
       const reach = easeOut(birth);
@@ -258,7 +245,7 @@ function Lineage() {
         col.setXYZ(k * 2, c.r * f0, c.g * f0, c.b * f0);
         col.setXYZ(k * 2 + 1, c.r * f1, c.g * f1, c.b * f1);
       }
-    });
+    }
     geo.setDrawRange(0, k * 2);
     pos.needsUpdate = true;
     col.needsUpdate = true;
@@ -270,25 +257,3 @@ function Lineage() {
   );
 }
 
-export function Skyscrapers(props: SelectProps) {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef({ ids: new Set<string>(), version: -1 });
-  useFrame(() => {
-    const kn = known.current;
-    let changed = kn.version !== lod.version || kn.ids.size !== world.instances.size;
-    if (!changed) for (const id of world.instances.keys()) if (!kn.ids.has(id)) { changed = true; break; }
-    if (changed) {
-      kn.version = lod.version;
-      kn.ids = new Set(world.instances.keys());
-      setList([...world.instances.values()].filter((i) => world.runs.has(i.run) && isExpanded(i)));
-    }
-  });
-  return (
-    <group>
-      {list.map((i) => (
-        <Skyscraper key={i.id} inst={i} {...props} />
-      ))}
-      <Lineage />
-    </group>
-  );
-}

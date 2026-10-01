@@ -1,5 +1,6 @@
 /**
- * FalkorDB = a single glass memory orb at the center. Graph nodes sit evenly on its surface (Fibonacci sphere),
+ * Graph resource slot (side memory node): FalkorDB = a small glass memory orb on the side of the brain, drawn in
+ * its own frame (radius ORB_R) - the kit positions, scales and fades it. Graph nodes sit evenly on its surface (Fibonacci sphere),
  * edges are faint great-circle arcs hugging it. Flares: touched nodes brighten + name label + soft beam to the
  * agent (reads in agent color, writes white with a ring ripple spreading across the sphere surface).
  */
@@ -9,7 +10,8 @@ import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, world } from "../shared/world";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
-import { ArrowPool, SPHERE_GEO, TYPE_C, addScaled, glowSpriteMaterial, reduced, somaPos } from "./fx";
+import { agentLive, kit, stageToGraph, type GraphSlotProps } from "../shared/kit";
+import { ArrowPool, SPHERE_GEO, TYPE_C, addScaled, glowSpriteMaterial, reduced } from "./fx";
 
 export const ORB_R = 3.3;
 const MAX_NODES = 200;
@@ -68,7 +70,7 @@ void main(){
   gl_FragColor = vec4(col, 1.0);
 }`;
 
-export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
+export function Cortex({ galaxy: full }: GraphSlotProps) {
   const galaxy = useMemo(() => sampleGalaxy(full), [full]);
   const n = galaxy.nodes.length;
   const { size, gl, camera } = useThree();
@@ -179,7 +181,7 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
   );
   const cache = useMemo(() => new Map<string, number>(), []);
   const arrows = useMemo(() => new ArrowPool(MAX_BEAMS), []);
-  const tmp = useMemo(() => ({ v: new THREE.Vector3(), v2: new THREE.Vector3(), mid: new THREE.Vector3(), c: new THREE.Color(), c2: new THREE.Color() }), []);
+  const tmp = useMemo(() => ({ v: new THREE.Vector3(), v2: new THREE.Vector3(), mid: new THREE.Vector3(), sp: new THREE.Vector3(), c: new THREE.Color(), c2: new THREE.Color() }), []);
   const idx = (name: string) => {
     let i = cache.get(name);
     if (i === undefined) cache.set(name, (i = nodeIndex(galaxy, name)));
@@ -189,7 +191,8 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
   useFrame(({ clock }) => {
     const now = performance.now();
     const { pos, base, fire, white, fireC, unit } = data;
-    mats.nodes.uniforms.uScale.value = (size.height * gl.getPixelRatio()) / (2 * Math.tan(((camera as THREE.PerspectiveCamera).fov * Math.PI) / 360));
+    // point sprites are sized in view space: follow the kit's group scale so the side node stays proportionate
+    mats.nodes.uniforms.uScale.value = ((size.height * gl.getPixelRatio()) / (2 * Math.tan(((camera as THREE.PerspectiveCamera).fov * Math.PI) / 360))) * kit.graph.scale;
     mats.orb.uniforms.uTime.value = reduced ? 0 : clock.elapsedTime;
     fire.fill(0);
     white.fill(0);
@@ -222,7 +225,9 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
       // beam: curve runs agent (t=0) → graph node (t=1). Data flow:
       //   read  = data comes OUT of the graph: pulse node → agent, arrow at the agent (agent color)
       //   write = agent → FalkorDB: solid white beam, pulse agent → node, arrow at the node
-      const sp = somaPos.get(f.instance);
+      // beams are drawn inside the graph group: the agent's stage position in graph-local units
+      const live = agentLive(f.instance);
+      const sp = live ? stageToGraph(live, tmp.sp) : undefined;
       if (sp && age < 2.2 && b < MAX_BEAMS) {
         v.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
         mid.copy(sp).add(v).multiplyScalar(0.5);

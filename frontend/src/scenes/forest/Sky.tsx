@@ -1,12 +1,19 @@
 /**
  * The night itself: gradient sky dome with a soft moon, moonlight on a dark forest floor, a ring of distant pine
- * silhouettes swallowed by fog, and slow low-lying mist banks. Purely decorative and static/GPU-cheap.
+ * silhouettes swallowed by fog, slow low-lying mist banks and a moonlit clearing under the agents. The tree line,
+ * the mist and the clearing are sized to the kit's core (kit.core.r) so the forest always rings the agents.
  */
 import { Stars } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
-import { PAL, glowTexture, mistTexture, reduced } from "./fx";
+import { fit, kit } from "../shared/kit";
+import { PAL, groundGlowMaterial, glowTexture, mistTexture, PLANE_FLAT, reduced } from "./fx";
+
+/** radius the static tree line / mist were authored for (open ground inside it) */
+const RING_R = 26;
+/** backdrop scale so the distant tree line stays outside the agents (+ periphery) */
+const ringScale = () => Math.max(1, (kit.core.r + 9) / RING_R);
 
 const skyVert = /* glsl */ `
 varying vec3 vDir;
@@ -118,6 +125,42 @@ function Mist() {
   );
 }
 
+/** Silhouettes + mist, scaled with the core (eased by the kit). */
+function Backdrop() {
+  const g = useRef<THREE.Group>(null);
+  useFrame(() => {
+    g.current?.scale.set(ringScale(), 1, ringScale());
+  });
+  return (
+    <group ref={g}>
+      <Silhouettes />
+      <Mist />
+    </group>
+  );
+}
+
+/** A soft moonlit clearing on the forest floor under the agents, sized to the core. */
+function Clearing() {
+  const mat = useMemo(() => groundGlowMaterial(new THREE.Color(PAL.moon).lerp(new THREE.Color("#5eead4"), 0.4).multiplyScalar(0.075)), []);
+  const m = useRef<THREE.Mesh>(null);
+  useFrame(() => {
+    const c = kit.core;
+    m.current?.scale.set(c.hw * 2.6 + 9, 1, c.hh * 2.6 + 9);
+  });
+  return <mesh ref={m} geometry={PLANE_FLAT} material={mat} position={[0, 0.01, 0]} />;
+}
+
+/** Exponential fog thinned as the camera backs off (crowded sessions), so the clearing never drowns. */
+function FogFit() {
+  useFrame(({ scene, camera }) => {
+    const f = scene.fog as THREE.FogExp2 | null;
+    if (!f || !("density" in f)) return;
+    const d = fit.cam.dist || camera.position.length();
+    f.density = 0.016 * Math.min(1, 36 / Math.max(1, d));
+  });
+  return null;
+}
+
 export function Night() {
   const sky = useMemo(
     () => new THREE.ShaderMaterial({ uniforms: { uMoonDir: { value: MOON_DIR } }, vertexShader: skyVert, fragmentShader: skyFrag, side: THREE.BackSide, depthWrite: false, fog: false }),
@@ -137,12 +180,14 @@ export function Night() {
       <hemisphereLight args={["#2a6b66", "#020807", 0.55]} />
       <directionalLight position={[-30, 40, -60]} intensity={0.9} color="#a8f0e2" />
       <ambientLight intensity={0.08} color="#5eead4" />
+      <fogExp2 attach="fog" args={[PAL.fog, 0.016]} />
+      <FogFit />
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <circleGeometry args={[110, 64]} />
+        <circleGeometry args={[170, 64]} />
         <meshStandardMaterial color={PAL.ground} roughness={1} metalness={0} />
       </mesh>
-      <Silhouettes />
-      <Mist />
+      <Clearing />
+      <Backdrop />
     </>
   );
 }

@@ -9,35 +9,15 @@
  *     recently started runs, until ~BUDGET expanded agents. Expanded runs stay expanded for ≥ DWELL_MS so
  *     the view doesn't churn while new runs keep arriving.
  *   - labels only for the ~LABEL_K busiest expanded agents + the selected one (`showLabel`)
- *   - agents shrink gently with the crowd (`lodScale()`), finished agents linger shorter (world `linger` hook)
+ *   - finished agents linger shorter while crowded (world `linger` hook)
  *
- * Everything is computed ONCE per frame in `lodTick(now)` (call it right after `tick()` in the scene's
- * Ticker), membership at most every ~250ms; helpers below are O(1) lookups and allocate nothing.
- *
- * ──────────────────────────────────────────────────────────────── INTEGRATION GUIDE (for new themes)
- *  1. Ticker:         useFrame(() => { tick(); lodTick(); })
- *  2. Agent list:     in the useFrame membership check that rebuilds your list of instances, also compare
- *                     `lod.version` and keep only `isExpanded(inst)`:
- *                        if (changed || lod.version !== seen.current) { seen.current = lod.version;
- *                          setList([...world.instances.values()].filter(isExpanded)); }
- *  3. Run visuals:    per-run things (run labels, auras, lines, lanes) render only for `isRunExpanded(run.id)`
- *                     (same lod.version check). Collapsed runs are represented by their lane's cluster.
- *     Several expanded runs can share a lane (e.g. after the user clicks a cluster): fan them out by
- *     `laneRank(run.id)` (0 = the lane's usual spot; use alt(rank) from spread.ts for ±1, ±2 … offsets).
- *  4. Scale:          multiply your per-agent size by `lodScale()` (on top of roleScale()).
- *  5. Labels:         in the agent's useFrame: `labelEl.style.display = showLabel(inst.id) ? "" : "none"`
- *                     (or fold it into your opacity).
- *  6. Exit fades:     use `lingerMs(inst)` (world.ts) instead of FADE_MS for the exit animation length.
- *  7. Clusters:       render one <ClusterBall cluster={c} position={…lane anchor…} /> per entry of
- *                     `useLodClusters()` (from ./ClusterBall); place it where that lane's runs normally live.
- *                     Props: color/size/style ("orb" | "stars" | "swarm") to match the theme; click → expandLane.
- *  8. Effects keyed by agent (beams, tethers, comets): skip, or route to the cluster, when the agent isn't
- *     expanded (`isExpanded(id)` false). Most effects already skip agents with no registered position.
- *  The HUD shows the "grouped: N runs in K clusters · show all" pill automatically (Hud.tsx).
- *  Themes still to wire (built in parallel): hive, forest, constellation, factory, airport, mycelium.
+ * Everything is computed ONCE per frame in `lodTick(now)` (the scene kit's ticker calls it right after `tick()`),
+ * membership at most every ~250ms; helpers below are O(1) lookups and allocate nothing. The scene kit
+ * (kit/layout.ts) turns membership into drawn agents/runs and places one cluster ball per active lane; the HUD
+ * shows the "grouped: N runs in K clusters · show all" chip (Hud.tsx).
  */
 import { useSyncExternalStore } from "react";
-import { RUN_COLORS, TYPE_COLOR, energy, hash01, linger, world, type AgentType, type Instance, FADE_MS } from "./world";
+import { RUN_COLORS, energy, hash01, linger, world, type AgentType, type Instance, FADE_MS } from "./world";
 
 /** Number of visual lanes runs are grouped by (most themes lay runs out by slot % 6). */
 export const LOD_LANES = 6;
@@ -108,11 +88,7 @@ export const lod = {
   expandedRuns: 0,
   collapsedRuns: 0,
   activeClusters: 0,
-  /** smoothed size multiplier for agents (1 when not grouped) */
-  scale: 1,
   clusters: Array.from({ length: LOD_LANES }, (_, k) => mkCluster(k)) as LodCluster[],
-  /** expanded runs per lane (themes nudge a lane's cluster aside when its lane also shows expanded runs) */
-  laneExpanded: new Uint16Array(LOD_LANES),
 };
 
 // ------------------------------------------------------------------ internal state (reused, no per-frame allocs)
@@ -125,8 +101,6 @@ const runOrder: string[] = [];
 const prio = new Map<string, number>();
 const started = new Map<string, number>();
 const scored: Instance[] = [];
-const rankOrder: string[] = [];
-const runRank = new Map<string, number>();
 const laneTaken = new Uint16Array(LOD_LANES);
 const score = new Map<string, number>();
 let lastRecompute = -1e9;
@@ -170,17 +144,6 @@ export function showLabel(instId: string): boolean {
   if (!lod.grouped) return true;
   return instId === world.selected || labelSet.has(instId);
 }
-/** Gentle crowd size multiplier for agents (apply on top of roleScale). */
-export function lodScale(): number {
-  return lod.scale;
-}
-/**
- * Rank of an expanded run among the expanded runs of its lane (0 = on the lane's anchor, 1, 2, … = fan them out,
- * e.g. offset by `alt(rank)` from spread.ts along the lane's tangent). 0 when not grouped / unknown.
- */
-export function laneRank(runId: string): number {
-  return lod.grouped ? runRank.get(runId) ?? 0 : 0;
-}
 /** The cluster for a lane (always exists; check `.active`). */
 export const clusterOf = (lane: number) => lod.clusters[laneOfSlot(lane)];
 
@@ -221,7 +184,6 @@ export function useLod() {
 
 // ------------------------------------------------------------------ per-frame update
 
-const byStart = (a: string, b: string) => (started.get(a) ?? 0) - (started.get(b) ?? 0) || (a < b ? -1 : 1);
 const byPrio = (a: string, b: string) => (prio.get(a)! - prio.get(b)!) || (started.get(b)! - started.get(a)!);
 
 function recompute(now: number) {
@@ -253,8 +215,6 @@ function recompute(now: number) {
     expRuns.clear();
     expSince.clear();
     labelSet.clear();
-    runRank.clear();
-    lod.laneExpanded.fill(0);
     lod.expandedAgents = alive;
     lod.expandedRuns = world.runs.size;
     lod.collapsedRuns = 0;
@@ -315,30 +275,14 @@ function recompute(now: number) {
       expSince.set(id, now);
       changed = true;
     }
-  // rank of each expanded run within its lane (oldest first → rank 0 sits on the lane's anchor)
-  rankOrder.length = 0;
-  for (const id of expRuns) rankOrder.push(id);
-  rankOrder.sort(byStart);
-  laneTaken.fill(0);
-  runRank.clear();
-  for (const id of rankOrder) {
-    const lane = laneOfRun(id);
-    runRank.set(id, laneTaken[lane]++);
-  }
-  rankOrder.length = 0;
   lod.expandedRuns = nExp;
 
   // ---- collapsed runs per lane
   let collapsed = 0;
   for (const c of lod.clusters) c.runIds.length = 0;
-  lod.laneExpanded.fill(0);
   for (const id of runOrder) {
-    const lane = laneOfRun(id);
-    if (expRuns.has(id)) {
-      lod.laneExpanded[lane]++;
-      continue;
-    }
-    lod.clusters[lane].runIds.push(id);
+    if (expRuns.has(id)) continue;
+    lod.clusters[laneOfRun(id)].runIds.push(id);
     collapsed++;
   }
   lod.collapsedRuns = collapsed;
@@ -438,19 +382,7 @@ export function lodTick(now = performance.now()) {
     recompute(now);
   }
   if (lod.grouped) stats();
-  const target = lod.grouped ? Math.max(0.6, Math.min(1, Math.sqrt(BUDGET / Math.max(BUDGET, lod.expandedAgents + lod.activeClusters * 1.5)))) : 1;
-  lod.scale += (target - lod.scale) * 0.05;
-  if (Math.abs(target - lod.scale) < 1e-3) lod.scale = target;
 }
 
 // exited agents linger shorter when crowded (world.tick / presence() read this hook)
 linger.fadeMs = (i: Instance) => (!lod.crowded ? FADE_MS : expRuns.has(i.run) || !lod.grouped ? CROWD_FADE_MS : COLLAPSED_FADE_MS);
-
-/** Lane color helper for themes (same palette runs use). */
-export const laneColor = (lane: number) => RUN_COLORS[laneOfSlot(lane) % RUN_COLORS.length];
-/** Dominant role color of a cluster (for single-color variants). */
-export function dominantColor(c: LodCluster): string {
-  let best: AgentType = "researcher";
-  for (const t of AGENT_TYPES) if (c.types[t] > c.types[best]) best = t;
-  return TYPE_COLOR[best];
-}

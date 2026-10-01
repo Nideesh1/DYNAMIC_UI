@@ -1,8 +1,6 @@
-/** Atom scene: palette, shaders, shared geometries, easing, and the orbital layout (shells, electrons, detectors). */
+/** Atom scene: palette, shaders, shared geometries, easing, pools and the run hubs (nuclei). Placement comes from the scene kit. */
 import * as THREE from "three";
-import { laneOfSlot, lod } from "../shared/lod";
-import { TYPE_COLOR, getInstance, hash01, world, type AgentType, type Instance } from "../shared/world";
-import { spreadIndex } from "../shared/spread";
+import { TYPE_COLOR, type AgentType } from "../shared/world";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -219,126 +217,17 @@ export class CurvePool {
   }
 }
 
-// ------------------------------------------------------------------ layout
-/** Nucleus radius (knowledge graph). */
-export const NUC_R = 2.15;
+// ------------------------------------------------------------------ run hubs (nuclei)
+/** Graph molecule radius (side resource, local units). */
+export const MOL_R = 2.4;
 
-/** Base radius of shell number `slot` (lane). */
-export const shellRadius = (slot: number) => 5.6 + slot * 1.25;
-
-/** Orbital shell of a run: radius by run slot, plane tilt seeded by run id (stable for the run's lifetime). */
-export type Shell = { r: number; q: THREE.Quaternion; u: THREE.Vector3; v: THREE.Vector3; n: THREE.Vector3; dir: 1 | -1; phase: number };
-const shells = new Map<string, Shell>();
-export function shellOf(runId: string): Shell {
-  let s = shells.get(runId);
-  if (s) return s;
-  const run = world.runs.get(runId);
-  const slot = run ? run.slot : Math.floor(hash01(runId, 9) * 6);
-  // classic atom logo: each orbit plane is tilted away from the viewer and rotated around the view axis
-  const spin = hash01(runId, 1) * Math.PI + slot * 1.05; // in-screen rotation of the ellipse
-  const incl = 1.0 + hash01(runId, 2) * 0.32; // tilt away from the camera (0 = circle facing camera)
-  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(incl, 0, spin, "ZXY"));
-  // crowded (LOD grouped): many runs share 6 lanes, so the shell radius follows the lane, not the ever-growing slot
-  const r = shellRadius(lod.grouped ? laneOfSlot(slot) : slot) + hash01(runId, 3) * 0.45;
-  s = {
-    r,
-    q,
-    u: new THREE.Vector3(1, 0, 0).applyQuaternion(q),
-    v: new THREE.Vector3(0, 1, 0).applyQuaternion(q),
-    n: new THREE.Vector3(0, 0, 1).applyQuaternion(q),
-    dir: hash01(runId, 4) < 0.5 ? 1 : -1,
-    phase: hash01(runId, 5) * Math.PI * 2,
-  };
-  shells.set(runId, s);
-  if (shells.size > 64) for (const k of shells.keys()) if (!world.runs.has(k) && k !== runId) shells.delete(k);
-  return s;
-}
-export function shellPoint(s: Shell, angle: number, radius: number, out: THREE.Vector3) {
-  return out.copy(s.u).multiplyScalar(Math.cos(angle) * radius).addScaledVector(s.v, Math.sin(angle) * radius);
-}
-
-const SHELL_W = reduced ? 0 : 0.085; // rad/s along a run shell
-const SUB_W = reduced ? 0 : 0.42; // rad/s for subagents around their parent
-
-type Orb = { phase: number; w: number; r: number; u: THREE.Vector3; v: THREE.Vector3 };
-const orbs = new Map<string, Orb>();
-/** Per-instance orbit params (cached for its lifetime; seeded by run/instance ids). */
-function orbOf(inst: Instance): Orb {
-  let o = orbs.get(inst.id);
-  if (o) return o;
-  if (inst.subagent && inst.parent) {
-    // mini-atom around the parent: small tilted orbit, siblings spread by index
-    const k = spreadIndex(inst, "atom-sub");
-    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.7 + hash01(inst.id, 1) * 1.2, hash01(inst.id, 2) * Math.PI, k * 0.9, "ZXY"));
-    o = { phase: k * 2.39996 + hash01(inst.id, 3) * 0.6, w: SUB_W * (0.85 + hash01(inst.id, 4) * 0.3), r: 1.7 + (k % 3) * 0.45, u: new THREE.Vector3(1, 0, 0).applyQuaternion(q), v: new THREE.Vector3(0, 1, 0).applyQuaternion(q) };
-  } else {
-    // parent electrons share the run shell; same-role agents get distinct golden-angle phases
-    const s = shellOf(inst.run);
-    const k = spreadIndex(inst, "atom-top");
-    o = { phase: s.phase + k * 2.39996 + (hash01(inst.id, 3) - 0.5) * 0.35, w: SHELL_W * s.dir, r: s.r, u: s.u, v: s.v };
-  }
-  orbs.set(inst.id, o);
-  if (orbs.size > 400) for (const id of orbs.keys()) if (!getInstance(id)) orbs.delete(id);
-  return o;
-}
-
-const SCR = Array.from({ length: 6 }, () => new THREE.Vector3());
 /**
- * Electron position at time `t` (seconds, performance clock), stage space. Deterministic → also used for trails.
- * Born: launched out of the nucleus (top-level) or out of its parent (subagent). Exit: decays - spirals outward.
+ * Eased stage position of each drawn run's nucleus (the run / orchestrator hub its electrons orbit), written by the
+ * RunMarker slot every frame; electrons, photons and the camera extents read it.
  */
-export function electronAt(inst: Instance, t: number, out: THREE.Vector3, depth = 0): THREE.Vector3 {
-  const o = orbOf(inst);
-  const born = inst.bornAt / 1000;
-  const ex = inst.exitAt ? inst.exitAt / 1000 : 0;
-  const decay = ex && t > ex ? t - ex : 0;
-  const ang = o.phase + o.w * (t - born) + decay * 0.9;
-  const r = o.r * (1 + decay * decay * 0.07);
-  out.copy(o.u).multiplyScalar(Math.cos(ang) * r).addScaledVector(o.v, Math.sin(ang) * r);
-  const parent = inst.subagent && inst.parent && depth < 5 ? getInstance(inst.parent) : undefined;
-  const b = easeOut((t - born) / 1.1);
-  if (parent) {
-    const pp = SCR[depth];
-    electronAt(parent, t, pp, depth + 1);
-    out.add(pp);
-    if (b < 1) out.lerp(pp, 1 - b); // bud off the parent
-  } else if (b < 1) out.multiplyScalar(0.3 + 0.7 * b); // excited out of the nucleus
-  return out;
-}
-
-/** Live electron positions (stage space), written each frame by each Electron. */
-export const ePos = new Map<string, THREE.Vector3>();
-
-// MCP detectors sit in the outer corners; backends (sensor nodes) fan outward from them.
-// placed in the free regions between HUD panels (left/right middle, top/bottom centre, then diagonals)
-const DET_SPOTS: [number, number, number][] = [
-  [-19, -1.5, -3],
-  [17.5, -3.5, -3],
-  [0, 11.5, -4],
-  [0, -12, -3],
-  [-16, 8, -5],
-  [16, -10, -4],
-  [-16, -9.5, -4],
-  [17, 7, -5],
-];
-export function detPos(slot: number, out: THREE.Vector3) {
-  const s = DET_SPOTS[slot % DET_SPOTS.length];
-  const ring = Math.floor(slot / DET_SPOTS.length);
-  return out.set(s[0] * (1 + ring * 0.12), s[1] * (1 + ring * 0.12), s[2] - ring * 3);
-}
-/** Backend sensor k of n: fanned sideways for top/bottom detectors, outward + stacked for side detectors. */
-export function sensorPos(slot: number, k: number, n: number, out: THREE.Vector3) {
-  detPos(slot, out);
-  if (Math.abs(out.x) < 4) {
-    out.x += (k % 2 ? 1 : -1) * (3.4 + Math.floor(k / 2) * 3.2);
-    out.y += Math.sign(out.y || 1) * 0.6;
-  } else {
-    out.x += Math.sign(out.x) * 3.6;
-    out.y += (k - (n - 1) / 2) * 2.3;
-  }
-  out.z -= 0.6;
-  return out;
-}
+export const hubs = new Map<string, THREE.Vector3>();
+/** Stage position of each drawn run's label (just above its atom), written by the RunMarker slot; read by extents. */
+export const runTops = new Map<string, THREE.Vector3>();
 
 export function addScaled(c: THREE.Color, src: THREE.Color, k: number) {
   c.r += src.r * k;

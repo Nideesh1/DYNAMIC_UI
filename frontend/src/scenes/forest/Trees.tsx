@@ -1,5 +1,6 @@
 /**
- * Agents are glowing pines. Parents are tall trees, subagents are saplings fanned out around them.
+ * Agent slot: agents are glowing pines at the kit's position. Parents are tall trees, subagents are saplings
+ * fanned out from them by the kit.
  *   spawn    → a root of light creeps along the ground from the parent's trunk, then the sapling sprouts
  *   thinking → canopy glows bright and breathes; waiting → dim, slow breath
  *   LLM call → a burst of fireflies rises from the canopy (count + size from tokens)
@@ -9,11 +10,12 @@
  * Messages are wisps arcing canopy → canopy, leaving a short trail of motes.
  */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { TYPE_COLOR, energy, hash01, presence, world, type Comet, type Instance } from "../shared/world";
-import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
+import { isExpanded, lod, showLabel } from "../shared/lod";
+import { agentLive, type AgentSlotProps } from "../shared/kit";
 import {
   ARROW_GEO,
   C_AMBER,
@@ -28,7 +30,9 @@ import {
   airControl,
   backOut,
   bezier,
+  canopyR,
   clamp01,
+  crownOf,
   easeInOut,
   easeOut,
   glowSpriteMaterial,
@@ -36,9 +40,10 @@ import {
   groundControl,
   placeOnCurve,
   reduced,
+  treeHeight,
+  treeScale,
   tubeMaterial,
 } from "./fx";
-import { basePos, canopyR, crownPos, treeBase, treeHeight } from "./layout";
 import { emitFireflies, emitLeaves, emitTrail } from "./Particles";
 
 const TIER_GEO = new THREE.ConeGeometry(1, 1, 7, 1, false).translate(0, 0.5, 0);
@@ -58,7 +63,8 @@ function tiersOf(inst: Instance, h: number, R: number): Tier[] {
   return out;
 }
 
-function Tree({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => void }) {
+export function Tree({ agent, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
   const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
@@ -100,7 +106,6 @@ function Tree({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       llm: inst.llmCalls,
       tok: inst.tokens,
       shed: false,
-      placed: false,
       c: new THREE.Color(),
       c2: new THREE.Color(),
     }),
@@ -108,22 +113,13 @@ function Tree({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     [],
   );
 
-  useEffect(() => {
-    basePos.set(inst.id, s.base);
-    crownPos.set(inst.id, s.crown);
-    return () => {
-      if (basePos.get(inst.id) === s.base) basePos.delete(inst.id);
-      if (crownPos.get(inst.id) === s.crown) crownPos.delete(inst.id);
-    };
-  }, [inst.id, s]);
 
   useFrame(({ clock }) => {
     const now = performance.now();
     const t = clock.elapsedTime;
-    // glide when LOD re-lays out the grove (snap on first frame)
-    if (!s.placed) s.base.copy(treeBase(inst)), (s.placed = true);
-    else s.base.lerp(treeBase(inst), 0.08);
-    const L = lodScale();
+    // trunk base = the kit's eased home (agent.live); size = the kit's eased fit scale
+    s.base.copy(agent.live);
+    const L = treeScale(agent);
     const sway = reduced ? 0 : 0.05;
     s.crown.set(s.base.x + Math.sin(t * 0.6 + seed * 20) * sway * h * L, h * 0.62 * L, s.base.z + Math.cos(t * 0.5 + seed * 13) * sway * h * 0.6 * L);
     s.top.set(s.crown.x, h * L, s.crown.z);
@@ -150,14 +146,14 @@ function Tree({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       const dTok = Math.max(0, inst.tokens - s.tok);
       const n = Math.round(Math.min(46, 7 + dTok / 160));
       s.c2.copy(color).lerp(C_WHITE, 0.35).multiplyScalar(1.4);
-      emitFireflies(s.top, n, s.c2, 0.3 + Math.min(0.55, dTok / 4500), R * 0.9);
+      emitFireflies(s.top, n, s.c2, 0.3 + Math.min(0.55, dTok / 4500), R * 0.9 * L);
     }
     s.llm = inst.llmCalls;
     s.tok = inst.tokens;
     if (te >= 0 && !s.shed) {
       s.shed = true;
       s.c2.copy(color).multiplyScalar(0.6);
-      emitLeaves(s.crown, inst.subagent ? 16 : 34, s.c2, R * 1.1, inst.subagent ? 0.2 : 0.27);
+      emitLeaves(s.crown, inst.subagent ? 16 : 34, s.c2, R * 1.1 * L, inst.subagent ? 0.2 : 0.27);
     }
 
     // ---- tree body
@@ -198,7 +194,7 @@ function Tree({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
 
     // ---- root: parent → child along the ground; grows on birth, fades when either end leaves
     const parent = inst.parent ? world.instances.get(inst.parent) : undefined;
-    const pb = inst.parent ? basePos.get(inst.parent) : undefined;
+    const pb = inst.parent ? agentLive(inst.parent) : undefined;
     if (pb) s.p0.set(pb.x, 0.06, pb.z), (s.p0set = true);
     else if (!s.p0set) s.p0.set(s.base.x, 0.06, s.base.z);
     s.p2.set(s.base.x, 0.06, s.base.z);
@@ -221,7 +217,7 @@ function Tree({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       const vis = hasRoot && grow >= 1 && s.parentK > 0.05 && u.uGrow.value > 0.9;
       arrow.current.visible = vis;
       if (vis) {
-        placeOnCurve(arrow.current, s.p0, s.p1, s.p2, 0.78, 1, inst.subagent ? 0.42 : 0.55);
+        placeOnCurve(arrow.current, s.p0, s.p1, s.p2, 0.78, 1, (inst.subagent ? 0.42 : 0.55) * Math.min(1.3, L));
         m.arrow.color.copy(color).multiplyScalar(1.5 * s.parentK);
       }
     }
@@ -254,7 +250,8 @@ function Tree({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
         </group>
         <Label3D
           ref={label}
-          position={[0, h * 1.12 + 0.45, 0]}
+          fit
+          position={[0, h * 1.1 + (inst.subagent ? 0.15 : 0.45), 0]}
           text={`${inst.name}${k !== undefined && !Number.isNaN(Number(k)) ? ` ${Number(k) + 1}` : ""}`}
           color={TYPE_COLOR[inst.type]}
           size={inst.subagent ? 0.24 : 0.3}
@@ -266,30 +263,6 @@ function Tree({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   );
 }
 
-export function Trees({ onSelect }: { onSelect: (id: string) => void }) {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.instances;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // collapsed runs are drawn by their lane's firefly swarm (Clusters.tsx)
-      setList([...m.values()].filter(isExpanded));
-    }
-  });
-  return (
-    <>
-      {list.map((i) => (
-        <Tree key={i.id} inst={i} onSelect={onSelect} />
-      ))}
-    </>
-  );
-}
-
 // ------------------------------------------------------------------ messages: wisps arcing canopy → canopy
 
 function Wisp({ comet }: { comet: Comet }) {
@@ -297,10 +270,10 @@ function Wisp({ comet }: { comet: Comet }) {
   const from = world.instances.get(comet.from);
   const color = useMemo(() => (from ? TYPE_C[from.type] : C_TEAL).clone().lerp(C_WHITE, 0.3), [from]);
   const mat = useMemo(() => glowSpriteMaterial(color.clone().multiplyScalar(1.6)), [color]);
-  const s = useMemo(() => ({ c: new THREE.Vector3(), h: new THREE.Vector3(), tc: color.clone().multiplyScalar(0.9) }), [color]);
+  const s = useMemo(() => ({ a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), h: new THREE.Vector3(), tc: color.clone().multiplyScalar(0.9) }), [color]);
   useFrame(() => {
-    const pa = crownPos.get(comet.from);
-    const pb = crownPos.get(comet.to);
+    const pa = crownOf(comet.from, s.a);
+    const pb = crownOf(comet.to, s.b);
     if (!head.current) return;
     if (!pa || !pb) {
       head.current.visible = false;

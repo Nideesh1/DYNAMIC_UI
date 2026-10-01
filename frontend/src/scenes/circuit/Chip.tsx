@@ -6,13 +6,13 @@
  *  exit   → pins go dark sequentially, chip lifts off and derezzes into voxels
  */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D } from "../shared/Label3D";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
-import { TYPE_COLOR, TYPE_LABEL, energy, lingerMs, presence, world, type Instance } from "../shared/world";
-import { lodScale } from "../shared/lod";
-import { clamp01, easeInOut, getDieTexture, getGlowTexture, homeOf, isScout, livePos, reduced, rgb } from "./layout";
+import { TYPE_COLOR, energy, lingerMs, presence, world } from "../shared/world";
+import { agentLive, type AgentSlotProps } from "../shared/kit";
+import { chipScale, clamp01, easeInOut, getDieTexture, getGlowTexture, reduced, rgb } from "./layout";
 
 const bodyGeo = new RoundedBoxGeometry(1.5, 0.34, 1.5, 3, 0.07);
 const pinGeo = new THREE.BoxGeometry(0.24, 0.05, 0.09);
@@ -51,7 +51,9 @@ function hasPending(id: string) {
   return false;
 }
 
-export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: boolean; onSelect: (id: string) => void }) {
+/** Agent slot: a chip at the agent's kit home (drops in, or arcs out of its parent chip; the drawn spot is agent.live). */
+export function Chip({ agent, selected, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
   const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
   const core = useRef<THREE.Group>(null);
@@ -82,7 +84,6 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
   const st = useMemo(() => ({ pos: new THREE.Vector3(), start: new THREE.Vector3(), home: new THREE.Vector3(), init: false, emerge: false, spin: 0, spin2: 0 }), []);
   const tmp = useMemo(() => new THREE.Object3D(), []);
   const c = useMemo(() => new THREE.Color(), []);
-  const sc = isScout(inst) ? 1 : 1.45;
 
   useLayoutEffect(() => {
     const m = pins.current;
@@ -98,21 +99,15 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
     m.instanceMatrix.needsUpdate = true;
   }, [tmp, c]);
 
-  useEffect(() => {
-    livePos.set(inst.id, st.pos);
-    return () => {
-      if (livePos.get(inst.id) === st.pos) livePos.delete(inst.id);
-    };
-  }, [inst.id, st.pos]);
-
   useFrame(({ clock }, dt) => {
     const now = performance.now();
     const i = inst;
     const time = clock.elapsedTime;
-    homeOf(i, st.home);
+    st.home.copy(agent.pos);
+    const sc = chipScale(i);
     if (!st.init) {
       st.init = true;
-      const pp = i.parent ? livePos.get(i.parent) : undefined;
+      const pp = i.parent ? agentLive(i.parent) : undefined;
       st.emerge = !!pp;
       st.start.copy(pp ?? st.home);
       st.pos.copy(st.start);
@@ -135,6 +130,7 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
     } else {
       st.pos.lerp(st.home, 1 - Math.exp(-dt * 5));
     }
+    agent.live.set(st.pos.x, 0, st.pos.z); // beams, traces and packets follow the drawn chip
     const sinceLand = t - LAND;
 
     const exiting = i.exitAt > 0;
@@ -153,7 +149,7 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
 
     if (root.current) {
       root.current.position.set(st.pos.x, y + lift, st.pos.z);
-      root.current.scale.setScalar(sc * grow * lodScale());
+      root.current.scale.setScalar(sc * grow);
       if (!reduced && exiting) root.current.rotation.y += dt * derez * 4;
     }
     if (body.current) body.current.scale.setScalar(derez > 0 ? Math.max(0.001, 1 - derez * 4) : 1);
@@ -198,7 +194,7 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
     }
     // heat glow on the board under the chip (counteracts lift so it stays on the board)
     if (glow.current) {
-      glow.current.position.y = (-y - lift) / (sc * grow * lodScale()) + 0.03;
+      glow.current.position.y = (-y - lift) / (sc * grow) + 0.03;
       const shimmer = thinking && !reduced ? 1 + 0.08 * Math.sin(time * 17) + 0.05 * Math.sin(time * 29) : 1;
       glow.current.scale.setScalar((2.3 + en * 0.5) * shimmer);
       mats.glow.color.copy(tint).multiplyScalar((0.05 + Math.min(lvl, 2.4) * 0.12) * pres);

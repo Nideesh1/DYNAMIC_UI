@@ -1,16 +1,17 @@
 /**
- * Runs = production lines: a marked lane on the floor (hazard-dashed edges, faint run tint), labelled with the topic.
+ * Run marker slot: a run = a production line (the kit run frame, x = u along the line, z = v across it toward the
+ * camera), sized to the run's footprint: a marked lane on the floor (hazard-dashed edges, faint run tint), labelled with the topic.
  * Hatchet runs (run.hasSteps) split the line into plan / research / write stages: each stage has a signpost with a
  * status lamp; the running stage floor glows with marching chevrons; a handoff sweeps light into the next stage.
  */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, useWorld, world, type Run, type StepName } from "../shared/world";
+import { RUN_LINGER_MS, STEPS, useWorld, world, type Run } from "../shared/world";
+import { fit, kit, runLocal, type KitRun, type RunSlotProps } from "../shared/kit";
 import { BOX, CYL, emissive, glowSprite } from "./fx";
-import { AMBER, clamp01, displayRow, easeOut, LANE_W, LANE_X0, LANE_X1, rowZ, reduced, rgb, runShift, STAGE_X, WHITE, YELLOW } from "./layout";
-import { isRunExpanded, lod } from "../shared/lod";
+import { AMBER, clamp01, easeOut, laneSpan, reduced, rgb, stageBounds, stageMid, WHITE, YELLOW, type LaneSpan } from "./layout";
 
 const vert = /* glsl */ `
 varying vec2 vUv;
@@ -51,22 +52,28 @@ void main() {
 const LANE_PLANE = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 const POLE = new THREE.MeshStandardMaterial({ color: "#2a2320", metalness: 0.6, roughness: 0.4 });
 const STATE_N: Record<string, number> = { queued: 0, running: 1, done: 2, failed: 3 };
-const mid = (s: StepName) => (STAGE_X[s][0] + STAGE_X[s][1]) / 2;
+const UPV = new THREE.Vector3(0, 1, 0);
+const _x = new THREE.Vector3();
+const _z = new THREE.Vector3();
+const _d = new THREE.Vector3();
+const _m = new THREE.Matrix4();
+const B = { b1: 0, b2: 0 };
 
-function Lane({ run }: { run: Run }) {
-  const row = displayRow(run.id); // re-evaluated on each list refresh (lod.version)
-  const z = useMemo(() => rowZ(row), [row, lod.grouped]); // eslint-disable-line react-hooks/exhaustive-deps
-  const sx = useMemo(() => runShift(run.id), [run.id]);
-  const x0 = LANE_X0 + sx;
-  const len = LANE_X1 - LANE_X0;
+export function Line({ run: kr }: RunSlotProps) {
+  const run = kr.run ?? world.runs.get(kr.id);
+  if (!run) return null;
+  return <Lane kr={kr} run={run} />;
+}
+
+function Lane({ kr, run }: { kr: KitRun; run: Run }) {
   const mat = useMemo(
     () =>
       new THREE.ShaderMaterial({
         vertexShader: vert,
         fragmentShader: frag,
         uniforms: {
-          uLen: { value: len },
-          uW: { value: LANE_W },
+          uLen: { value: 1 },
+          uW: { value: 1 },
           uTime: { value: 0 },
           uOp: { value: 0 },
           uSteps: { value: 0 },
@@ -75,34 +82,69 @@ function Lane({ run }: { run: Run }) {
           uRun: { value: rgb(run.color).clone() },
           uEdge: { value: AMBER.clone() },
           uStage: { value: new THREE.Vector3() },
-          uZ1: { value: new THREE.Vector2((STAGE_X.plan[1] - LANE_X0) / len, (STAGE_X.research[1] - LANE_X0) / len) },
+          uZ1: { value: new THREE.Vector2(0.33, 0.66) },
         },
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       }),
-    [len, run.color],
+    [run.color],
   );
   useEffect(() => () => mat.dispose(), [mat]);
   const lamps = useMemo(() => STEPS.map(() => ({ lamp: emissive(AMBER), glow: glowSprite(AMBER) })), []);
+  const frame = useRef<THREE.Group>(null);
+  const floor = useRef<THREE.Mesh>(null);
   const signs = useRef<(THREE.Group | null)[]>([]);
+  const labelG = useRef<THREE.Group>(null);
+  // eased line extent (the footprint jumps when machines join/leave)
+  const span = useMemo<LaneSpan & { init: boolean }>(() => ({ u0: 0, u1: 0, v0: 0, v1: 0, init: false }), []);
+  const want = useMemo<LaneSpan>(() => ({ u0: 0, u1: 0, v0: 0, v1: 0 }), []);
   useFrame(({ clock }, dt) => {
+    const g = frame.current;
+    if (!g) return;
+    _x.copy(kr.side);
+    _z.copy(kr.axis);
+    if (_d.crossVectors(_x, UPV).dot(_z) < 0) _z.negate(); // keep the basis right-handed
+    _m.makeBasis(_x, UPV, _z);
+    g.quaternion.setFromRotationMatrix(_m);
+    g.position.copy(kr.origin).addScaledVector(kr.side, -kr.cu).addScaledVector(kr.axis, -kr.cv);
+    const flip = _z.dot(kr.axis) < 0 ? -1 : 1;
+    laneSpan(kr, want);
+    const ek = span.init ? 1 - Math.exp(-Math.min(0.1, dt) / 0.2) : 1;
+    span.init = true;
+    span.u0 += (want.u0 - span.u0) * ek;
+    span.u1 += (want.u1 - span.u1) * ek;
+    span.v0 += (want.v0 - span.v0) * ek;
+    span.v1 += (want.v1 - span.v1) * ek;
+    const len = span.u1 - span.u0;
+    const W = span.v1 - span.v0;
+    const front = (flip > 0 ? span.v1 : -span.v0) + 0.15;
+    stageBounds(B);
+    floor.current?.position.set(span.u0 + len / 2, 0.004, ((span.v0 + span.v1) / 2) * flip);
+    floor.current?.scale.set(len, 1, W);
+    // line name sign above the start of the line (behind it, in the lanes preset's label room)
+    labelG.current?.position.set(span.u0 + 0.2, 0.2, (flip > 0 ? span.v0 : -span.v1) - 0.25);
+
     const now = performance.now();
     const grow = easeOut((now - run.startedAt) / 900);
     const fade = run.endedAt ? clamp01(1 - (now - run.endedAt - (RUN_LINGER_MS - 2500)) / 2500) : 1;
     const u = mat.uniforms;
+    u.uLen.value = len;
+    u.uW.value = W;
+    u.uZ1.value.set((B.b1 - span.u0) / len, (B.b2 - span.u0) / len);
     u.uOp.value = grow * fade;
     u.uTime.value += reduced ? 0 : dt;
     u.uSteps.value = run.hasSteps ? 1 : 0;
     u.uStage.value.set(STATE_N[run.steps.plan], STATE_N[run.steps.research], STATE_N[run.steps.write]);
     const ha = (now - run.handoffAt) / 1000;
     if (run.handoffAt && ha < 1.4) {
-      const a = (mid(run.handoffFrom) - LANE_X0) / len;
-      const b = (mid(run.handoffTo) - LANE_X0) / len;
+      const a = (stageMid(run.handoffFrom, span, B) - span.u0) / len;
+      const b = (stageMid(run.handoffTo, span, B) - span.u0) / len;
       u.uSweep.value = a + (b - a) * easeOut(ha / 1.1);
       u.uSweepK.value = 1 - clamp01((ha - 0.9) / 0.5);
     } else u.uSweepK.value = 0;
     const t = reduced ? 0 : clock.elapsedTime;
+    const sc = Math.max(0.75, fit.spread * 0.9);
     for (let k = 0; k < STEPS.length; k++) {
       const st = STEPS[k];
       const state = run.steps[st];
@@ -111,60 +153,61 @@ function Lane({ run }: { run: Run }) {
       const lvl = state === "running" ? 1.2 + 0.4 * Math.sin(t * 5) : state === "done" ? 0.55 : state === "failed" ? 1 : 0.12;
       L.lamp.color.copy(c).multiplyScalar(lvl * grow * fade);
       L.glow.color.copy(c).multiplyScalar(lvl * 0.35 * grow * fade);
-      const g = signs.current[k];
-      if (g) g.visible = run.hasSteps && grow * fade > 0.02;
+      const sg = signs.current[k];
+      if (sg) {
+        sg.visible = run.hasSteps && grow * fade > 0.02;
+        const x0 = k === 0 ? span.u0 + 1.2 : k === 1 ? B.b1 + 0.6 : B.b2 + 0.6;
+        sg.position.set(x0, 0, front);
+        sg.scale.setScalar(sc);
+      }
     }
   });
   return (
-    <group>
-      <mesh geometry={LANE_PLANE} material={mat} position={[x0 + len / 2, 0.004, z]} scale={[len, 1, LANE_W]} />
+    <group ref={frame}>
+      <mesh ref={floor} geometry={LANE_PLANE} material={mat} />
       {STEPS.map((st, k) => (
-        <group key={st} ref={(g) => void (signs.current[k] = g)} position={[STAGE_X[st][0] + sx + (st === "plan" ? 2.2 : 0.6), 0, z + LANE_W / 2 + 0.15]} visible={false}>
+        <group key={st} ref={(g) => void (signs.current[k] = g)} visible={false}>
           <mesh geometry={CYL} material={POLE} scale={[0.06, 1.6, 0.06]} position-y={0.8} />
           <mesh geometry={BOX} material={POLE} scale={[0.5, 0.18, 0.08]} position-y={1.55} />
           <mesh geometry={CYL} material={lamps[k].lamp} scale={[0.1, 0.14, 0.1]} position-y={1.72} />
           <sprite material={lamps[k].glow} scale={1.2} position-y={1.72} />
+          {run.hasSteps ? <StageLabel run={run} k={k} /> : null}
         </group>
       ))}
-      <RunLabel run={run} pos={[x0 - 0.4, 0.2, z]} />
-      {run.hasSteps ? <StageLabels run={run} z={z} sx={sx} /> : null}
+      <group ref={labelG}>
+        <RunLabel run={run} />
+      </group>
     </group>
   );
 }
 
-function StageLabels({ run, z, sx }: { run: Run; z: number; sx: number }) {
+function StageLabel({ run, k }: { run: Run; k: number }) {
   useWorld();
+  const st = STEPS[k];
+  const state = run.steps[st];
   return (
-    <>
-      {STEPS.map((st) => {
-        const state = run.steps[st];
-        return (
-          <Label3D
-            key={st}
-            position={[STAGE_X[st][0] + sx + (st === "plan" ? 2.2 : 0.6), 2.25, z + LANE_W / 2 + 0.15]}
-            text={state === "done" ? `${st} · done` : st}
-            color={state === "running" ? "#ffd23f" : state === "done" ? "#e7e5e4" : state === "failed" ? "#ff2d2d" : "#7c5a2a"}
-            uppercase
-            letterSpacing={0.12}
-            size={0.2}
-            opacity={state === "queued" ? 0.55 : 1}
-            fadeMs={300}
-            pxRange={[7, 10.5]}
-          />
-        );
-      })}
-    </>
+    <Label3D
+      position={[0, 2.25, 0]}
+      text={state === "done" ? `${st} · done` : st}
+      color={state === "running" ? "#ffd23f" : state === "done" ? "#e7e5e4" : state === "failed" ? "#ff2d2d" : "#7c5a2a"}
+      uppercase
+      letterSpacing={0.12}
+      size={0.2}
+      opacity={state === "queued" ? 0.55 : 1}
+      fadeMs={300}
+      pxRange={[7, 10.5]}
+    />
   );
 }
 
-function RunLabel({ run, pos }: { run: Run; pos: [number, number, number] }) {
+function RunLabel({ run }: { run: Run }) {
   useWorld();
   const done = run.status !== "started";
   return (
     <Label3D
-      position={pos}
-      anchorX="right"
-      textAlign="right"
+      anchorX="left"
+      anchorY="bottom"
+      textAlign="left"
       plate="box"
       text={run.topic}
       secondary={runStepsLine(run, { base: "#a8a29e", current: "#ffd23f", done: "#e7e5e4" }, ["line running…", "line complete", "line halted"])}
@@ -173,31 +216,20 @@ function RunLabel({ run, pos }: { run: Run; pos: [number, number, number] }) {
       maxWidth={10}
       opacity={done ? 0.55 : 1}
       fadeMs={400}
-      pxRange={[10, 14]}
+      fit
+      pxRange={[8, 14]}
     />
   );
 }
 
-export function Lines() {
-  const [list, setList] = useState<Run[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.runs;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // collapsed runs are drawn by their lane's cluster
-      setList([...m.values()].filter((r) => isRunExpanded(r.id)));
-    }
-  });
-  return (
-    <>
-      {list.map((r) => (
-        <Lane key={r.id} run={r} />
-      ))}
-    </>
-  );
+const _p = new THREE.Vector3();
+const SPAN: LaneSpan = { u0: 0, u1: 0, v0: 0, v1: 0 };
+/** keep each line's floor + its name sign (above the line start) in view */
+export function lineExtents(visit: (p: THREE.Vector3, r: number) => void) {
+  for (const r of kit.runs.values()) {
+    laneSpan(r, SPAN);
+    visit(runLocal(r, SPAN.u0 + 3, SPAN.v0 - 1.4, _p), 1.6);
+    visit(runLocal(r, SPAN.u1, SPAN.v1, _p), 0.6);
+    visit(runLocal(r, SPAN.u0, SPAN.v1, _p), 0.6);
+  }
 }

@@ -31,6 +31,17 @@ Open **http://localhost:8100/neural** and run your agents. No agents yet? **http
 Already sending traces to Langfuse / LangSmith / a collector? Nothing changes: `watch()` adds AgentGlow alongside.
 Any OTel exporter can also send OTLP/HTTP straight to `http://localhost:8100/v1/traces`.
 
+**Hand-written agent loop, no framework?** Trace it yourself (sync `with` or `async with`):
+```python
+async with agentglow.run(topic="Inbound call", scope=clinic_id):
+    async with agentglow.agent("receptionist") as a:
+        a.llm(model="gpt-realtime", tokens_in=812, tokens_out=64)
+        with agentglow.tool("book_appointment", args={"slot": "Tue 10:30"}): ...
+        a.final("Booked Tue 10:30")
+```
+Nested `agentglow.agent(...)` = subagent; also `agentglow.mcp(...)`, `agentglow.graph(...)`, `@agentglow.traced_agent`,
+`@agentglow.traced_tool`. See [examples/custom-loop](examples/custom-loop).
+
 ## 15 themes
 
 | | | |
@@ -67,16 +78,41 @@ import { AgentScene } from "agentglow";
 ```
 Works in Next.js App Router out of the box (the package is `"use client"`). See [examples/react-embed](examples/react-embed).
 
+## Show each user only their agents
+
+Tag runs with a scope where your agents run:
+```python
+import agentglow
+agentglow.watch()
+with agentglow.scope(user.id):        # every span inside (incl. asyncio tasks) carries agentglow.scope
+    graph.invoke({"messages": [...]})
+```
+Start the server with a secret (`agentglow serve --secret $AGENTGLOW_SECRET`), mint a short-lived token in your
+backend, and pass it to the scene. The token alone decides what the viewer sees:
+```python
+token = agentglow.make_token(os.environ["AGENTGLOW_SECRET"], scope=user.id, ttl_s=3600)  # no scope/run = admin
+```
+```tsx
+<AgentScene source="https://agentglow.yourco.com" scope={user.id} token={token} />
+```
+The token travels in an `Authorization: Bearer` header, never in the URL. Not using Python on the backend? The format
+is a 3-line HMAC, see [docs/SPEC.md "Scopes & auth"](docs/SPEC.md#scopes--auth). Without a secret (dev), `scope`
+alone filters, with no auth.
+
 ## What shows up
 
 | Your system | In the scene |
 |---|---|
 | agents / subagents | shapes that spawn, think, wait and exit - subagents smaller, linked to their parent with directional edges |
 | LLM calls | pulses sized by tokens |
-| tool & MCP calls | MCP server + its backends (Postgres, Snowflake, Spark…) light up, with data-flow arrows |
-| DB / graph queries (`db.system`) | knowledge-graph nodes light up on reads and writes (live from FalkorDB if configured) |
+| tool & MCP calls | MCP server + its backends (Postgres, Snowflake, Spark…) appear at the side when first called, with data-flow arrows; idle ones fade away |
+| DB / graph queries (`db.system`) | a knowledge graph appears at the side once agents read or write it (real nodes from FalkorDB if configured) |
 | handoffs | agents chained with a message along the edge |
 | Hatchet workflow runs | runs and their step-by-step progress |
+
+**Agents are always the center.** Graphs, databases and MCP servers are side resources that only show up when used, and the camera
+frames everything calmly: one smooth zoom per burst of spawns, never a jittery in-and-out. Stats sit in a slim top bar;
+agents, events and the selected agent live in a collapsible right sidebar.
 
 **Hundreds of agents?** Above 12 live agents, AgentGlow auto-groups older runs into glowing clusters
 ("35 runs · 84 agents") and keeps the newest ~10 in full detail - click a cluster to expand it. Stays at ~60 fps with 500 live agents.
@@ -91,8 +127,9 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [quickstart](examples/quickstart) | 40-line deepagents researcher with two subagents - the "just show me" path |
 | [langgraph](examples/langgraph) | LangGraph supervisor with worker agents (`langgraph-supervisor` works too) |
 | [openai-agents](examples/openai-agents) | OpenAI Agents SDK: handoffs + agent-as-tool |
+| [custom-loop](examples/custom-loop) | no framework: a hand-written voice-call loop traced with the manual API (runs without an LLM key) |
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
-| [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks - no code |
+| [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts) - no code |
 | [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |
 
 Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
@@ -109,6 +146,7 @@ Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT
 
 Run **one** `agentglow serve` per environment (Docker image / k8s Deployment with `replicas: 1`) and point every app
 pod at it: `agentglow.watch("http://agentglow:8100")`. If it's down, your app is unaffected - spans are just dropped.
+Lock down ingestion with `AGENTGLOW_INGEST_KEY` on the server and `AGENTGLOW_API_KEY` (same value) on producers.
 
 ## Develop
 
@@ -127,5 +165,8 @@ uv build --package agentglow --out-dir dist         # sdist + wheel
 | `backend/` | Python package `agentglow`: server, `watch()`, OTel → agent mapping, Claude Code hooks |
 | `frontend/` | the 3D scenes; npm package `agentglow` + the app bundled into the Python package |
 | `examples/` | real agent stacks instrumented with one line |
+
+Privacy: every ingestion path drops identity attributes (emails, user/account/org ids) and raw user prompts and
+redacts secret-looking values before anything reaches the stream (see [docs/SPEC.md](docs/SPEC.md#privacy)).
 
 MIT licensed.

@@ -7,8 +7,9 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type McpResource, type McpServer, type ResourceKind } from "../shared/world";
-import { ARROW_GEO, ArrowPool, SPHERE_GEO, TUBE_GEO, additiveBasic, placeOnCurve, reduced, backendPos, bezier, bowControl, clamp01, easeInOut, easeOut, glowSpriteMaterial, satPos, somaPos, tubeMaterial } from "./fx";
+import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
+import { ARROW_GEO, ArrowPool, SPHERE_GEO, TUBE_GEO, additiveBasic, placeOnCurve, reduced, bezier, bowControl, clamp01, easeInOut, easeOut, glowSpriteMaterial, tubeMaterial } from "./fx";
 
 const AMBER = new THREE.Color("#fbbf24");
 const RED = new THREE.Color("#ff2d3d");
@@ -42,18 +43,17 @@ function kindParts(kind: ResourceKind): Part[] {
   }
 }
 
-function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number; n: number }) {
-  const pos = useMemo(() => backendPos(srv.slot, k, n, new THREE.Vector3()), [srv.slot, k, n]);
-  const sp = useMemo(() => satPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+/** Backend slot: a backend node behind an MCP server, wired to it. */
+export function Backend({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
   const parts = useMemo(() => kindParts(res.kind), [res.kind]);
   const col = useMemo(() => new THREE.Color(srv.color).lerp(WHITE, 0.35), [srv.color]);
-  const m = useMemo(() => {
-    const edge = tubeMaterial(srv.color, 0.035, 1);
-    edge.uniforms.uP0.value.copy(sp);
-    edge.uniforms.uP2.value.copy(pos);
-    edge.uniforms.uP1.value.copy(sp).add(pos).multiplyScalar(0.5);
-    return { edge, arrow: additiveBasic(col), fill: additiveBasic(col), line: new THREE.LineBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), halo: glowSpriteMaterial(col) };
-  }, [srv.color, sp, pos, col]);
+  const m = useMemo(
+    () => ({ edge: tubeMaterial(srv.color, 0.035, 1), arrow: additiveBasic(col), fill: additiveBasic(col), line: new THREE.LineBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), halo: glowSpriteMaterial(col) }),
+    [srv.color, col],
+  );
+  const at = useRef<THREE.Group>(null);
   const g = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
   const arrow = useRef<THREE.Mesh>(null);
@@ -61,6 +61,12 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
   const label = useRef<Label3DHandle>(null);
   const lastText = useRef("");
   useFrame(({ clock }) => {
+    // kit places server + backend (they ease when the periphery re-lays out)
+    const eu = m.edge.uniforms;
+    eu.uP0.value.copy(mcp.pos);
+    eu.uP2.value.copy(backend.pos);
+    eu.uP1.value.copy(mcp.pos).add(backend.pos).multiplyScalar(0.5);
+    at.current?.position.copy(backend.pos);
     const now = performance.now();
     const busy = res.inflight > 0;
     const act = Math.exp(-((now - res.activeAt) / 1000) * 1.5);
@@ -135,7 +141,7 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
     <>
       <mesh geometry={TUBE_GEO} material={m.edge} frustumCulled={false} />
       <mesh ref={arrow} geometry={ARROW_GEO} material={m.arrow} visible={false} />
-      <group position={pos}>
+      <group ref={at}>
         <sprite ref={halo} material={m.halo} />
         <group ref={g}>
           {parts.map((p, i) => (
@@ -151,22 +157,19 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
   );
 }
 
-function Server({ srv }: { srv: McpServer }) {
-  const pos = useMemo(() => satPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+/** MCP server slot: an octahedral sense organ on the outskirts. */
+export function Server({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
   const col = useMemo(() => new THREE.Color(srv.color), [srv.color]);
   const m = useMemo(
     () => ({ fill: additiveBasic(col), line: new THREE.LineBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), halo: glowSpriteMaterial(col), core: additiveBasic("#fff") }),
     [col],
   );
+  const at = useRef<THREE.Group>(null);
   const g = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
-  const [res, setRes] = useState<McpResource[]>([]);
-  const nRes = useRef(0);
   useFrame(({ clock }) => {
-    if (srv.resources.size !== nRes.current) {
-      nRes.current = srv.resources.size;
-      setRes([...srv.resources.values()]);
-    }
+    at.current?.position.copy(mcp.pos);
     const now = performance.now();
     const busy = srv.inflight > 0;
     const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.5);
@@ -179,20 +182,15 @@ function Server({ srv }: { srv: McpServer }) {
     if (g.current) g.current.rotation.y = clock.elapsedTime * (busy ? 0.7 : 0.12);
   });
   return (
-    <>
-      <group position={pos}>
-        <sprite ref={halo} material={m.halo} />
-        <group ref={g}>
-          <mesh geometry={OCTA} material={m.fill} />
-          <lineSegments geometry={OCTA_EDGES} material={m.line} />
-          <mesh geometry={SPHERE_GEO} material={m.core} scale={0.18} />
-        </group>
-        <Label3D position={[0, 1.35, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.28} pxRange={[9, 13]} />
+    <group ref={at}>
+      <sprite ref={halo} material={m.halo} />
+      <group ref={g}>
+        <mesh geometry={OCTA} material={m.fill} />
+        <lineSegments geometry={OCTA_EDGES} material={m.line} />
+        <mesh geometry={SPHERE_GEO} material={m.core} scale={0.18} />
       </group>
-      {res.map((r, k) => (
-        <Backend key={r.name} srv={srv} res={r} k={k} n={res.length} />
-      ))}
-    </>
+      <Label3D position={[0, 1.35, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.28} pxRange={[9, 13]} />
+    </group>
   );
 }
 
@@ -204,14 +202,15 @@ function Packet({ call }: { call: McpCall }) {
   const head = useRef<THREE.Sprite>(null);
   const s = useMemo(() => ({ a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), h: new THREE.Vector3() }), []);
   useFrame(() => {
-    const sp = somaPos.get(call.instance);
+    const sp = agentLive(call.instance);
+    const sv = serverPos(call.server);
     if (!head.current) return;
-    if (!sp || !srv) {
+    if (!sp || !srv || !sv) {
       head.current.visible = false;
       return;
     }
     s.a.copy(sp);
-    satPos(srv.slot, s.b);
+    s.b.copy(sv);
     bowControl(s.a, s.b, 1.0, s.c);
     // result pulse runs a bit quicker (same timing as the tether's inward pulse)
     const t = clamp01((performance.now() - call.start) / (call.phase === "call" ? call.dur : call.dur * 0.75));
@@ -254,12 +253,13 @@ function Tethers() {
       // mode 0 = request/waiting (x = wait seconds): thin dim dashes flowing OUT to the server, arrow at the server
       // mode 1 = result (x = age 0..1): thicker, bright pulse flowing IN to the agent, arrow at the agent
       if (n >= MAX_T) return;
-      const sp = somaPos.get(instance);
+      const sp = agentLive(instance);
       const srv = world.mcpServers.get(server);
-      if (!sp || !srv) return;
+      const sv = serverPos(server);
+      if (!sp || !srv || !sv) return;
       const { a, b, c, p, col, k } = tmp;
       a.copy(sp);
-      satPos(srv.slot, b);
+      b.copy(sv);
       bowControl(a, b, 1.0, c);
       col.set(srv.color);
       let base: number;
@@ -312,16 +312,12 @@ function Tethers() {
   );
 }
 
+/** Theme extras: MCP call/result packets + pending-call tethers (servers/backends are kit slots). */
 export function Senses() {
-  const [servers, setServers] = useState<McpServer[]>([]);
   const [calls, setCalls] = useState<McpCall[]>([]);
-  const key = useRef({ s: -1, n: -1, first: -1, last: -1 });
+  const key = useRef({ n: -1, first: -1, last: -1 });
   useFrame(() => {
     const k = key.current;
-    if (world.mcpServers.size !== k.s) {
-      k.s = world.mcpServers.size;
-      setServers([...world.mcpServers.values()]);
-    }
     const c = world.mcpCalls;
     const first = c.length ? c[0].id : -1;
     const last = c.length ? c[c.length - 1].id : -1;
@@ -334,9 +330,6 @@ export function Senses() {
   });
   return (
     <>
-      {servers.map((s) => (
-        <Server key={s.name} srv={s} />
-      ))}
       {calls.map((c) => (
         <Packet key={c.id} call={c} />
       ))}

@@ -20,9 +20,13 @@ import { AgentScene } from "agentglow";   // also pulls in agentglow's CSS
 
 `<AgentScene/>` fills its container, so give the container a size (here `.scene { position: fixed; inset: 0 }`).
 Props: `theme` (`neural` · `orbit` · `subway` · `city` · `ocean` · `circuit` · `tunnel` · `flow`), `source`,
-`hud` (default `true`), `sim` (default `false`), `className`, `style`.
+`hud` (default `true`), `sim` (default `false`), `scope`, `run`, `token`, `className`, `style`.
 
 Server on another port/host? `VITE_AGENTGLOW_URL=http://localhost:8124 npm run dev`.
+
+Filtered or authenticated view? `VITE_AGENTGLOW_SCOPE=user-123 VITE_AGENTGLOW_TOKEN=<token> npm run dev` (both
+optional; the token is sent as an `Authorization: Bearer` header, never in a URL). This is only for local testing:
+`VITE_*` values are baked into the bundle, so a real app fetches each user's token from its own backend at runtime.
 
 ## No agents yet?
 

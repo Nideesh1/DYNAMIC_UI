@@ -20,10 +20,12 @@
  */
 import { Text } from "@react-three/drei";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
-import { Suspense, useEffect, useImperativeHandle, useMemo, useRef, type ReactNode, type Ref } from "react";
+import { Suspense, useContext, useEffect, useImperativeHandle, useMemo, useRef, type ReactNode, type Ref } from "react";
 import * as THREE from "three";
 import interUrl from "./fonts/inter-latin-500-normal.woff";
 import monoUrl from "./fonts/jetbrains-mono-latin-500-normal.woff";
+import { fit } from "./kit/fit";
+import { LabelScope, labels, newLabelEntry, registerLabel, unregisterLabel, type LabelKind } from "./kit/labels";
 import { STEPS, useWorld, type Run } from "./world";
 
 // ------------------------------------------------------------------ types
@@ -96,6 +98,13 @@ export interface Label3DProps {
   glow?: number;
   /** thin line from the anchor point (position) to the plate (use with `offset`) */
   leader?: boolean;
+  /** follow the kit's adaptive fit (fit.label): bigger when few agents, smaller when crowded (still within pxRange) */
+  fit?: boolean;
+  /**
+   * screen-space decluttering (kit/labels.ts): the label's priority class. Default: the slot it is rendered in
+   * (agent / run / mcp / backend / graph / cluster / extra). false = never hidden for overlaps.
+   */
+  declutter?: LabelKind | false;
   ref?: Ref<Label3DHandle>;
   /** extra objects in billboard space (decorations) */
   children?: ReactNode;
@@ -139,9 +148,10 @@ const clip = (s: string, n: number) => (n > 0 && s.length > n ? s.slice(0, Math.
 // ------------------------------------------------------------------ shared GPU resources
 const PLANE = new THREE.PlaneGeometry(1, 1);
 const noRaycast = () => {};
+// labels are read like HUD text: never fogged (scene fog would erase far labels on a crowded, zoomed-out stage)
 const TEXT_MAT = {
-  top: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }),
-  depth: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: true, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }),
+  top: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, fog: false, side: THREE.DoubleSide }),
+  depth: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: true, depthWrite: false, toneMapped: false, fog: false, side: THREE.DoubleSide }),
 };
 const PLATE_VERT = /* glsl */ `
 varying vec2 vUv;
@@ -236,7 +246,7 @@ const dimHex = (h: string) => "#" + dimTmp.set(h).lerp(BG, 0.45).getHexString();
 /** Graph/memory caption ("FalkorDB · knowledge graph" when served) - only this re-renders on world changes. */
 export function GraphLabel3D({ prefix = "", suffix = "", ...props }: Omit<Label3DProps, "text"> & { prefix?: string; suffix?: string }) {
   const w = useWorld();
-  return <Label3D {...props} text={prefix + w.graphLabel + suffix} />;
+  return <Label3D declutter="resource" {...props} text={prefix + w.graphLabel + suffix} />;
 }
 
 /** In-scene label. Suspends (renders nothing) only until the bundled font is parsed, once per app. */
@@ -268,6 +278,7 @@ const DEFAULTS = {
   pxRange: [7.5, 15] as [number, number] | null,
   glow: 1,
   leader: false,
+  fit: false,
 };
 
 function Label3DInner(props: Label3DProps) {
@@ -298,6 +309,18 @@ function Label3DInner(props: Label3DProps) {
       wp: new THREE.Vector3(),
       q: new THREE.Quaternion(),
       hasSub: false,
+      /** declutter: eased visibility factor, secondary line dropped, plate rects (billboard units) */
+      dc: 1,
+      subOff: false,
+      W: 0,
+      H: 0,
+      bx: 0,
+      by: 0,
+      W1: 0,
+      H1: 0,
+      bx1: 0,
+      by1: 0,
+      ndc: new THREE.Vector3(),
       keyM: "\u0000",
       keyS: "\u0000",
     }),
@@ -326,7 +349,7 @@ function Label3DInner(props: Label3DProps) {
           uOpacity: { value: 1 },
         },
       }),
-      leader: new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false }),
+      leader: new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false, fog: false }),
     }),
     [],
   );
@@ -352,7 +375,8 @@ function Label3DInner(props: Label3DProps) {
       s.mainColor.copy(s.textCol).multiplyScalar(g);
       s.subColor.copy(s.subCol).multiplyScalar(g);
     };
-    /** size the plate to troika's text bounds; place lines, anchor, leader */
+    /** size the plate to troika's text bounds; place lines, anchor, leader. Also records both plate rects
+     *  (with and without the secondary line) for the declutter pass. */
     const layout = () => {
       const m = main.current;
       if (!m || !plateMesh.current || !body.current) return;
@@ -363,16 +387,28 @@ function Label3DInner(props: Label3DProps) {
       const wM = mb && m.text ? mb[2] - mb[0] : 0;
       const wS = sbb ? sbb[2] - sbb[0] : 0;
       const hM = size * 1.16;
-      const hS = s.hasSub ? subSize() * 1.2 : 0;
-      const gap = s.hasSub ? size * 0.1 : 0;
       const st = STYLE[q.plate];
       const bar = st.bar * size;
       const none = q.plate === "none";
-      const padX = none ? 0 : size * (q.plate === "pill" && !s.hasSub ? 0.6 : 0.5);
       const padY = none ? 0 : size * 0.28;
-      const cw = Math.max(wM, wS);
-      const W = cw + padX * 2 + bar;
-      const H = hM + gap + hS + padY * 2;
+      const ex = q.offset?.[0] ?? 0;
+      const ey = q.offset?.[1] ?? 0;
+      // variant 0: as drawn with the secondary line (if any); variant 1: main line only
+      let W = 0, H = 0, cw = 0, hS = 0, gap = 0;
+      for (let k = 0; k < 2; k++) {
+        const withSub = k === 0 && s.hasSub;
+        const padX = none ? 0 : size * (q.plate === "pill" && !withSub ? 0.6 : 0.5);
+        const c = withSub ? Math.max(wM, wS) : wM;
+        const hs = withSub ? subSize() * 1.2 : 0;
+        const gp = withSub ? size * 0.1 : 0;
+        const w = c + padX * 2 + bar;
+        const h = hM + gp + hs + padY * 2;
+        const bx = ex + (q.anchorX === "left" ? w / 2 : q.anchorX === "right" ? -w / 2 : 0);
+        const by = ey + (q.anchorY === "bottom" ? h / 2 : q.anchorY === "top" ? -h / 2 : 0);
+        if (k === 0) (s.W = w), (s.H = h), (s.bx = bx), (s.by = by);
+        else (s.W1 = s.hasSub ? w : 0), (s.H1 = h), (s.bx1 = bx), (s.by1 = by);
+        if ((k === 0) === !(s.hasSub && s.subOff)) (W = w), (H = h), (cw = c), (hS = hs), (gap = gp);
+      }
       const u = mats.plate.uniforms;
       (u.uSize.value as THREE.Vector2).set(W, H);
       u.uRadius.value = Math.min(H * st.round, H * 0.5);
@@ -384,9 +420,10 @@ function Label3DInner(props: Label3DProps) {
       const tx = q.textAlign === "left" ? -cw / 2 + bar / 2 : q.textAlign === "right" ? cw / 2 + bar / 2 : bar / 2;
       const yM = H / 2 - padY - hM / 2;
       m.position.set(tx, yM, 0.001);
-      sub.current?.position.set(tx, yM - hM / 2 - gap - hS / 2, 0.001);
-      const ex = q.offset?.[0] ?? 0;
-      const ey = q.offset?.[1] ?? 0;
+      if (sub.current) {
+        sub.current.position.set(tx, yM - hM / 2 - gap - hS / 2, 0.001);
+        sub.current.visible = s.hasSub && !s.subOff;
+      }
       body.current.position.set(ex + (q.anchorX === "left" ? W / 2 : q.anchorX === "right" ? -W / 2 : 0), ey + (q.anchorY === "bottom" ? H / 2 : q.anchorY === "top" ? -H / 2 : 0), 0);
       const ld = leaderMesh.current;
       if (ld) {
@@ -417,7 +454,7 @@ function Label3DInner(props: Label3DProps) {
         s.keyS = ks;
         const ss = clip(fs.text, n ? Math.round((n * q.size) / subSize()) : 0);
         s.hasSub = !!ss;
-        sm.visible = s.hasSub;
+        sm.visible = s.hasSub && !s.subOff;
         sm.text = ss;
         sm.colorRanges = fs.ranges;
         sm.sync();
@@ -476,6 +513,18 @@ function Label3DInner(props: Label3DProps) {
     [api, s],
   );
 
+  // declutter registry entry (kind from the slot this label renders in, unless overridden)
+  const scope = useContext(LabelScope);
+  const entry = useMemo(
+    () => (p.declutter === false ? null : newLabelEntry(p.declutter ?? scope.kind, scope.agent, p.size)),
+    [p.declutter, scope, p.size],
+  );
+  useEffect(() => {
+    if (!entry) return;
+    registerLabel(entry);
+    return () => unregisterLabel(entry);
+  }, [entry]);
+
   useFrame(({ camera, size: vp }, dt) => {
     const o = outer.current;
     const b = bb.current;
@@ -488,29 +537,75 @@ function Label3DInner(props: Label3DProps) {
         if (Math.abs(s.target - s.cur) < 0.004) s.cur = s.target;
       }
     }
+    // declutter: ease toward the pass's verdict; apply a dropped / restored secondary line
+    const e = entry;
+    if (e) {
+      const want = labels.active ? e.show : 1;
+      s.dc += (want - s.dc) * Math.min(1, dt / 0.12);
+      if (Math.abs(want - s.dc) < 0.01) s.dc = want;
+      const off = labels.active ? e.subOff : false;
+      if (off !== s.subOff && s.hasSub) (s.subOff = off), api.layout();
+      e.live = false;
+    }
+    if (e) e.drawn = false;
     if (s.cur <= 0.004 || !o.visible) {
       b.visible = false;
       return;
     }
-    b.visible = true;
     // billboard: undo the parents' world rotation, then face the camera
     o.getWorldPosition(s.wp);
     o.getWorldQuaternion(s.q);
-    b.quaternion.copy(s.q.invert()).multiply(camera.quaternion);
-    // world size → clamp to a css-px range; undo parent scale so `size` stays world units
+    // world size -> clamp to a css-px range; undo parent scale so `size` stays world units
     const dist = s.wp.distanceTo(camera.position);
-    let sc = 1;
+    // kit fit: world size follows fit.label (few agents = bigger labels), then the px clamp applies
+    const fk = q.fit ? fit.label : 1;
+    let sc = fk;
+    const pc = camera as THREE.PerspectiveCamera;
+    const oc = camera as THREE.OrthographicCamera;
+    const worldPerPx = pc.isPerspectiveCamera
+      ? (2 * dist * Math.tan(THREE.MathUtils.degToRad(pc.fov) / 2)) / (pc.zoom * vp.height)
+      : (oc.top - oc.bottom) / (oc.zoom * vp.height);
     if (q.pxRange) {
-      const pc = camera as THREE.PerspectiveCamera;
-      const oc = camera as THREE.OrthographicCamera;
-      const worldPerPx = pc.isPerspectiveCamera
-        ? (2 * dist * Math.tan(THREE.MathUtils.degToRad(pc.fov) / 2)) / (pc.zoom * vp.height)
-        : (oc.top - oc.bottom) / (oc.zoom * vp.height);
-      const px = q.size / Math.max(worldPerPx, 1e-6);
-      sc = THREE.MathUtils.clamp(px, q.pxRange[0], q.pxRange[1]) / px;
+      const px = (q.size * fk) / Math.max(worldPerPx, 1e-6);
+      const k = labels.pxk;
+      sc = (THREE.MathUtils.clamp(px, q.pxRange[0] * k, q.pxRange[1] * k) / px) * fk;
     }
+    // project the plate for the declutter pass (only on pass frames, only when really on screen)
+    if (e && labels.due && visibleChain(o)) {
+      s.ndc.copy(s.wp).project(camera);
+      if (s.ndc.z < 1 && s.ndc.z > -1) {
+        const kpx = sc / Math.max(worldPerPx, 1e-6);
+        const cx = ((s.ndc.x + 1) / 2) * vp.width;
+        const cy = ((1 - s.ndc.y) / 2) * vp.height;
+        e.x = cx + s.bx * kpx;
+        e.y = cy - s.by * kpx;
+        e.w = s.W * kpx;
+        e.h = s.H * kpx;
+        e.x1 = cx + s.bx1 * kpx;
+        e.y1 = cy - s.by1 * kpx;
+        e.w1 = s.W1 * kpx;
+        e.h1 = s.H1 * kpx;
+        e.live = e.w > 1 && e.x + e.w / 2 > 0 && e.x - e.w / 2 < vp.width && e.y + e.h / 2 > 0 && e.y - e.h / 2 < vp.height;
+        e.clip = e.x - e.w / 2 < -2 || e.x + e.w / 2 > vp.width + 2 || e.y - e.h / 2 < -2 || e.y + e.h / 2 > vp.height + 2;
+        e.ax = s.wp.x;
+        e.ay = s.wp.y;
+        e.az = s.wp.z;
+        e.ox0 = e.x - e.w / 2 - cx;
+        e.ox1 = e.x + e.w / 2 - cx;
+        e.oy0 = e.y - e.h / 2 - cy;
+        e.oy1 = e.y + e.h / 2 - cy;
+        if (e.w > 1) e.seen = performance.now();
+      }
+    }
+    const a = s.cur * s.dc * (1 - q.depthFade * THREE.MathUtils.smoothstep(dist, q.fadeRange[0], q.fadeRange[1]));
+    if (a <= 0.004) {
+      b.visible = false;
+      return;
+    }
+    b.visible = true;
+    if (e) e.drawn = a > 0.05 && visibleChain(o.parent);
+    b.quaternion.copy(s.q.invert()).multiply(camera.quaternion);
     b.scale.setScalar(sc / (o.matrixWorld.getMaxScaleOnAxis() || 1));
-    const a = s.cur * (1 - q.depthFade * THREE.MathUtils.smoothstep(dist, q.fadeRange[0], q.fadeRange[1]));
     mats.plate.uniforms.uOpacity.value = a;
     mats.leader.opacity = a * 0.65;
     if (main.current) main.current.fillOpacity = a;
@@ -570,6 +665,12 @@ function Label3DInner(props: Label3DProps) {
       </group>
     </group>
   );
+}
+
+/** the object and all its ancestors are visible (a label under a hidden group takes no screen room) */
+function visibleChain(o: THREE.Object3D | null) {
+  for (; o; o = o.parent) if (!o.visible) return false;
+  return true;
 }
 
 function stripUndef<T extends object>(o: T): T {

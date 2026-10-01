@@ -143,7 +143,14 @@ export const world = {
   instances: new Map<string, Instance>(),
   comets: [] as Comet[],
   flares: [] as Flare[],
+  /**
+   * MCP servers agents have CALLED (an `mcp` event). Registration alone (`mcp_register`) does not add one here:
+   * it only fills mcpRegistry (names / backend kinds) so a newly used server looks right immediately.
+   * Visibility over time: mcpWanted(srv) (shown while used, hidden after MCP_IDLE_MS idle).
+   */
   mcpServers: new Map<string, McpServer>(),
+  /** registered (not necessarily used) MCP servers: server -> backend name -> kind */
+  mcpRegistry: new Map<string, Map<string, ResourceKind>>(),
   mcpCalls: [] as McpCall[],
   /** in-flight MCP calls keyed `${instance}|${server}|${tool}`; resolvedAt kept briefly for a "snap back" effect */
   mcpPending: new Map<string, McpPending>(),
@@ -155,12 +162,25 @@ export const world = {
   mode: "connecting" as "connecting" | "sim" | "live",
   /** label for the graph/memory structure: names the DB only when the server provides a real graph */
   graphLabel: "knowledge graph",
+  /**
+   * True once this session USES a knowledge graph: a `graph` read/write event arrived, or sim mode (the
+   * simulator emits graph events). A served /live/graph sample alone does not flip it (it only supplies the
+   * real nodes to draw once the graph is used). Sticky for the session. When false, scenes draw
+   * no graph centerpiece and let the agents take the center. Use `graphMix()` in useFrame for a smooth 0..1.
+   */
+  hasGraph: false,
+  /** performance.now() when hasGraph flipped true (drives the fade-in / layout ease) */
+  hasGraphAt: 0,
   focus: null as string | null, // instance id most recently active
   focusAt: 0,
+  /** last `task` / `Agent` tool call (performance.now()): a subagent is about to spawn (FitCamera batches it) */
+  spawnHintAt: 0,
   /** exited instances kept for the agent panel after their shape fades (newest last, capped) */
   archive: new Map<string, Instance>(),
   /** instance selected in the agent panel or by clicking a shape */
   selected: null as string | null,
+  /** the server answered 401 for this scope/run/token (the HUD shows a notice; no simulator fallback) */
+  unauthorized: false,
 };
 const ARCHIVE_MAX = 500;
 
@@ -307,6 +327,7 @@ export function apply(ev: WorldEvent) {
       break;
     case "tool": {
       world.stats.toolCalls++;
+      if (/^(task|agent)$/i.test(ev.tool)) world.spawnHintAt = now;
       const i = world.instances.get(ev.id);
       if (i) {
         i.pulse = Math.max(i.pulse, 0.5);
@@ -316,18 +337,17 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "graph":
+      setHasGraph(true, false);
       world.instances.get(ev.id)?.nodes && ev.nodes.forEach((n) => world.instances.get(ev.id)!.nodes.add(n));
       for (const n of ev.nodes.slice(0, 20)) world.flares.push({ id: ++seq, run: ev.run_id, instance: ev.id, node: n, op: ev.op, start: now });
       if (ev.op === "read") world.stats.graphReads += ev.nodes.length;
       else world.stats.graphWrites += ev.nodes.length;
       break;
     case "mcp_register": {
-      let srv = world.mcpServers.get(ev.server);
-      if (!srv) {
-        srv = { name: ev.server, color: MCP_COLORS[ev.server] ?? "#94a3b8", slot: world.mcpServers.size, activeAt: 0, calls: 0, inflight: 0, resources: new Map() };
-        world.mcpServers.set(ev.server, srv);
-      }
-      for (const r of ev.resources) if (!srv.resources.has(r.name)) srv.resources.set(r.name, { name: r.name, kind: r.kind, activeAt: 0, inflight: 0, calls: 0 });
+      // topology only: remember names/kinds; the server is drawn once an agent actually calls it
+      let reg = world.mcpRegistry.get(ev.server);
+      if (!reg) world.mcpRegistry.set(ev.server, (reg = new Map()));
+      for (const r of ev.resources) if (!reg.has(r.name)) reg.set(r.name, r.kind);
       break;
     }
     case "mcp": {
@@ -341,7 +361,7 @@ export function apply(ev: WorldEvent) {
       if (ev.resource) {
         res = srv.resources.get(ev.resource);
         if (!res) {
-          res = { name: ev.resource, kind: ev.resource_kind ?? "api", activeAt: now, inflight: 0, calls: 0 };
+          res = { name: ev.resource, kind: ev.resource_kind ?? world.mcpRegistry.get(ev.server)?.get(ev.resource) ?? "api", activeAt: now, inflight: 0, calls: 0 };
           srv.resources.set(ev.resource, res);
         }
         res.activeAt = now;
@@ -471,8 +491,81 @@ export function setGraphLabel(label: string) {
   notify();
 }
 
+/** The server refused this scope/run/token (401). */
+export function setUnauthorized(v: boolean) {
+  if (world.unauthorized === v) return;
+  world.unauthorized = v;
+  notify();
+}
+
+/** Forget every run, agent and stat (a new connection with a different scope/run filter starts clean). */
+export function resetWorld() {
+  world.runs.clear();
+  world.instances.clear();
+  world.comets.length = 0;
+  world.flares.length = 0;
+  world.mcpServers.clear();
+  world.mcpRegistry.clear();
+  world.mcpCalls.length = 0;
+  world.mcpPending.clear();
+  world.mcpResolved.length = 0;
+  world.ticker.length = 0;
+  for (const k of Object.keys(world.stats) as (keyof typeof world.stats)[]) world.stats[k] = 0;
+  world.lastFinal = "";
+  world.simulated = false;
+  world.mode = "connecting";
+  world.focus = null;
+  world.focusAt = 0;
+  world.spawnHintAt = 0;
+  world.archive.clear();
+  world.selected = null;
+  world.unauthorized = false;
+  world.hasGraph = false;
+  world.hasGraphAt = 0;
+  notify();
+}
+
 export function setMode(m: "sim" | "live") {
   world.mode = m;
   world.simulated = m === "sim";
+  if (m === "sim") setHasGraph(true, false);
   notify();
+}
+
+/** Mark that this session has a knowledge graph (sticky: once true it stays true). */
+export function setHasGraph(v: boolean, doNotify = true) {
+  if (!v || world.hasGraph) return;
+  world.hasGraph = true;
+  // sim starts with a graph: no fade, it is simply there from the first frame
+  world.hasGraphAt = world.mode === "sim" ? -1e9 : performance.now();
+  if (doNotify) notify();
+}
+
+/** An MCP server with no calls for this long (and none in flight) fades out; the next call fades it back in. */
+export const MCP_IDLE_MS = 90_000;
+/** Should this MCP server (and its used backends) be drawn now? Shared "only show resources while used" rule. */
+export function mcpWanted(srv: McpServer, now = performance.now()): boolean {
+  return srv.calls > 0 && (srv.inflight > 0 || now - srv.activeAt < MCP_IDLE_MS);
+}
+
+/** How long the side graph fades in after hasGraph flips true (ms). */
+export const GRAPH_FADE_MS = 1800;
+
+/**
+ * 0..1 graph presence for useFrame: 0 = no graph (agents take the center), 1 = graph fully shown.
+ * Eases (smoothstep) over GRAPH_FADE_MS after hasGraph flips (the kit fades the side graph in with it).
+ */
+export function graphMix(now = performance.now()): number {
+  if (!world.hasGraph) return 0;
+  const t = Math.min(1, Math.max(0, (now - world.hasGraphAt) / GRAPH_FADE_MS));
+  return t * t * (3 - 2 * t);
+}
+
+/** React hook: does this session have a knowledge graph? (re-renders when it flips true) */
+export function useHasGraph(): boolean {
+  return useSyncExternalStore(
+    (f) => (subs.add(f), () => subs.delete(f)),
+    () => world.hasGraph,
+    () => false,
+  );
 }

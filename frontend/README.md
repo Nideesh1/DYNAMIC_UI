@@ -77,6 +77,9 @@ export default function Live() {
 | `source`    | `string`              | `""`       | Base URL of the agentglow server. `""` means same origin. The scene reads `${source}/live/stream` (SSE), `/live/graph` and `/live/health`. |
 | `hud`       | `boolean`             | `true`     | Show the glass HUD: counts, event ticker and the agent inspector panel. |
 | `sim`       | `boolean`             | `false`    | Use the built-in simulator instead of a server. |
+| `scope`     | `string`              | none       | Only show agents in this scope (a user or tenant id). Sent as the `X-AgentGlow-Scope` header, also as `scope` in the `POST /live/run` body. With a token, the token decides. |
+| `run`       | `string`              | none       | Only show this one run. Sent as the `X-AgentGlow-Run` header. |
+| `token`     | `string`              | none       | Token minted by your backend. Sent as `Authorization: Bearer <token>` on every `/live/*` request, never in a URL. |
 | `style`     | `CSSProperties`       | none       | Applied to the container (set a `height` here or on a parent). |
 | `className` | `string`              | none       | Added to the container. |
 
@@ -85,7 +88,31 @@ The package also exports `THEMES` (the list of theme ids), `THEME_INFO` (names a
 
 If the server exposes `POST /live/run`, the HUD shows a **Run agents** button. Otherwise the button stays hidden.
 
-A cross-origin `source` requires the server to send CORS headers for `/live/*`.
+A cross-origin `source` requires the server to send CORS headers for `/live/*` (allowing the `Authorization`
+and `X-AgentGlow-*` request headers if you use them).
+
+When `scope` or `run` is set, the HUD shows a chip (`scope: user-123`) so viewers know the view is filtered.
+If the server answers 401, the HUD shows "not authorized for this scope" and does not fall back to the simulator.
+
+### Show each user only their agents
+
+Your backend mints a short-lived token for the signed-in user (the token carries the scope; see the
+[root README](https://github.com/Nideesh1/agentglow#readme) and [SPEC](https://github.com/Nideesh1/agentglow/blob/main/docs/SPEC.md)
+for the format), and the page passes it through:
+
+```tsx
+function MyAgents({ userId }: { userId: string }) {
+  const [token, setToken] = useState<string>();
+  useEffect(() => {
+    fetch("/api/agentglow-token").then((r) => r.json()).then((j) => setToken(j.token));
+  }, [userId]);
+  if (!token) return null;
+  return <AgentScene source="https://agentglow.example.com" scope={userId} token={token} style={{ height: 600 }} />;
+}
+```
+
+The stream is read with `fetch()` (not `EventSource`) so these headers go on every request; it reconnects with
+backoff on its own. Changing `scope`, `run` or `token` reconnects and clears the previous view.
 
 ## Themes
 
@@ -115,6 +142,12 @@ A cross-origin `source` requires the server to send CORS headers for `/live/*`.
 | ![city](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/city.jpg) **city** | ![ocean](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/ocean.jpg) **ocean** | ![subway](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/subway.jpg) **subway** |
 | ![circuit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/circuit.jpg) **circuit** | ![tunnel](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/tunnel.jpg) **tunnel** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** |
 
+## Layout
+
+Agents are always the center of the scene; the knowledge graph and MCP servers appear at the side only when used. Stats
+sit in a slim top bar and agents/events/selection in a collapsible right sidebar (a thin rail in small embeds). The
+camera fits the free area and batches spawns into one smooth zoom.
+
 ## Many agents
 
 Above 12 live agents, older runs auto-group into clickable glowing clusters and the newest ~10 stay in full
@@ -124,7 +157,8 @@ detail, so a scene stays readable (and ~60 fps) with hundreds of agents.
 
 All scenes on a page share one world model. Several `<AgentScene/>`s with the **same** `source` (or all with
 `sim`) share a single connection and show the same agents, so they work fine side by side. Scenes with
-**different** sources on one page aren't supported: the most recently mounted source wins.
+**different** sources (or different `scope` / `run` / `token`) on one page aren't supported: the most recently
+mounted one wins.
 
 ## Develop
 
@@ -136,6 +170,7 @@ npm run build:app    # → ../backend/agentglow/static (served by `agentglow ser
 ```
 
 In the app, `/` is the theme gallery and `/<theme>` is a full-screen scene. It accepts `?sim=1`,
-`?source=http://host:8100` and `?hud=0`.
+`?source=http://host:8100`, `?hud=0` and `?run=<id>` (a shareable "watch this run" link). Scope and token are
+props only: they are never read from the URL.
 
 MIT License

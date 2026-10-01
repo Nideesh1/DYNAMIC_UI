@@ -1,6 +1,7 @@
 /** Forest scene: palette, easing, shared textures/geometries/materials and curve helpers. */
 import * as THREE from "three";
-import { TYPE_COLOR, type AgentType } from "../shared/world";
+import { TYPE_COLOR, hash01, roleScale, type AgentType, type Instance } from "../shared/world";
+import { kit, type KitAgent } from "../shared/kit";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -291,4 +292,17 @@ export function placeOnCurve(m: THREE.Object3D, p0: THREE.Vector3, p1: THREE.Vec
   _pb.sub(_pa);
   if (_pb.lengthSq() > 1e-8) m.quaternion.setFromUnitVectors(_UP, _pb.normalize());
   m.scale.set(size * 0.42, size, size * 0.42);
+}
+
+// ------------------------------------------------------------------ trees (sizes; the kit owns placement)
+/** Tree dimensions at fit scale 1 (parents tall, subagents small saplings). */
+export const treeHeight = (i: Instance) => (i.subagent ? 2.1 : 4.6) * (0.92 + 0.16 * hash01(i.id, 11));
+export const canopyR = (i: Instance) => (i.subagent ? 0.72 : 1.45);
+/** Eased fit size of a tree: the kit's agent.scale without roleScale (trees carry their own parent/sapling ratio). */
+export const treeScale = (a: KitAgent) => a.scale / roleScale(a.inst);
+/** Stage-space canopy centre of a drawn tree (undefined when collapsed / gone). Trunk base = agentLive(id). */
+export function crownOf(id: string, out: THREE.Vector3): THREE.Vector3 | undefined {
+  const a = kit.agents.get(id);
+  if (!a) return undefined;
+  return out.set(a.live.x, a.live.y + treeHeight(a.inst) * 0.62 * treeScale(a), a.live.z);
 }

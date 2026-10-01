@@ -5,69 +5,81 @@ import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, TYPE_COLOR, world } from "../shared/world";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
-import { FLOOR_Y, MOTION, jellyPos } from "./layout";
+import { agentLive, stageToGraph, type GraphSlotProps } from "../shared/kit";
+import { MOTION, dotTexture } from "./layout";
 
 const MAX_RIPPLES = 60;
-const TAG_SLOTS = [0, 1, 2, 3];
+const _jp = new THREE.Vector3();
+const TAG_SLOTS = [0, 1];
 const BUBBLES_PER = 9;
 const MAX_BUBBLES = 180;
 const MAX_BEAMS = 60;
 const BEAM_SUB = 6;
 
-function rng(seed: number) {
-  let s = seed >>> 0;
-  return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+/** world-ish radius of the reef patch in its own frame (the kit scales it to the side) */
+export const REEF_R = 4.2;
+/** sand level of the patch (local), polyps rise from it */
+const SAND_Y = -1.15;
+/** the bed is tilted toward the camera so the coral heads read as a patch, not a row */
+const TILT = 0.42;
+const CT = Math.cos(TILT);
+const ST = Math.sin(TILT);
+const KINDS = Object.keys(KIND_COLOR);
+const SAMPLE = 200;
+
+function h01(s: string, salt: number) {
+  let h = 2166136261 ^ salt;
+  for (let k = 0; k < s.length; k++) h = Math.imul(h ^ s.charCodeAt(k), 16777619);
+  return ((h >>> 0) % 100000) / 100000;
 }
 
+/** bed (x, y, z) -> patch-local with the tilt applied (y up, z toward the camera) */
+function put(out: Float32Array, i: number, x: number, y: number, z: number) {
+  out[i * 3] = x;
+  out[i * 3 + 1] = y * CT + z * ST;
+  out[i * 3 + 2] = -y * ST + z * CT;
+}
+
+/**
+ * Stable per-node layout (the graph grows while the session runs: nodes never jump). One coral head per kind on
+ * a golden-angle bed; each polyp sits at a seeded spot around its head.
+ */
 function layoutReef(g: Galaxy) {
-  const rand = rng(1337);
   const n = g.nodes.length;
-  const byKind = new Map<string, number[]>();
-  g.nodes.forEach((nd, i) => (byKind.get(nd.kind) ?? byKind.set(nd.kind, []).get(nd.kind)!).push(i));
-  // coral heads: one or more clusters per kind, spread over an elliptical bed (golden-angle spiral)
-  const clusters: { kind: string; members: number[] }[] = [];
-  for (const [kind, ids] of byKind) {
-    const nc = Math.max(1, Math.ceil(ids.length / 22));
-    for (let c = 0; c < nc; c++) clusters.push({ kind, members: ids.filter((_, j) => j % nc === c) });
-  }
-  for (let i = clusters.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    [clusters[i], clusters[j]] = [clusters[j], clusters[i]];
-  }
-  const base = new Float32Array(n * 3); // floor anchor
+  const base = new Float32Array(n * 3); // sand anchor (patch-local)
   const head = new Float32Array(n * 3); // polyp tip (rest)
   const phase = new Float32Array(n);
   const hub = new Int32Array(n);
-  clusters.forEach((cl, ci) => {
-    const f = (ci + 0.5) / clusters.length;
-    const ang = ci * 2.39996;
+  const firstOfKind = new Map<string, number>();
+  const count = new Map<string, number>();
+  for (const nd of g.nodes) count.set(nd.kind, (count.get(nd.kind) ?? 0) + 1);
+  g.nodes.forEach((nd, i) => {
+    let ki = KINDS.indexOf(nd.kind);
+    if (ki < 0) ki = 8 + Math.floor(h01(nd.kind, 3) * 8);
+    const f = (ki + 0.5) / 12;
+    const ang = ki * 2.39996 + 0.6;
     const rr = Math.sqrt(f);
-    const cx = Math.cos(ang) * rr * 13.5;
-    const cz = -4.5 + Math.sin(ang) * rr * 5.5;
-    const spread = 0.5 + Math.sqrt(cl.members.length) * 0.17;
-    cl.members.forEach((i) => {
-      hub[i] = cl.members[0];
-      const a = rand() * Math.PI * 2;
-      const d = Math.pow(rand(), 0.7) * spread;
-      const x = cx + Math.cos(a) * d;
-      const z = cz + Math.sin(a) * d * 0.8;
-      const h = (0.35 + rand() * 0.7) * (1.5 - (d / spread) * 0.8);
-      base[i * 3] = x;
-      base[i * 3 + 1] = FLOOR_Y;
-      base[i * 3 + 2] = z;
-      // branches lean outward from the cluster centre
-      head[i * 3] = x + Math.cos(a) * h * 0.35;
-      head[i * 3 + 1] = FLOOR_Y + h;
-      head[i * 3 + 2] = z + Math.sin(a) * h * 0.3;
-      phase[i] = rand() * 6.28;
-    });
+    const cx = Math.cos(ang) * rr * REEF_R * 0.82;
+    const cz = Math.sin(ang) * rr * REEF_R * 0.42;
+    const spread = 0.35 + Math.sqrt(count.get(nd.kind) ?? 1) * 0.1;
+    if (!firstOfKind.has(nd.kind)) firstOfKind.set(nd.kind, i);
+    hub[i] = firstOfKind.get(nd.kind)!;
+    const a = h01(nd.id, 11) * Math.PI * 2;
+    const d = Math.pow(h01(nd.id, 12), 0.7) * spread;
+    const x = cx + Math.cos(a) * d;
+    const z = cz + Math.sin(a) * d * 0.8;
+    const h = (0.6 + h01(nd.id, 13) * 1.0) * (1.5 - (d / spread) * 0.8);
+    put(base, i, x, SAND_Y, z);
+    // branches lean outward from the head's centre
+    put(head, i, x + Math.cos(a) * h * 0.35, SAND_Y + h, z + Math.sin(a) * h * 0.3);
+    phase[i] = h01(nd.id, 14) * 6.28;
   });
   return { base, head, phase, hub };
 }
 
-const SAMPLE = 200;
-
-export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
+/** GraphResource slot: FalkorDB as a bioluminescent coral reef patch on the side (instanced polyps per graph node,
+ * ripples + bubbles on flares, light beams from the jellies). Drawn in its own frame, radius REEF_R. */
+export function ReefPatch({ galaxy: full }: GraphSlotProps) {
   // FalkorDB is shown as a representative sample (not a count) - keep the structure readable
   const galaxy = useMemo<Galaxy>(() => {
     const nodes = full.nodes.slice(0, SAMPLE);
@@ -77,10 +89,10 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
   const n = galaxy.nodes.length;
   const L = useMemo(() => layoutReef(galaxy), [galaxy]);
   const kindCol = useMemo(() => galaxy.nodes.map((nd) => new THREE.Color(KIND_COLOR[nd.kind] ?? "#94a3b8")), [galaxy]);
-  const idxCache = useMemo(() => new Map<string, number>(), []);
+  const idxCache = useMemo(() => new Map<string, number>(), [galaxy]); // eslint-disable-line react-hooks/exhaustive-deps
   const idxOf = (name: string) => {
     let i = idxCache.get(name);
-    if (i === undefined) idxCache.set(name, (i = nodeIndex(full, name) % n));
+    if (i === undefined) idxCache.set(name, (i = nodeIndex(galaxy, name) % Math.max(1, n)));
     return i;
   };
 
@@ -130,7 +142,7 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
   // a few pooled name tags for the most recent flares (updated imperatively, no re-render)
   const tagGroups = useRef<(THREE.Group | null)[]>([]);
   const tagEls = useRef<(Label3DHandle | null)[]>([]);
-  const tagNode = useRef<string[]>(["", "", "", ""]);
+  const tagNode = useRef<string[]>(["", ""]);
 
   const beamGeo = useMemo(() => {
     const g = new THREE.BufferGeometry();
@@ -167,13 +179,14 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
       if (v > fl[i]) fl[i] = v;
       if (write) wr[i] = Math.max(wr[i], v);
       const bx = L.base[i * 3];
+      const by = L.base[i * 3 + 1];
       const bz = L.base[i * 3 + 2];
 
-      // ripple across the sand
+      // ripple across the sand (the bed is tilted toward the camera)
       if (rk < MAX_RIPPLES) {
-        tmp.position.set(bx, FLOOR_Y + 0.03, bz);
-        tmp.rotation.set(-Math.PI / 2, 0, 0);
-        tmp.scale.setScalar(0.2 + Math.sqrt(age) * (write ? 3.6 : 2.2));
+        tmp.position.set(bx, by + 0.03, bz);
+        tmp.rotation.set(-Math.PI / 2 + TILT, 0, 0);
+        tmp.scale.setScalar(0.12 + Math.sqrt(age) * (write ? 1.5 : 0.9));
         tmp.updateMatrix();
         rm.setMatrixAt(rk, tmp.matrix);
         const k = Math.pow(1 - age, 2) * (write ? 3 : 1.6);
@@ -191,7 +204,7 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
           if (ab < 0) continue;
           tmp.position.set(
             bx + Math.sin(sd) * 0.35 + Math.sin(ab * 5 + b) * 0.1,
-            FLOOR_Y + 0.3 + ab * sp * 0.6,
+            by + 0.3 + ab * sp * 0.6,
             bz + Math.cos(sd) * 0.35,
           );
           tmp.rotation.set(0, 0, 0);
@@ -203,7 +216,9 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
           bk++;
         }
       // light beam from the jelly down to the polyp
-      const jp = jellyPos.get(f.instance);
+      // beams are drawn inside the reef group: the jelly's stage position in reef-local units
+      const live = agentLive(f.instance);
+      const jp = live ? stageToGraph(live, _jp) : undefined;
       const inst = world.instances.get(f.instance);
       if (jp && inst && beam < MAX_BEAMS && age < 0.75) {
         const ba = age / 0.75;
@@ -307,21 +322,23 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
       if (wr[i] > 0.01) col.lerp(white.setScalar(6), wr[i] * 0.7), white.setScalar(1);
       hm.setColorAt(i, col);
     }
+    hm.count = n;
+    sm.count = n;
     hm.instanceMatrix.needsUpdate = true;
     if (hm.instanceColor) hm.instanceColor.needsUpdate = true;
     sm.instanceMatrix.needsUpdate = true;
     if (sm.instanceColor) sm.instanceColor.needsUpdate = true;
   });
 
-  const stalkGeo = useMemo(() => new THREE.CylinderGeometry(0.022, 0.05, 1, 5, 1, true).translate(0, 0.5, 0), []);
+  const stalkGeo = useMemo(() => new THREE.CylinderGeometry(0.03, 0.065, 1, 5, 1, true).translate(0, 0.5, 0), []);
 
   return (
     <group>
-      <instancedMesh ref={stalks} args={[stalkGeo, undefined, Math.max(1, n)]} frustumCulled={false}>
+      <instancedMesh ref={stalks} args={[stalkGeo, undefined, SAMPLE]} frustumCulled={false}>
         <meshBasicMaterial toneMapped={false} />
       </instancedMesh>
-      <instancedMesh ref={heads} args={[undefined, undefined, Math.max(1, n)]} frustumCulled={false}>
-        <icosahedronGeometry args={[0.085, 1]} />
+      <instancedMesh ref={heads} args={[undefined, undefined, SAMPLE]} frustumCulled={false}>
+        <icosahedronGeometry args={[0.12, 1]} />
         <meshBasicMaterial toneMapped={false} />
       </instancedMesh>
       <lineSegments geometry={links}>
@@ -338,7 +355,11 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
       <lineSegments geometry={beamGeo} frustumCulled={false}>
         <lineBasicMaterial vertexColors transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
       </lineSegments>
-      <GraphLabel3D position={[0, FLOOR_Y + 0.2, 4.4]} color="#2dd4bf" size={0.3} pxRange={[9, 13]} />
+      <mesh position={[0, SAND_Y * CT - 0.02, -SAND_Y * ST]} rotation={[-Math.PI / 2 + TILT, 0, 0]} scale={[REEF_R * 1.05, REEF_R * 0.62, 1]} renderOrder={-1}>
+        <circleGeometry args={[1, 48]} />
+        <meshBasicMaterial map={dotTexture()} color={new THREE.Color("#0f766e").multiplyScalar(0.55)} transparent depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
+      </mesh>
+      <GraphLabel3D position={[0, SAND_Y - 0.9, 0.6]} color="#2dd4bf" size={0.3} pxRange={[9, 13]} />
       {TAG_SLOTS.map((k) => (
         <group key={k} ref={(g) => void (tagGroups.current[k] = g)}>
           <Label3D ref={(d) => void (tagEls.current[k] = d)} text="" size={0.24} opacity={0} pxRange={[8, 12]} />

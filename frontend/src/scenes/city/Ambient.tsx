@@ -1,12 +1,14 @@
-/** The night city around the action: reflective wet ground, neon grid, background skyline, ring-road traffic. */
+/**
+ * The night city around the action: reflective wet ground, neon grid, a ring road and the background skyline.
+ * Both follow the kit core (kit.core: eased half extents of the districts): the ring road hugs the districts and
+ * skyline blocks inside the core, in front of it, or where the side resources stand sink away.
+ */
 import { Grid, MeshReflectorMaterial } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { kit } from "../shared/kit";
 import { makeBuildingMaterial } from "./buildingMaterial";
-import { districtFrame, reduced } from "./layout";
-
-const RING_ROADS = [11.6, 29];
 
 function rng(seed: number) {
   return () => {
@@ -15,7 +17,17 @@ function rng(seed: number) {
   };
 }
 
+const ROAD_W = 1.1;
+/** ring road radius around the core (world units) */
+const roadR = () => Math.hypot(kit.core.hw, kit.core.hh) + 2.4;
+
 export function Ground() {
+  const road = useRef<THREE.Group>(null);
+  const r0 = 16;
+  useFrame(() => {
+    const g = road.current;
+    if (g) g.scale.setScalar(roadR() / r0);
+  });
   return (
     <group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
@@ -48,25 +60,36 @@ export function Ground() {
         fadeStrength={2}
         infiniteGrid
       />
-      {RING_ROADS.map((r) => (
-        <group key={r}>
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.015, 0]}>
-            <ringGeometry args={[r - 1.1, r + 1.1, 160]} />
-            <meshBasicMaterial color="#020308" transparent opacity={0.8} depthWrite={false} />
+      {/* ring road around the districts (scaled to the core) */}
+      <group ref={road}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.015, 0]}>
+          <ringGeometry args={[r0 - ROAD_W, r0 + ROAD_W, 160]} />
+          <meshBasicMaterial color="#020308" transparent opacity={0.8} depthWrite={false} />
+        </mesh>
+        {[-ROAD_W, ROAD_W].map((o) => (
+          <mesh key={o} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+            <ringGeometry args={[r0 + o - 0.03, r0 + o + 0.03, 160]} />
+            <meshBasicMaterial color={new THREE.Color("#3b2f8f").multiplyScalar(1.4)} toneMapped={false} />
           </mesh>
-          {[-1.1, 1.1].map((o) => (
-            <mesh key={o} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
-              <ringGeometry args={[r + o - 0.03, r + o + 0.03, 160]} />
-              <meshBasicMaterial color={new THREE.Color("#3b2f8f").multiplyScalar(1.4)} toneMapped={false} />
-            </mesh>
-          ))}
-        </group>
-      ))}
+        ))}
+      </group>
     </group>
   );
 }
 
-/** Background skyline (instanced, same window shader as agent towers but static palette). */
+/** horizontal direction toward the default camera (index.tsx camera [14, 30, 40]) */
+const VIEW_X = 0.33;
+const VIEW_Z = 0.94;
+
+type Block = { x: number; z: number; w: number; d: number; h: number; ry: number };
+const _o = new THREE.Object3D();
+
+/**
+ * Background skyline (instanced, same window shader as agent towers but static palette). Blocks that would sit on the
+ * districts, in front of them (toward the camera), under the side resources (MCP blimps, the data spire) or on the
+ * ring road sink into the ground; the rest grow taller with distance from the core. Re-laid out only when the core
+ * or the periphery changes noticeably.
+ */
 export function Skyline() {
   const ref = useRef<THREE.InstancedMesh>(null);
   const mat = useMemo(() => {
@@ -78,85 +101,82 @@ export function Skyline() {
   const geo = useMemo(() => new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), []);
   const items = useMemo(() => {
     const rand = rng(42);
-    const centres = Array.from({ length: 6 }, (_, s) => districtFrame(s));
-    const out: { x: number; z: number; w: number; d: number; h: number; ry: number }[] = [];
-    for (let gx = -78; gx <= 78; gx += 4.6) {
-      for (let gz = -78; gz <= 78; gz += 4.6) {
+    const out: (Block & { tall: number; spike: number })[] = [];
+    for (let gx = -96; gx <= 96; gx += 4.6) {
+      for (let gz = -96; gz <= 60; gz += 4.6) {
         const x = gx + (rand() - 0.5) * 1.6;
         const z = gz + (rand() - 0.5) * 1.6;
-        const r = Math.hypot(x, z);
-        if (r < 14.5 || r > 80) continue;
-        if (RING_ROADS.some((rr) => Math.abs(r - rr) < 3)) continue;
-        if (centres.some((c) => Math.hypot(x - c.x, z - c.z) < 11.5)) continue;
         if (rand() < 0.3) continue;
-        const far = clamp((r - 14) / 50, 0, 1);
-        const h = 1 + Math.pow(rand(), 2.2) * (3 + far * 18) + (rand() < 0.06 ? 10 : 0);
-        out.push({ x, z, w: 1.6 + rand() * 1.8, d: 1.6 + rand() * 1.8, h, ry: Math.atan2(x, z) });
+        out.push({ x, z, w: 1.6 + rand() * 1.8, d: 1.6 + rand() * 1.8, h: 0, ry: rand() * 0.6 - 0.3, tall: Math.pow(rand(), 2.2), spike: rand() < 0.06 ? 10 : 0 });
       }
     }
     return out;
   }, []);
-  useEffect(() => {
-    const m = ref.current;
-    if (!m) return;
-    const o = new THREE.Object3D();
-    items.forEach((b, i) => {
-      o.position.set(b.x, 0, b.z);
-      o.rotation.set(0, b.ry, 0);
-      o.scale.set(b.w, b.h, b.d);
-      o.updateMatrix();
-      m.setMatrixAt(i, o.matrix);
-    });
-    m.instanceMatrix.needsUpdate = true;
-    m.computeBoundingSphere();
-  }, [items]);
-  useEffect(() => () => (geo.dispose(), mat.dispose()), [geo, mat]);
-  return <instancedMesh ref={ref} args={[geo, mat, items.length]} />;
-}
+  const cur = useMemo(() => new Float32Array(items.length), [items]);
+  const want = useMemo(() => new Float32Array(items.length), [items]);
+  const st = useRef({ hw: -1, hh: -1, sig: -1, last: -1e9, moving: true });
 
-function clamp(x: number, a: number, b: number) {
-  return Math.min(b, Math.max(a, x));
-}
-
-/** Endless traffic on the ring roads: white headlights one way, red tail lights the other. */
-export function Traffic() {
-  const N = reduced ? 30 : 90;
-  const ref = useRef<THREE.InstancedMesh>(null);
-  const cars = useMemo(() => {
-    const rand = rng(7);
-    return Array.from({ length: N }, () => {
-      const road = RING_ROADS[rand() < 0.4 ? 0 : 1];
-      const dir = rand() < 0.5 ? 1 : -1;
-      return { road, lane: road + dir * 0.5, dir, a: rand() * Math.PI * 2, speed: (0.6 + rand() * 0.6) * (4.5 / road), len: 0.5 + rand() * 0.5 };
-    });
-  }, [N]);
-  const o = useMemo(() => new THREE.Object3D(), []);
-  useEffect(() => {
-    const m = ref.current;
-    if (!m) return;
-    const head = new THREE.Color("#fff1d0").multiplyScalar(2.6);
-    const tail = new THREE.Color("#ff2d55").multiplyScalar(2.6);
-    cars.forEach((c, i) => m.setColorAt(i, c.dir > 0 ? head : tail));
-    if (m.instanceColor) m.instanceColor.needsUpdate = true;
-  }, [cars]);
   useFrame((_, dt) => {
     const m = ref.current;
     if (!m) return;
-    const step = Math.min(dt, 0.05) * (reduced ? 0.25 : 1);
-    cars.forEach((c, i) => {
-      c.a += c.dir * c.speed * step * 0.3;
-      o.position.set(Math.sin(c.a) * c.lane, 0.12, Math.cos(c.a) * c.lane);
-      o.rotation.set(0, c.a, 0);
-      o.scale.set(c.len * 1.6, 1, 1);
-      o.updateMatrix();
-      m.setMatrixAt(i, o.matrix);
-    });
+    const c = kit.core;
+    const s = st.current;
+    const now = performance.now();
+    // periphery signature: graph + server targets (cheap sum)
+    let sig = kit.graphWanted ? kit.graph.target.x * 7 + kit.graph.target.z * 3 + 1 : 0;
+    for (const q of kit.mcp.values()) sig += q.target.x * 0.37 + q.target.z * 0.11;
+    const changed = Math.abs(c.hw - s.hw) > 0.6 || Math.abs(c.hh - s.hh) > 0.6 || Math.abs(sig - s.sig) > 0.5;
+    if (changed && now - s.last > 300) {
+      s.hw = c.hw;
+      s.hh = c.hh;
+      s.sig = sig;
+      s.last = now;
+      s.moving = true;
+      const hw = c.hw + 2.5;
+      const hh = c.hh + 2.5;
+      const rr = roadR();
+      const g = kit.graph;
+      const gr = kit.graphWanted ? g.radius + 2.6 : 0;
+      for (let i = 0; i < items.length; i++) {
+        const b = items[i];
+        // distance outside the core rect (2D: x right, -z up)
+        const dx = Math.max(0, Math.abs(b.x) - hw);
+        const dz = Math.max(0, Math.abs(b.z) - hh);
+        const out = Math.hypot(dx, dz);
+        let h = 0;
+        // between the core and the camera (seen from the front-right): an open plaza, then low blocks, so nothing
+        // ever hides the city
+        const f = b.x * VIEW_X + b.z * VIEW_Z - (hw * VIEW_X + hh * VIEW_Z);
+        const front = f > -1;
+        if (out > 3 && Math.hypot(b.x, b.z) > rr + 2.2 && !(front && f < 24)) {
+          const far = Math.min(1, out / 40);
+          h = 1 + b.tall * (3 + far * 18) + b.spike * far;
+          if (front) h = Math.min(h, 1.4);
+        }
+        if (gr && Math.hypot(b.x - g.target.x, b.z - g.target.z) < gr) h = 0;
+        for (const q of kit.mcp.values()) if (Math.hypot(b.x - q.target.x, b.z - q.target.z) < 3.4) h = 0;
+        want[i] = h;
+      }
+    }
+    if (!s.moving) return;
+    const k = 1 - Math.exp(-Math.min(0.1, dt) / 0.35);
+    let moving = false;
+    for (let i = 0; i < items.length; i++) {
+      const b = items[i];
+      const d = want[i] - cur[i];
+      if (Math.abs(d) > 0.01) {
+        cur[i] += d * k;
+        moving = true;
+      } else cur[i] = want[i];
+      _o.position.set(b.x, 0, b.z);
+      _o.rotation.set(0, b.ry, 0);
+      _o.scale.set(cur[i] > 0.02 ? b.w : 0.0001, Math.max(0.0001, cur[i]), cur[i] > 0.02 ? b.d : 0.0001);
+      _o.updateMatrix();
+      m.setMatrixAt(i, _o.matrix);
+    }
     m.instanceMatrix.needsUpdate = true;
+    s.moving = moving;
   });
-  return (
-    <instancedMesh ref={ref} args={[undefined, undefined, N]} frustumCulled={false}>
-      <boxGeometry args={[1, 0.08, 0.1]} />
-      <meshBasicMaterial toneMapped={false} />
-    </instancedMesh>
-  );
+  useEffect(() => () => (geo.dispose(), mat.dispose()), [geo, mat]);
+  return <instancedMesh ref={ref} args={[geo, mat, items.length]} frustumCulled={false} />;
 }

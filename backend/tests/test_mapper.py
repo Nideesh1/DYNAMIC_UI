@@ -115,7 +115,9 @@ def test_hatchet_steps_handoff_and_idle_completion():
     r = next(e for e in by_type(evs, "spawn") if e["agent"] == "researcher")
     assert r["parent_id"] == "p" and r["subagent"] is False  # cross-step handoff
     assert all(e["run_id"] == "run-1" for e in evs)
-    done = m.tick(3100 + 6000)
+    # a quiet gap between steps (next step queued in Hatchet) must NOT end the run
+    assert not any(e["type"] == "run" and e["status"] == "completed" for e in m.tick(3100 + 6000))
+    done = m.tick(3100 + 61000)
     assert done[-1]["type"] == "run" and done[-1]["status"] == "completed"
 
 

@@ -1,13 +1,18 @@
 /**
- * /flow engine - a CPU particle murmuration driven by the shared world model.
+ * /flow engine - a CPU particle murmuration driven by the shared world model, placed by the scene kit.
  *
  * Everything is typed arrays written straight into BufferAttributes once per frame (no React, no allocation):
  *   field    - tens of thousands of free particles advected by a divergence-free flow (galactic swirl + stream-function
- *              noise + one large vortex per Hatchet run + small swirls around each living agent). Agent eddies CAPTURE
- *              field particles (condense), spin them while alive, and RELEASE them outward on exit (dissolve).
- *   nebula   - FalkorDB: particle clouds around graph-sample anchors; flares ignite an anchor and burst its cloud.
- *   currents - luminous loop per run (the Hatchet vortex), brightest at the running step, a pouring front on handoff.
+ *              noise + one vortex per drawn run + small swirls around each living agent). Agent eddies CAPTURE field
+ *              particles (condense) at the kit's agent positions (attractors), spin them while alive, and RELEASE
+ *              them outward on exit (dissolve). The eddy centre is written back into the kit agent's `live`.
+ *   nebula   - FalkorDB: a side current of particle clouds around graph-sample anchors, in the kit side graph's local
+ *              frame (drawn by the GraphResource slot); flares ignite an anchor and burst its cloud.
+ *   currents - luminous loop per drawn run (the Hatchet vortex around its agents), brightest at the running step.
  *   streams  - stateless particle jets: messages (comets), step handoffs, graph beams, MCP packets, MCP tethers.
+ *
+ * The engine is created ONCE per scene: the galaxy grows while the session runs (setGalaxy() swaps the nebula in
+ * place) and runs/agents come and go through the kit, so particle state is never reset.
  */
 import * as THREE from "three";
 import type { Galaxy } from "../shared/useSceneSetup";
@@ -17,7 +22,6 @@ import {
   TYPE_COLOR,
   RUN_LINGER_MS,
   energy,
-  hash01,
   presence,
   waitSeconds,
   world,
@@ -25,20 +29,21 @@ import {
   type Instance,
   type Run,
 } from "../shared/world";
-import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
-import { isExpanded, isRunExpanded, lod, lodScale } from "../shared/lod";
+import { isSubRole } from "../shared/spread";
+import { fit, graphToStage, kit, kitRoleU, runLocal, serverPos, type KitAgent, type KitRun } from "../shared/kit";
 
 export const REDUCED = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const MOTION = REDUCED ? 0.3 : 1;
 
 export const FIELD_N = REDUCED ? 9000 : 24000;
 const NEB_N = REDUCED ? 3500 : 8000;
-export const RUN_SLOTS = 6;
+/** pooled run vortices (drawn runs; LOD keeps the drawn set small) */
+export const RUN_SLOTS = 12;
 const RUN_P = REDUCED ? 450 : 1100;
 const STREAM_N = 9000;
-export const MAX_SLOTS = 48;
-const FIELD_R = 31;
-export const RING_R = 4.6;
+export const MAX_SLOTS = 64;
+const FIELD_R0 = 31;
+const RING_R = 4.6;
 const RINGS_N = 28;
 const BEAM_SEGS = 64;
 const TETHER_SEGS = 18;
@@ -48,32 +53,13 @@ const TAU = Math.PI * 2;
 /** FalkorDB is shown as a representative sample: at most this many anchor nodes. */
 const NODE_MAX = 200;
 
-export const RUN_CENTERS: [number, number][] = [
-  [-14.5, 2.5],
-  [14.5, 2.5],
-  [0, -13.5],
-  [-12, -12],
-  [12, -12],
-  [0, 14],
-];
-/** seeded per-run rotation of a run's step triangle (±~26°), so each run's vortex is laid out its own way */
-export const runSpin = (runId: string) => jit(runId, 71) * 0.9;
-/** current spin per run slot (written by FlowEngine.syncRuns) */
-const RUN_SPIN = new Float32Array(6);
-export const runBase = (s: number, spin = RUN_SPIN[s]) => Math.atan2(-RUN_CENTERS[s][1], -RUN_CENTERS[s][0]) + Math.PI / 3 + spin;
-export function attractorPos(s: number, k: number, out: THREE.Vector3, spin = RUN_SPIN[s]) {
-  const a = runBase(s, spin) + (k * TAU) / 3;
-  return out.set(RUN_CENTERS[s][0] + Math.cos(a) * RING_R, 0.35, RUN_CENTERS[s][1] + Math.sin(a) * RING_R);
-}
-const MCP_ANG = [-150, -30, -100, 150, 30, -62, -128, 90].map((d) => (d * Math.PI) / 180);
-export function mcpPos(slot: number, out: THREE.Vector3) {
-  const a = MCP_ANG[slot % MCP_SLOTS];
-  const r = 27 + (slot >= MCP_SLOTS ? 3 : 0);
-  return out.set(Math.cos(a) * r, 3.2 + (slot % 2) * 1.2, Math.sin(a) * r);
-}
+/** natural radius of the nebula (side graph local frame) */
+export const NEB_R = 5.4;
+/** MCP pulsars float a little above the field */
+export const PULSAR_Y = 3.2;
+const STEP_ROLE: AgentType[] = ["planner", "researcher", "writer"];
 
 const TYPE_RGB = Object.fromEntries(Object.entries(TYPE_COLOR).map(([k, v]) => [k, new THREE.Color(v)])) as Record<AgentType, THREE.Color>;
-const STEP_K = { planner: 0, researcher: 1, graph_scout: 1, records_scout: 1, data_scout: 1, writer: 2 } as const;
 const isScout = isSubRole;
 
 type Slot = {
@@ -96,16 +82,21 @@ type Slot = {
   count: number;
   want: number;
   rank: number;
-  /** seeded placement (set once at alloc): angle offset + radius around the run's vortex */
-  dTh: number;
-  rad: number;
+  /** the kit agent this eddy condenses at (its `live` gets the eddy centre) */
+  ka: KitAgent | null;
   released: boolean;
   p: number;
   e: number;
   waitMcp: number;
 };
-const newSlot = (): Slot => ({ used: false, id: "", inst: null, seen: 0, x: 0, y: 0, z: 0, r: 1, g: 1, b: 1, omega: 0, bright: 0, swirl: 0, rscale: 1, tiltA: 0, tiltB: 0, count: 0, want: 0, rank: 0, dTh: 0, rad: 0, released: false, p: 0, e: 0, waitMcp: 0 });
+const newSlot = (): Slot => ({ used: false, id: "", inst: null, seen: 0, x: 0, y: 0, z: 0, r: 1, g: 1, b: 1, omega: 0, bright: 0, swirl: 0, rscale: 1, tiltA: 0, tiltB: 0, count: 0, want: 0, rank: 0, ka: null, released: false, p: 0, e: 0, waitMcp: 0 });
 
+const EDGE_MAX = NODE_MAX * 3;
+const hashStr = (k: string) => {
+  let h = 7;
+  for (let c = 0; c < k.length; c++) h = (h * 31 + k.charCodeAt(c)) >>> 0;
+  return h % 100003;
+};
 // deterministic hash → [0,1)
 const h1 = (n: number) => {
   const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
@@ -169,10 +160,13 @@ const RED = new THREE.Color("#ef4444");
 const STEP_FAILED = new THREE.Color("#ef4444");
 
 export class FlowEngine {
-  galaxy: Galaxy;
   material = makePointsMaterial();
+  /** nebula points live in the (scaled) side graph group: their sprite size follows kit.graph.scale */
+  nebMaterial = makePointsMaterial();
   frame = 0;
   selectedId: string | null = null;
+  /** field radius (grows with the kit core so the murmuration always surrounds the agents + periphery) */
+  fieldR = FIELD_R0;
 
   // ---- field
   fieldGeo = pointsGeo(FIELD_N);
@@ -189,13 +183,24 @@ export class FlowEngine {
   fOrb = new Float32Array(FIELD_N);
   fRnd = new Float32Array(FIELD_N);
 
-  // ---- slots (agent instances)
+  // ---- slots (agent eddies, one per drawn kit agent)
   slots: Slot[] = Array.from({ length: MAX_SLOTS }, newSlot);
   idToSlot = new Map<string, number>();
   pendingByInst = new Map<string, number>();
 
-  // ---- runs
+  // ---- runs (pooled vortices, one per drawn kit run; a vortex fades out after its run leaves the kit)
   runRef: (Run | null)[] = new Array(RUN_SLOTS).fill(null);
+  runKit: (KitRun | null)[] = new Array(RUN_SLOTS).fill(null);
+  runId: string[] = new Array(RUN_SLOTS).fill("");
+  runPool = new Map<string, number>();
+  rPresent = new Uint8Array(RUN_SLOTS);
+  rSteps = new Uint8Array(RUN_SLOTS);
+  rX = new Float32Array(RUN_SLOTS);
+  rZ = new Float32Array(RUN_SLOTS);
+  /** vortex loop radius per run (around its agents) */
+  rR = new Float32Array(RUN_SLOTS).fill(RING_R);
+  /** step attractors (x, z) per run: at the kit's role slots (plan | research | write) */
+  rAt = new Float32Array(RUN_SLOTS * 6);
   rAlpha = new Float32Array(RUN_SLOTS);
   rCol = Array.from({ length: RUN_SLOTS }, () => new THREE.Color());
   rColStr: string[] = new Array(RUN_SLOTS).fill("");
@@ -205,24 +210,25 @@ export class FlowEngine {
   rRr = new Float32Array(RUN_SLOTS * RUN_P);
   rY = new Float32Array(RUN_SLOTS * RUN_P);
 
-  // ---- nebula (FalkorDB)
+  // ---- nebula (FalkorDB side current; local frame of the kit side graph)
   nebGeo = pointsGeo(NEB_N);
-  anchorGeo: THREE.BufferGeometry;
+  anchorGeo = pointsGeo(NODE_MAX);
   nA = new Uint16Array(NEB_N);
   nO = new Float32Array(NEB_N * 3);
   nSpin = new Float32Array(NEB_N);
   nB = new Float32Array(NEB_N);
-  aLocal: Float32Array;
-  aCol: Float32Array;
-  aNamed: Uint8Array;
-  burst: Float32Array;
-  burstW: Float32Array;
-  flareCol: Float32Array;
+  aLocal = new Float32Array(NODE_MAX * 3);
+  aCol = new Float32Array(NODE_MAX * 3);
+  aNamed = new Uint8Array(NODE_MAX);
+  burst = new Float32Array(NODE_MAX);
+  burstW = new Float32Array(NODE_MAX);
+  flareCol = new Float32Array(NODE_MAX * 3);
   nameIdx = new Map<string, number>();
   nebAngle = 0.4;
-  nAnchors = 1;
+  nAnchors = 0;
   edgeGeo = new THREE.BufferGeometry();
-  edgeA = new Uint16Array(0);
+  edgeA = new Uint16Array(EDGE_MAX * 2);
+  nEdge = 0;
   lastFlareId = 0;
   lastFlare: { name: string; op: "read" | "write"; at: number; idx: number } | null = null;
 
@@ -233,7 +239,6 @@ export class FlowEngine {
 
   // ---- meshes
   cores: THREE.InstancedMesh;
-  hits: THREE.InstancedMesh;
   attractors: THREE.InstancedMesh;
   stepRings: THREE.InstancedMesh;
   rings: THREE.InstancedMesh;
@@ -248,15 +253,10 @@ export class FlowEngine {
   ringNext = 0;
   mcpSpin = new Float32Array(MCP_SLOTS);
 
-  constructor(galaxy: Galaxy) {
-    this.galaxy = galaxy;
-    const n = Math.max(1, Math.min(NODE_MAX, galaxy.nodes.length));
-    this.nAnchors = n;
-    galaxy.nodes.slice(0, n).forEach((nd, i) => this.nameIdx.set(nd.name.toLowerCase(), i));
-
+  constructor() {
     // field init
     for (let i = 0; i < FIELD_N; i++) {
-      const r = Math.sqrt(Math.random()) * FIELD_R;
+      const r = Math.sqrt(Math.random()) * FIELD_R0;
       const a = Math.random() * TAU;
       this.fP[i * 3] = Math.cos(a) * r;
       this.fP[i * 3 + 2] = Math.sin(a) * r;
@@ -274,29 +274,8 @@ export class FlowEngine {
       this.rRr[j] = g;
       this.rY[j] = (Math.random() - 0.5) * 0.35;
     }
-    // nebula anchors: 3-arm spiral disc
-    this.aLocal = new Float32Array(n * 3);
-    this.aCol = new Float32Array(n * 3);
-    this.aNamed = new Uint8Array(n);
-    this.burst = new Float32Array(n);
-    this.burstW = new Float32Array(n);
-    this.flareCol = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const f = i / n;
-      const r = 0.5 + 4.6 * Math.sqrt(f) + (Math.random() - 0.5) * 0.45;
-      const ang = ((i % 3) / 3) * TAU + r * 1.15 + (Math.random() - 0.5) * 0.5;
-      this.aLocal[i * 3] = Math.cos(ang) * r;
-      this.aLocal[i * 3 + 1] = (Math.random() - 0.5) * 0.7 * (1.3 - f) + 0.4;
-      this.aLocal[i * 3 + 2] = Math.sin(ang) * r;
-      _c.set(KIND_COLOR[galaxy.nodes[i]?.kind ?? ""] ?? "#94a3b8");
-      this.aCol[i * 3] = _c.r;
-      this.aCol[i * 3 + 1] = _c.g;
-      this.aCol[i * 3 + 2] = _c.b;
-      this.aNamed[i] = i < 22 ? 1 : 0;
-    }
+    // nebula particles: offsets around their anchor (anchors are assigned in setGalaxy)
     for (let j = 0; j < NEB_N; j++) {
-      const a = Math.random() < 0.2 ? Math.floor(Math.random() * Math.min(22, n)) : Math.floor(Math.random() * n);
-      this.nA[j] = a;
       const sig = 0.18 + 0.55 * Math.pow(Math.random(), 3);
       const th = Math.random() * TAU;
       const rr = sig * Math.sqrt(-2 * Math.log(1 - Math.random() * 0.98));
@@ -306,47 +285,11 @@ export class FlowEngine {
       this.nSpin[j] = (0.15 + Math.random() * 0.5) * (Math.random() < 0.5 ? 1 : 0.6);
       this.nB[j] = 0.5 + Math.random() * 0.7;
     }
-    this.anchorGeo = pointsGeo(n);
-    // edges: sampled graph links among shown anchors + nearest-neighbour links so the structure reads as a graph
-    const pairs: number[] = [];
-    const seen = new Set<string>();
-    const add = (a: number, b: number) => {
-      if (a === b) return;
-      const k = a < b ? `${a}-${b}` : `${b}-${a}`;
-      if (seen.has(k)) return;
-      seen.add(k);
-      pairs.push(a, b);
-    };
-    for (const l of galaxy.links) {
-      const a = this.nameIdx.get(galaxy.nodes.find((x) => x.id === l.source)?.name.toLowerCase() ?? "");
-      const b = this.nameIdx.get(galaxy.nodes.find((x) => x.id === l.target)?.name.toLowerCase() ?? "");
-      if (a !== undefined && b !== undefined) {
-        const dx = this.aLocal[a * 3] - this.aLocal[b * 3], dz = this.aLocal[a * 3 + 2] - this.aLocal[b * 3 + 2];
-        if (dx * dx + dz * dz < 9) add(a, b);
-      }
-    }
-    for (let i = 0; i < n; i++) {
-      let best = -1, bd = 1e9, b2 = -1, bd2 = 1e9;
-      for (let j = 0; j < n; j++) {
-        if (j === i) continue;
-        const dx = this.aLocal[i * 3] - this.aLocal[j * 3], dy = this.aLocal[i * 3 + 1] - this.aLocal[j * 3 + 1], dz = this.aLocal[i * 3 + 2] - this.aLocal[j * 3 + 2];
-        const d = dx * dx + dy * dy + dz * dz;
-        if (d < bd) { b2 = best; bd2 = bd; best = j; bd = d; } else if (d < bd2) { b2 = j; bd2 = d; }
-      }
-      if (best >= 0) add(i, best);
-      if (b2 >= 0 && i % 2 === 0) add(i, b2);
-    }
-    this.edgeA = Uint16Array.from(pairs);
-    const ep = new Float32Array(pairs.length * 3);
-    const cr0 = Math.cos(this.nebAngle), sr0 = Math.sin(this.nebAngle);
-    pairs.forEach((a, k) => {
-      const x = this.aLocal[a * 3], z = this.aLocal[a * 3 + 2];
-      ep[k * 3] = x * cr0 - z * sr0;
-      ep[k * 3 + 1] = this.aLocal[a * 3 + 1];
-      ep[k * 3 + 2] = x * sr0 + z * cr0;
-    });
-    this.edgeGeo.setAttribute("position", new THREE.BufferAttribute(ep, 3));
-    this.edgeGeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pairs.length * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    this.anchorGeo.setDrawRange(0, 0);
+    this.edgeGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(EDGE_MAX * 2 * 3), 3));
+    this.edgeGeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(EDGE_MAX * 2 * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    this.edgeGeo.setDrawRange(0, 0);
+    this.edgeGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 50);
 
     // beams: graph links + tethers (pooled line segments)
     const segs = BEAM_SEGS + TETHER_MAX * TETHER_SEGS;
@@ -358,7 +301,6 @@ export class FlowEngine {
     const big = new THREE.Sphere(new THREE.Vector3(), 400);
     const coreMat = new THREE.MeshBasicMaterial({ toneMapped: false });
     this.cores = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.26, 3), coreMat, MAX_SLOTS);
-    this.hits = new THREE.InstancedMesh(new THREE.SphereGeometry(0.95, 10, 8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }), MAX_SLOTS);
     this.attractors = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.3, 3), new THREE.MeshBasicMaterial({ toneMapped: false }), RUN_SLOTS * 3);
     const ringGeo = new THREE.RingGeometry(0.9, 1, 96);
     ringGeo.rotateX(-Math.PI / 2);
@@ -371,21 +313,20 @@ export class FlowEngine {
     jet.translate(0, 1.6, 0);
     const jet2 = jet.clone().rotateX(Math.PI);
     const jets = new THREE.BufferGeometry();
-    const merge = (a: THREE.BufferGeometry, b: THREE.BufferGeometry) => {
-      const pa = a.getAttribute("position").array as Float32Array;
-      const pb = b.getAttribute("position").array as Float32Array;
-      const ia = a.getIndex()!.array;
-      const ib = b.getIndex()!.array;
+    {
+      const pa = jet.getAttribute("position").array as Float32Array;
+      const pb = jet2.getAttribute("position").array as Float32Array;
+      const ia = jet.getIndex()!.array;
+      const ib = jet2.getIndex()!.array;
       const p = new Float32Array(pa.length + pb.length);
       p.set(pa);
       p.set(pb, pa.length);
       const idx: number[] = [...ia, ...Array.from(ib, (v) => v + pa.length / 3)];
       jets.setAttribute("position", new THREE.BufferAttribute(p, 3));
       jets.setIndex(idx);
-    };
-    merge(jet, jet2);
+    }
     this.pulsarBeams = new THREE.InstancedMesh(jets, addMat(), MCP_SLOTS);
-    for (const m of [this.cores, this.hits, this.attractors, this.stepRings, this.rings, this.pulsars, this.pulsarBeams]) {
+    for (const m of [this.cores, this.attractors, this.stepRings, this.rings, this.pulsars, this.pulsarBeams]) {
       m.boundingSphere = big;
       m.frustumCulled = false;
       m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -402,14 +343,89 @@ export class FlowEngine {
     this.selRing.visible = false;
   }
 
+  /**
+   * Swap in a new graph sample (the session's graph grows while it runs). Anchors are laid out per node id (stable:
+   * a node never moves when others arrive), new anchors take over a share of the nebula particles. No reset.
+   */
+  setGalaxy(galaxy: Galaxy) {
+    const n = Math.min(NODE_MAX, galaxy.nodes.length);
+    const old = this.nAnchors;
+    this.nAnchors = n;
+    this.nameIdx.clear();
+    const idOf = new Map<string, number>();
+    for (let i = 0; i < n; i++) {
+      const nd = galaxy.nodes[i];
+      this.nameIdx.set(nd.name.toLowerCase(), i);
+      idOf.set(nd.id, i);
+      // 3-arm spiral disc, radius + arm seeded by the node id (stable while the graph grows)
+      const h = hashStr(nd.id);
+      const f = h1(h);
+      const r = 0.5 + (NEB_R - 0.9) * Math.sqrt(f) + (h1(h + 1) - 0.5) * 0.45;
+      const ang = ((h % 3) / 3) * TAU + r * 1.15 + (h1(h + 2) - 0.5) * 0.5;
+      this.aLocal[i * 3] = Math.cos(ang) * r;
+      this.aLocal[i * 3 + 1] = (h1(h + 3) - 0.5) * 0.7 * (1.3 - f) + 0.4;
+      this.aLocal[i * 3 + 2] = Math.sin(ang) * r;
+      _c.set(KIND_COLOR[nd.kind] ?? "#94a3b8");
+      this.aCol[i * 3] = _c.r;
+      this.aCol[i * 3 + 1] = _c.g;
+      this.aCol[i * 3 + 2] = _c.b;
+      this.aNamed[i] = i < 22 ? 1 : 0;
+    }
+    // nebula particles: first graph -> spread over all anchors; growth -> new anchors take their share
+    if (n > 0) {
+      const share = old > 0 && n > old ? (n - old) / n : old > 0 ? 0 : 1;
+      for (let j = 0; j < NEB_N; j++) {
+        if (this.nA[j] >= n) this.nA[j] = Math.floor(Math.random() * n);
+        else if (share > 0 && Math.random() < share) this.nA[j] = old > 0 ? old + Math.floor(Math.random() * (n - old)) : Math.random() < 0.2 ? Math.floor(Math.random() * Math.min(22, n)) : Math.floor(Math.random() * n);
+      }
+    }
+    this.anchorGeo.setDrawRange(0, n);
+    // edges: sampled graph links among shown anchors + nearest-neighbour links so the structure reads as a graph
+    const E = this.edgeA;
+    let ne = 0;
+    const seen = new Set<number>();
+    const add = (a: number, b: number) => {
+      if (a === b || ne >= EDGE_MAX) return;
+      const k = a < b ? a * 4096 + b : b * 4096 + a;
+      if (seen.has(k)) return;
+      seen.add(k);
+      E[ne * 2] = a;
+      E[ne * 2 + 1] = b;
+      ne++;
+    };
+    const AL = this.aLocal;
+    for (const l of galaxy.links) {
+      const a = idOf.get(l.source);
+      const b = idOf.get(l.target);
+      if (a !== undefined && b !== undefined) {
+        const dx = AL[a * 3] - AL[b * 3], dz = AL[a * 3 + 2] - AL[b * 3 + 2];
+        if (dx * dx + dz * dz < 9) add(a, b);
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      let best = -1, bd = 1e9, b2 = -1, bd2 = 1e9;
+      for (let j = 0; j < n; j++) {
+        if (j === i) continue;
+        const dx = AL[i * 3] - AL[j * 3], dy = AL[i * 3 + 1] - AL[j * 3 + 1], dz = AL[i * 3 + 2] - AL[j * 3 + 2];
+        const d = dx * dx + dy * dy + dz * dz;
+        if (d < bd) { b2 = best; bd2 = bd; best = j; bd = d; } else if (d < bd2) { b2 = j; bd2 = d; }
+      }
+      if (best >= 0) add(i, best);
+      if (b2 >= 0 && i % 2 === 0) add(i, b2);
+    }
+    this.nEdge = ne;
+    this.edgeGeo.setDrawRange(0, ne * 2);
+  }
+
   dispose() {
     for (const g of [this.edgeGeo, this.fieldGeo, this.runGeo, this.nebGeo, this.anchorGeo, this.streamGeo, this.beamGeo, this.glowGeo]) g.dispose();
-    for (const m of [this.cores, this.hits, this.attractors, this.stepRings, this.rings, this.pulsars, this.pulsarBeams]) {
+    for (const m of [this.cores, this.attractors, this.stepRings, this.rings, this.pulsars, this.pulsarBeams]) {
       m.geometry.dispose();
       (m.material as THREE.Material).dispose();
       m.dispose();
     }
     this.material.dispose();
+    this.nebMaterial.dispose();
   }
 
   // ------------------------------------------------------------------ helpers
@@ -419,66 +435,68 @@ export class FlowEngine {
     if (i === undefined) {
       let h = 7;
       for (let c = 0; c < k.length; c++) h = (h * 31 + k.charCodeAt(c)) >>> 0;
-      i = h % this.nAnchors;
+      i = h % Math.max(1, this.nAnchors);
       this.nameIdx.set(k, i);
     }
     return i;
   }
-  anchorWorld(i: number, out: THREE.Vector3) {
+  /** anchor in the nebula's local frame (rotated by the slow spin) */
+  anchorLocal(i: number, out: THREE.Vector3) {
     const c = Math.cos(this.nebAngle);
     const s = Math.sin(this.nebAngle);
     const x = this.aLocal[i * 3];
     const z = this.aLocal[i * 3 + 2];
     return out.set(x * c - z * s, this.aLocal[i * 3 + 1], x * s + z * c);
   }
+  /** anchor on stage (the kit places + scales the side graph) */
+  anchorWorld(i: number, out: THREE.Vector3) {
+    return graphToStage(this.anchorLocal(i, out), out);
+  }
   slotOf(id: string) {
     const s = this.idToSlot.get(id);
     return s === undefined ? null : this.slots[s];
+  }
+  /** stage position of a run's step attractor k (pool slot s) */
+  attractor(s: number, k: number, out: THREE.Vector3) {
+    return out.set(this.rAt[s * 6 + k * 2], 0.35, this.rAt[s * 6 + k * 2 + 1]);
   }
   emitRing(x: number, y: number, z: number, col: THREE.Color, max: number, dur: number, now: number, gain = 1) {
     const k = this.ringNext++ % RINGS_N;
     this.ringStart[k] = now;
     this.ringDur[k] = dur;
     this.ringMax[k] = max;
-    this.ringPos.set([x, y, z], k * 3);
-    this.ringCol.set([col.r * gain, col.g * gain, col.b * gain], k * 3);
+    this.ringPos[k * 3] = x;
+    this.ringPos[k * 3 + 1] = y;
+    this.ringPos[k * 3 + 2] = z;
+    this.ringCol[k * 3] = col.r * gain;
+    this.ringCol[k * 3 + 1] = col.g * gain;
+    this.ringCol[k * 3 + 2] = col.b * gain;
   }
 
-  private alloc(inst: Instance, now: number) {
+  private alloc(a: KitAgent, now: number) {
+    const inst = a.inst;
     const si = this.slots.findIndex((s) => !s.used);
     if (si < 0) return -1;
     const s = this.slots[si];
     const c = TYPE_RGB[inst.type];
-    Object.assign(s, { used: true, id: inst.id, inst, count: 0, released: false, r: c.r, g: c.g, b: c.b, omega: 2, bright: 0.6, swirl: 0, p: 0, e: 0 });
+    Object.assign(s, { used: true, id: inst.id, inst, ka: a, count: 0, released: false, r: c.r, g: c.g, b: c.b, omega: 2, bright: 0.6, swirl: 0, p: 0, e: 0 });
     s.tiltA = (h1(si + now) - 0.5) * 0.7;
     s.tiltB = (h1(si * 3.1 + now) - 0.5) * 0.7;
-    s.rscale = isScout(inst.type) ? 0.72 : 1;
-    s.want = Math.round((isScout(inst.type) ? 380 : 620) * (REDUCED ? 0.5 : 1));
-    // seeded per run (fan lean + side) and per agent (radius); same-role agents of one run get their own angle
-    s.rank = roleIndex(inst);
-    if (isScout(inst.type)) {
-      const side = hash01(inst.run, 72) < 0.5 ? -1 : 1;
-      s.dTh = jit(inst.run, 73) * 0.5 + side * alt(s.rank) * 0.62;
-      s.rad = 4.4 * (0.88 + 0.26 * hash01(inst.id, 74));
-    } else {
-      s.dTh = alt(s.rank) * 0.5 + jit(inst.id, 75) * 0.16;
-      s.rad = RING_R - 1.9 + jit(inst.id, 76) * 0.7;
-    }
-    // birth position: out of the parent eddy, or out of the Hatchet step attractor that spawned it
+    s.rscale = isScout(inst.type) || a.depth > 0 ? 0.72 : 1;
+    s.want = Math.round((s.rscale < 1 ? 380 : 620) * (REDUCED ? 0.5 : 1));
+    // birth position: out of the parent eddy, or out of the kit slot (the step attractor's spot)
     const parent = inst.parent ? this.slotOf(inst.parent) : null;
     if (parent) {
       s.x = parent.x;
       s.y = parent.y;
       s.z = parent.z;
     } else {
-      const run = world.runs.get(inst.run);
-      attractorPos((run?.slot ?? 0) % RUN_SLOTS, STEP_K[inst.type], _v);
-      s.x = _v.x;
-      s.y = _v.y;
-      s.z = _v.z;
+      s.x = a.pos.x;
+      s.y = 0.9;
+      s.z = a.pos.z;
     }
     this.idToSlot.set(inst.id, si);
-    this.emitRing(s.x, s.y, s.z, c, 2.4, 0.9, now, 2.2);
+    this.emitRing(s.x, s.y, s.z, c, 2.4 * fit.scale, 0.9, now, 2.2);
     // a share of the parent's captured particles spin off with the child (fan-out reads as eddies shed by the parent)
     if (parent) {
       const pi = this.idToSlot.get(inst.parent!)!;
@@ -514,16 +532,21 @@ export class FlowEngine {
     }
     s.count = 0;
     _c.setRGB(s.r, s.g, s.b).lerp(WHITE, 0.5);
-    this.emitRing(s.x, s.y, s.z, _c, 3.2, 1.1, now, 2.6);
+    this.emitRing(s.x, s.y, s.z, _c, 3.2 * fit.scale, 1.1, now, 2.6);
   }
 
   // ------------------------------------------------------------------ frame
-  /** LOD size multiplier for eddies, sampled once per frame */
+  /** kit fit size multiplier for eddies, sampled once per frame */
   lodK = 1;
+  /** Once per frame, after the kit's ticker (world tick -> lodTick -> kitTick). */
   update(dtRaw: number, now: number, t: number) {
     const dt = Math.min(0.05, dtRaw);
-    this.lodK = lodScale();
+    this.lodK = fit.scale;
     this.frame++;
+    // the field surrounds the kit core + its periphery; the nebula current turns slowly
+    const want = Math.max(FIELD_R0, kit.core.r + 20);
+    this.fieldR += (want - this.fieldR) * Math.min(1, dt * 0.8);
+    this.nebAngle += dt * 0.04 * MOTION;
     this.syncRuns(now, dt);
     this.syncSlots(now, dt, t);
     this.recruit(now);
@@ -536,26 +559,55 @@ export class FlowEngine {
   }
 
   private syncRuns(now: number, dt: number) {
-    this.runRef.fill(null);
-    for (const r of world.runs.values()) {
-      const s = r.slot % RUN_SLOTS;
-      const cur = this.runRef[s];
-      // LOD: a lane's vortex belongs to its expanded run when it has one (collapsed runs live in the lane's cluster)
-      const exp = !lod.grouped || isRunExpanded(r.id);
-      const curExp = !!cur && (!lod.grouped || isRunExpanded(cur.id));
-      if (!cur || (exp && !curExp) || (exp === curExp && r.startedAt > cur.startedAt)) this.runRef[s] = r;
+    // pool a vortex for every drawn kit run; a vortex whose run left the kit fades out before its slot is reused
+    this.rPresent.fill(0);
+    for (const kr of kit.runs.values()) {
+      let s = this.runPool.get(kr.id);
+      if (s === undefined) {
+        s = -1;
+        for (let k = 0; k < RUN_SLOTS; k++)
+          if (!this.runId[k] || (this.rAlpha[k] < 0.01 && !this.runPool.has(this.runId[k]))) {
+            s = k;
+            break;
+          }
+        if (s < 0) for (let k = 0; k < RUN_SLOTS; k++) if (this.rAlpha[k] < 0.01 && !kit.runs.has(this.runId[k])) (s = k), this.runPool.delete(this.runId[k]);
+        if (s < 0) continue;
+        this.runId[s] = kr.id;
+        this.runPool.set(kr.id, s);
+        this.rAlpha[s] = 0;
+      }
+      this.rPresent[s] = 1;
+      this.runKit[s] = kr;
+      this.runRef[s] = kr.run ?? world.runs.get(kr.id) ?? null;
+      this.rX[s] = kr.origin.x;
+      this.rZ[s] = kr.origin.z;
+      // the loop circles the run's agents
+      this.rR[s] = Math.max(2.6, Math.min(11, Math.hypot(kr.hu, kr.hv) * 0.92 + 0.6));
+      for (let k = 0; k < 3; k++) {
+        runLocal(kr, kitRoleU(STEP_ROLE[k]), 0, _v);
+        this.rAt[s * 6 + k * 2] = _v.x;
+        this.rAt[s * 6 + k * 2 + 1] = _v.z;
+      }
+      this.rSteps[s] = this.runRef[s]?.hasSteps ? 1 : 0;
     }
     for (let s = 0; s < RUN_SLOTS; s++) {
+      if (!this.rPresent[s]) {
+        if (this.runId[s] && this.rAlpha[s] < 0.01) {
+          if (this.runPool.get(this.runId[s]) === s) this.runPool.delete(this.runId[s]);
+          this.runId[s] = "";
+          this.runRef[s] = null;
+          this.runKit[s] = null;
+        }
+      }
       const r = this.runRef[s];
-      RUN_SPIN[s] = r ? runSpin(r.id) : 0;
       let a = 0;
-      if (r) {
+      if (r && this.rPresent[s]) {
         a = Math.min(1, (now - r.startedAt) / 1800);
         if (r.endedAt) a *= Math.max(0, 1 - (now - r.endedAt - (RUN_LINGER_MS - 3000)) / 3000);
-        if (r.color !== this.rColStr[s]) {
-          this.rColStr[s] = r.color;
-          this.rCol[s].set(r.color);
-        }
+      }
+      if (r && r.color !== this.rColStr[s]) {
+        this.rColStr[s] = r.color;
+        this.rCol[s].set(r.color);
       }
       this.rAlpha[s] += (a - this.rAlpha[s]) * Math.min(1, dt * 3);
     }
@@ -563,13 +615,16 @@ export class FlowEngine {
 
   private syncSlots(now: number, dt: number, t: number) {
     const f = this.frame;
-    for (const inst of world.instances.values()) {
-      if (lod.grouped && !isExpanded(inst)) continue;
-      let si = this.idToSlot.get(inst.id);
-      if (si === undefined) si = this.alloc(inst, now);
+    for (const a of kit.agents.values()) {
+      let si = this.idToSlot.get(a.id);
+      if (si !== undefined && this.slots[si].ka !== a) {
+        // collapsed and re-expanded: a fresh kit object, keep the eddy
+        this.slots[si].ka = a;
+      }
+      if (si === undefined) si = this.alloc(a, now);
       if (si < 0) continue;
       this.slots[si].seen = f;
-      this.slots[si].inst = inst;
+      this.slots[si].inst = a.inst;
     }
     this.pendingByInst.clear();
     for (const p of world.mcpPending.values()) this.pendingByInst.set(p.instance, Math.max(this.pendingByInst.get(p.instance) ?? 0, waitSeconds(p, now)));
@@ -583,29 +638,21 @@ export class FlowEngine {
         if (s.count > 0) this.release(si, now);
         s.used = false;
         s.inst = null;
+        s.ka = null;
         this.idToSlot.delete(s.id);
         continue;
       }
-      const run = world.runs.get(inst.run);
-      const rs = (run?.slot ?? 0) % RUN_SLOTS;
-      const kk = STEP_K[inst.type];
-      const th = runBase(rs) + (kk * TAU) / 3;
-      const scout = isScout(inst.type);
-      const rr = scout ? RING_R - 1.9 : s.rad;
-      const th0 = scout ? th : th + s.dTh;
-      let tx = RUN_CENTERS[rs][0] + Math.cos(th0) * rr;
-      let tz = RUN_CENTERS[rs][1] + Math.sin(th0) * rr;
-      if (scout) {
-        const a = th + s.dTh;
-        tx += Math.cos(a) * s.rad;
-        tz += Math.sin(a) * s.rad;
-      }
+      // the kit's agent position is the eddy's attractor; the eddy centre is the agent's drawn position
+      const ka = s.ka!;
+      const tx = ka.pos.x;
+      const tz = ka.pos.z;
       const ty = 0.9 + Math.sin(t * 0.9 + si) * 0.18;
       if (!inst.exitAt) {
         s.x += (tx - s.x) * k;
         s.y += (ty - s.y) * k;
         s.z += (tz - s.z) * k;
       }
+      ka.live.set(s.x, s.y, s.z);
       s.p = presence(inst, now);
       s.e = energy(inst, now);
       s.waitMcp = this.pendingByInst.get(inst.id) ?? -1;
@@ -656,6 +703,7 @@ export class FlowEngine {
   private aX = new Float32Array(RUN_SLOTS);
   private aZ = new Float32Array(RUN_SLOTS);
   private aA = new Float32Array(RUN_SLOTS);
+  private aRR = new Float32Array(RUN_SLOTS);
   private aR = new Float32Array(RUN_SLOTS * 3);
   private sX = new Float32Array(MAX_SLOTS);
   private sZ = new Float32Array(MAX_SLOTS);
@@ -679,8 +727,9 @@ export class FlowEngine {
     let na = 0;
     for (let s = 0; s < RUN_SLOTS; s++) {
       if (this.rAlpha[s] < 0.01) continue;
-      this.aX[na] = RUN_CENTERS[s][0];
-      this.aZ[na] = RUN_CENTERS[s][1];
+      this.aX[na] = this.rX[s];
+      this.aZ[na] = this.rZ[s];
+      this.aRR[na] = this.rR[s];
       this.aA[na] = this.rAlpha[s];
       this.aR[na * 3] = this.rCol[s].r;
       this.aR[na * 3 + 1] = this.rCol[s].g;
@@ -695,7 +744,8 @@ export class FlowEngine {
       this.sS[ns] = s.swirl;
       ns++;
     }
-    const R2 = FIELD_R * FIELD_R;
+    const FR = this.fieldR;
+    const R2 = FR * FR;
     for (let i = 0; i < FIELD_N; i++) {
       const i3 = i * 3;
       let x = P[i3],
@@ -746,13 +796,14 @@ export class FlowEngine {
           const dx = x - this.aX[k],
             dz = z - this.aZ[k];
           const d2 = dx * dx + dz * dz;
-          if (d2 > 140) continue;
+          const RR = this.aRR[k];
+          if (d2 > RR * RR * 6.6) continue;
           const d = Math.sqrt(d2) + 1e-4;
-          const qq = d / RING_R;
+          const qq = d / RR;
           const v = 2.6 * this.aA[k] * qq * Math.exp(-qq * qq * 0.6);
           vx -= (dz / d) * v;
           vz += (dx / d) * v;
-          const e = d - RING_R;
+          const e = d - RR;
           const w = Math.exp(-e * e * 0.55) * this.aA[k];
           gr += this.aR[k * 3] * w;
           gg += this.aR[k * 3 + 1] * w;
@@ -783,7 +834,7 @@ export class FlowEngine {
         C[i3 + 2] = (0.2 - 0.04 * hue) * lum + gb * 0.42 + this.fT[i3 + 2] * heat * 1.8;
         S[i] = 0.26 + 0.2 * rnd[i] + band * 0.12 + heat * 0.35;
         if (r2 > R2) {
-          const nr = Math.sqrt(Math.random()) * FIELD_R * 0.97;
+          const nr = Math.sqrt(Math.random()) * FR * 0.97;
           const na2 = Math.random() * TAU;
           x = Math.cos(na2) * nr;
           z = Math.sin(na2) * nr;
@@ -801,6 +852,9 @@ export class FlowEngine {
   private updateFlares(now: number) {
     this.burst.fill(0);
     this.burstW.fill(0);
+    // the nebula is only drawn (and flares only light it) while the kit shows the side graph
+    if (!this.nAnchors || !kit.graphWanted) return;
+    const gs = kit.graph.scale;
     for (const f of world.flares) {
       const idx = this.anchorIdx(f.node);
       const age = (now - f.start) / 1000;
@@ -809,11 +863,11 @@ export class FlowEngine {
         this.lastFlareId = f.id;
         this.anchorWorld(idx, _v);
         if (f.op === "write") {
-          this.emitRing(_v.x, _v.y, _v.z, WHITE, 4.2, 1.7, now, 2.4);
-          this.emitRing(_v.x, _v.y, _v.z, WHITE, 2.2, 1.0, now, 1.6);
+          this.emitRing(_v.x, _v.y, _v.z, WHITE, 4.2 * gs, 1.7, now, 2.4);
+          this.emitRing(_v.x, _v.y, _v.z, WHITE, 2.2 * gs, 1.0, now, 1.6);
         } else {
           const inst = world.instances.get(f.instance);
-          this.emitRing(_v.x, _v.y, _v.z, inst ? TYPE_RGB[inst.type] : WHITE, 1.1, 0.7, now, 1.6);
+          this.emitRing(_v.x, _v.y, _v.z, inst ? TYPE_RGB[inst.type] : WHITE, 1.1 * gs, 0.7, now, 1.6);
         }
         this.lastFlare = { name: f.node, op: f.op, at: now, idx };
       }
@@ -830,6 +884,7 @@ export class FlowEngine {
   }
 
   private updateNebula(t: number) {
+    if (!this.nAnchors || !kit.graphWanted) return;
     const P = arr(this.nebGeo, "position"),
       C = arr(this.nebGeo, "acol"),
       S = arr(this.nebGeo, "size");
@@ -865,7 +920,7 @@ export class FlowEngine {
     const AP = arr(this.anchorGeo, "position"),
       ACo = arr(this.anchorGeo, "acol"),
       AS = arr(this.anchorGeo, "size");
-    const n = this.burst.length;
+    const n = this.nAnchors;
     for (let i = 0; i < n; i++) {
       const x = AL[i * 3],
         z = AL[i * 3 + 2];
@@ -880,26 +935,36 @@ export class FlowEngine {
       AS[i] = (this.aNamed[i] ? 1.25 : 0.75) * (1 + b * 3.5);
     }
     dirty(this.anchorGeo);
+    const EP = (this.edgeGeo.getAttribute("position") as THREE.BufferAttribute).array as Float32Array;
     const EC = (this.edgeGeo.getAttribute("color") as THREE.BufferAttribute).array as Float32Array;
     const E = this.edgeA;
-    for (let k = 0; k < E.length; k++) {
+    const ne2 = this.nEdge * 2;
+    for (let k = 0; k < ne2; k++) {
       const a = E[k];
       const o = E[k ^ 1];
+      const x = AL[a * 3],
+        z = AL[a * 3 + 2];
+      EP[k * 3] = x * cr - z * sr;
+      EP[k * 3 + 1] = AL[a * 3 + 1];
+      EP[k * 3 + 2] = x * sr + z * cr;
       const b = Math.max(this.burst[a], this.burst[o] * 0.6);
       EC[k * 3] = AC[a * 3] * 0.32 + 0.05 + FC[a * 3] * b * 3;
       EC[k * 3 + 1] = AC[a * 3 + 1] * 0.32 + 0.06 + FC[a * 3 + 1] * b * 3;
       EC[k * 3 + 2] = AC[a * 3 + 2] * 0.32 + 0.1 + FC[a * 3 + 2] * b * 3;
     }
     (this.edgeGeo.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+    (this.edgeGeo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
   }
 
+  private stTh = new Float32Array(3);
+  private stB = new Float32Array(3);
   private updateRunCurrents(now: number, t: number) {
     const P = arr(this.runGeo, "position"),
       C = arr(this.runGeo, "acol"),
       S = arr(this.runGeo, "size");
     const tt = t * MOTION;
-    const stTh = [0, 0, 0];
-    const stB = [0, 0, 0];
+    const stTh = this.stTh;
+    const stB = this.stB;
     for (let s = 0; s < RUN_SLOTS; s++) {
       const r = this.runRef[s];
       const al = this.rAlpha[s];
@@ -908,25 +973,29 @@ export class FlowEngine {
         for (let j = 0; j < RUN_P; j++) S[o + j] = 0;
         continue;
       }
-      const cx = RUN_CENTERS[s][0],
-        cz = RUN_CENTERS[s][1];
-      const base = runBase(s);
+      const cx = this.rX[s],
+        cz = this.rZ[s];
+      const RR = this.rR[s];
+      // each step lights the loop on the side of its attractor (the middle one: the far side)
       for (let k = 0; k < 3; k++) {
-        stTh[k] = base + (k * TAU) / 3;
+        const dx = this.rAt[s * 6 + k * 2] - cx;
+        const dz = this.rAt[s * 6 + k * 2 + 1] - cz;
+        stTh[k] = dx * dx + dz * dz < 0.6 ? -Math.PI / 2 : Math.atan2(dz, dx);
         const st = r.steps[STEPS[k]];
-        stB[k] = st === "running" ? 2.2 : st === "done" ? 0.5 : 0;
+        stB[k] = this.rSteps[s] ? (st === "running" ? 2.2 : st === "done" ? 0.5 : 0) : 0;
       }
       const hAge = (now - r.handoffAt) / 1000;
-      const hOn = r.handoffAt > 0 && hAge < 2.4;
-      const hFrom = base + (STEPS.indexOf(r.handoffFrom) * TAU) / 3;
-      const hSpan = ((((STEPS.indexOf(r.handoffTo) - STEPS.indexOf(r.handoffFrom)) % 3) + 3) % 3) * (TAU / 3);
+      const hOn = this.rSteps[s] === 1 && r.handoffAt > 0 && hAge < 2.4;
+      const hFrom = stTh[STEPS.indexOf(r.handoffFrom)];
+      let hSpan = (stTh[STEPS.indexOf(r.handoffTo)] - hFrom) % TAU;
+      if (hSpan < 0) hSpan += TAU;
       const front = hSpan * Math.min(1, 1 - Math.pow(1 - Math.min(1, hAge / 1.4), 3));
       const hGain = hOn ? 3.2 * (1 - hAge / 2.4) : 0;
       const col = this.rCol[s];
       for (let j = 0; j < RUN_P; j++) {
         const q = o + j;
         const th = this.rTh[q] + tt * this.rSp[q];
-        const rad = RING_R + this.rRr[q] + 0.16 * Math.sin(3 * th + tt * 0.6 + q);
+        const rad = RR + this.rRr[q] + 0.16 * Math.sin(3 * th + tt * 0.6 + q);
         P[q * 3] = cx + Math.cos(th) * rad;
         P[q * 3 + 1] = 0.25 + this.rY[q];
         P[q * 3 + 2] = cz + Math.sin(th) * rad;
@@ -991,8 +1060,9 @@ export class FlowEngine {
       if (!r || !r.handoffAt) continue;
       const age = (now - r.handoffAt) / 1000;
       if (age > 2.4) continue;
-      attractorPos(s, STEPS.indexOf(r.handoffFrom), _v);
-      attractorPos(s, STEPS.indexOf(r.handoffTo), _w);
+      if (!this.rSteps[s] || this.rAlpha[s] < 0.01) continue;
+      this.attractor(s, STEPS.indexOf(r.handoffFrom), _v);
+      this.attractor(s, STEPS.indexOf(r.handoffTo), _w);
       const col = this.rCol[s];
       const N = 220;
       for (let j = 0; j < N; j++) {
@@ -1036,8 +1106,9 @@ export class FlowEngine {
       LC.set([r0, g0, b0, r1, g1, b1], nl * 6);
       nl++;
     };
+    const graphOn = this.nAnchors > 0 && kit.graphWanted && kit.graph.mix > 0.05;
     for (const f of world.flares) {
-      if (nl >= BEAM_SEGS) break;
+      if (!graphOn || nl >= BEAM_SEGS) break;
       const s = this.slotOf(f.instance);
       if (!s) continue;
       const age = (now - f.start) / 2600;
@@ -1061,11 +1132,12 @@ export class FlowEngine {
     for (const c of world.mcpCalls) {
       const s = this.slotOf(c.instance);
       const srv = world.mcpServers.get(c.server);
-      if (!s || !srv) continue;
+      const sp = serverPos(c.server);
+      if (!s || !srv || !sp) continue;
       const u0 = (now - c.start) / c.dur;
       if (u0 > 1) continue;
       _v.set(s.x, s.y, s.z);
-      mcpPos(srv.slot, _w);
+      _w.copy(sp).setY(PULSAR_Y);
       const A = c.phase === "call" ? _v : _w;
       const B = c.phase === "call" ? _w : _v;
       _c.set(srv.color);
@@ -1085,10 +1157,11 @@ export class FlowEngine {
       if (nt >= TETHER_MAX) return;
       const s = this.slotOf(instance);
       const srv = world.mcpServers.get(server);
-      if (!s || !srv) return;
+      const sp = serverPos(server);
+      if (!s || !srv || !sp) return;
       nt++;
       _v.set(s.x, s.y, s.z);
-      mcpPos(srv.slot, _w);
+      _w.copy(sp).setY(PULSAR_Y);
       _c.set(srv.color);
       if (wait < 2) _c.lerp(AMBER, Math.min(1, wait / 2));
       else _c.copy(AMBER).lerp(RED, Math.min(1, wait - 2));
@@ -1171,7 +1244,6 @@ export class FlowEngine {
       const s = this.slots[si];
       if (!s.used || !s.inst) {
         this.setInst(this.cores, si, 0, -999, 0, 0, _c.setRGB(0, 0, 0));
-        this.setInst(this.hits, si, 0, -999, 0, 0, _c);
         GS[si] = 0;
         continue;
       }
@@ -1184,12 +1256,11 @@ export class FlowEngine {
       const thinking = inst.status === "thinking" && !inst.exitAt;
       const wob = thinking ? 0.1 * Math.sin(t * 9 + si) : 0;
       const implode = xAge >= 0 ? Math.pow(s.p, 1.6) : s.p;
-      const ls = lodScale();
+      const ls = fit.scale;
       const sc = (implode * (1 + s.e * 0.45 + wob) + xFlash * 0.9 + birth * 0.6) * ls;
       _c.setRGB(s.r, s.g, s.b).multiplyScalar(1.3 + s.bright * 1.5 + s.e * 1.1);
       _c.lerp(_c2.setRGB(4, 4, 4), Math.min(1, birth + xFlash));
       this.setInst(this.cores, si, s.x, s.y, s.z, sc, _c, t * s.omega * 0.3, t * s.omega, 0);
-      this.setInst(this.hits, si, s.x, s.y, s.z, inst.exitAt ? 0 : 1, _c);
       _c.setRGB(s.r, s.g, s.b);
       glow(si, s.x, s.y, s.z, _c, (0.3 + s.bright * 0.4 + s.e * 0.5 + birth * 2 + xFlash * 2.5) * s.p + xFlash, (5 + s.e * 4 + birth * 10 + xFlash * 14) * Math.max(s.p, xFlash) * ls);
     }
@@ -1208,13 +1279,13 @@ export class FlowEngine {
       for (let k = 0; k < 3; k++) {
         const i = s * 3 + k;
         const gi = MAX_SLOTS + i;
-        if (!r || al < 0.01) {
+        if (!r || al < 0.01 || !this.rSteps[s]) {
           this.setInst(this.attractors, i, 0, -999, 0, 0, _c.setRGB(0, 0, 0));
           this.setInst(this.stepRings, i, 0, -999, 0, 0, _c);
           GS[gi] = 0;
           continue;
         }
-        attractorPos(s, k, _v);
+        this.attractor(s, k, _v);
         const st = r.steps[STEPS[k]];
         const col = this.rCol[s];
         let sc = 0.6,
@@ -1269,7 +1340,9 @@ export class FlowEngine {
     for (const srv of world.mcpServers.values()) {
       const m = srv.slot % MCP_SLOTS;
       const gi = MAX_SLOTS + RUN_SLOTS * 3 + m;
-      mcpPos(srv.slot, _v);
+      const sp = serverPos(srv.name);
+      if (!sp) continue;
+      _v.copy(sp).setY(PULSAR_Y);
       const act = Math.exp(-((now - srv.activeAt) / 1000) * 2.5);
       const busy = srv.inflight > 0 ? 1 : 0;
       this.mcpSpin[m] += dt * (0.4 + busy * 3.5) * MOTION;
@@ -1295,7 +1368,7 @@ export class FlowEngine {
       this.setInst(this.rings, k, this.ringPos[k * 3], this.ringPos[k * 3 + 1], this.ringPos[k * 3 + 2], 0.15 + this.ringMax[k] * e, _c);
     }
 
-    for (const m of [this.cores, this.hits, this.attractors, this.stepRings, this.rings, this.pulsars, this.pulsarBeams]) {
+    for (const m of [this.cores, this.attractors, this.stepRings, this.rings, this.pulsars, this.pulsarBeams]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
     }

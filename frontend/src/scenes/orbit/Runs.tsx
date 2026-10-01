@@ -1,138 +1,169 @@
-/** Hatchet runs: one tilted orbital ring per run with plan/research/write beads and a handoff light. */
+/**
+ * Run marker slot: each Hatchet run is an elliptical orbit drawn around its agents (the kit run frame: semi-axes
+ * follow the run's half extents), with plan / research / write beads on it, a handoff light that travels the orbit
+ * from the finished step to the next one, and the run label above it.
+ */
 import { Trail } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef, useState, type Ref } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
-import { Label3D, type Label3DHandle, type LabelSeg } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, useWorld, world } from "../shared/world";
-import { isRunExpanded, lod } from "../shared/lod";
-import { reduced, ringLocal, ringOf, runSpin, STEP_ANGLE } from "./layout";
+import { Label3D, type LabelSeg } from "../shared/Label3D";
+import { RUN_LINGER_MS, STEPS, hash01, useWorld, world, type Run } from "../shared/world";
+import type { RunSlotProps } from "../shared/kit";
+import { reduced, runSpin, STEP_ANGLE } from "./layout";
 
 const STEP_COLOR: Record<string, string> = { queued: "#64748b", running: "#fbbf24", done: "#22c55e", failed: "#ef4444" };
 
-function RunLabel({ id, color, pos, lref }: { id: string; color: string; pos: THREE.Vector3Tuple | THREE.Vector3; lref: Ref<Label3DHandle> }) {
-  const w = useWorld();
-  const run = w.runs.get(id);
-  if (!run) return null;
+/** unit torus bent onto an ellipse (semi-axes uA, uB) in the vertex shader: the tube keeps its thickness */
+const ORBIT_GEO = new THREE.TorusGeometry(1, 1, 6, 320);
+function orbitMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: { uA: { value: 4 }, uB: { value: 3 }, uTube: { value: 0.03 }, uColor: { value: new THREE.Color() }, uOpacity: { value: 0 } },
+    vertexShader: /* glsl */ `
+      uniform float uA; uniform float uB; uniform float uTube;
+      void main(){
+        float th = atan(position.y, position.x);
+        vec3 c = vec3(cos(th), sin(th), 0.0);
+        vec3 off = position - c * 1.0;       // torus radius 1, tube radius 1
+        vec3 p = vec3(cos(th) * uA, sin(th) * uB, 0.0) + off * uTube;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor; uniform float uOpacity;
+      void main(){ gl_FragColor = vec4(uColor * uOpacity, 1.0); }`,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+}
+const BEAD_GEO = new THREE.OctahedronGeometry(0.26, 0);
+const HALO_GEO = new THREE.RingGeometry(0.34, 0.42, 40);
+const RUNNER_GEO = new THREE.SphereGeometry(0.16, 12, 12);
+const _m = new THREE.Matrix4();
+const _n = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+const _tilt = new THREE.Quaternion();
+const X = new THREE.Vector3(1, 0, 0);
+
+/** point on the run's ellipse (ring-local) */
+const ell = (a: number, b: number, ang: number, out: THREE.Vector3) => out.set(Math.cos(ang) * a, Math.sin(ang) * b, 0);
+
+function RunLabel({ run, color }: { run: Run; color: string }) {
+  useWorld();
   const done = run.status !== "started";
-  const segs: LabelSeg[] = [{ text: "hatchet  ", color }, { text: run.topic, color: "#f1f5f9" }, { text: "  " }];
-  for (const s of STEPS) segs.push({ text: ` ${run.steps[s] === "running" ? "›" : "·"}${s}`, color: STEP_COLOR[run.steps[s]] });
+  const segs: LabelSeg[] = [{ text: "hatchet  ", color }];
+  if (run.hasSteps) for (const s of STEPS) segs.push({ text: ` ${run.steps[s] === "running" ? "›" : "·"}${s}`, color: STEP_COLOR[run.steps[s]] });
+  else segs.push({ text: done ? "complete" : "running…", color: "#94a3b8" });
   if (done) segs.push({ text: "  brief ready", color: "#4ade80" });
-  return <Label3D ref={lref} position={pos} text={segs} color={color} size={0.34} maxWidth={16} opacity={done ? 0.65 : 1} fadeMs={300} pxRange={[9.5, 14]} />;
+  return <Label3D text={run.topic} secondary={segs} textColor="#f1f5f9" color={color} size={0.32} maxWidth={9} opacity={done ? 0.65 : 1} fadeMs={300} anchorY="bottom" pxRange={[9.5, 14]} />;
 }
 
-function RunRing({ id }: { id: string }) {
-  const run0 = world.runs.get(id)!;
-  const ring = ringOf(run0.slot);
-  const spin = useMemo(() => runSpin(id), [id]); // matches the agents' per-run angle offset in layout.instPos
-  const color = run0.color;
-  const torus = useRef<THREE.Mesh>(null);
+export function RunOrbit({ run: kr }: RunSlotProps) {
+  const id = kr.id;
+  const color = kr.color;
+  const spin = useMemo(() => runSpin(id), [id]);
+  const tilt = useMemo(() => (hash01(id, 16) - 0.5) * 0.24, [id]);
+  const frame = useRef<THREE.Group>(null);
   const beads = useRef<(THREE.Mesh | null)[]>([]);
+  const beadG = useRef<(THREE.Group | null)[]>([]);
   const halos = useRef<(THREE.Mesh | null)[]>([]);
   const runner = useRef<THREE.Mesh>(null);
-  const label = useRef<Label3DHandle>(null);
+  const labelG = useRef<THREE.Group>(null);
   const c = useMemo(() => new THREE.Color(), []);
   const runColor = useMemo(() => new THREE.Color(color), [color]);
-  const beadPos = useMemo(() => STEPS.map((s) => ringLocal(ring.r, STEP_ANGLE[s], new THREE.Vector3())), [ring.r]);
-  const labelPos = useMemo(() => ringLocal(ring.r, STEP_ANGLE.plan - 0.42, new THREE.Vector3()).setY(1.0), [ring.r]);
+  const m = useMemo(
+    () => ({
+      orbit: orbitMaterial(),
+      beads: STEPS.map(() => new THREE.MeshBasicMaterial({ transparent: true, toneMapped: false })),
+      halos: STEPS.map(() => new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })),
+      runner: new THREE.MeshBasicMaterial({ color: new THREE.Color("#fde68a").multiplyScalar(5), toneMapped: false }),
+    }),
+    [],
+  );
 
   useFrame(({ clock }) => {
-    const run = world.runs.get(id);
-    if (!run) return;
+    const g = frame.current;
+    if (!g) return;
+    const run = kr.run ?? world.runs.get(id);
     const now = performance.now();
     const t = clock.elapsedTime;
-    const fadeIn = Math.min(1, (now - run.startedAt) / 900);
-    const fadeOut = run.endedAt ? Math.max(0, 1 - (now - run.endedAt) / RUN_LINGER_MS) : 1;
+    // ring frame: x = run side, y = run axis (subagents fan along it), tilted a touch per run
+    _n.crossVectors(kr.side, kr.axis);
+    _m.makeBasis(kr.side, kr.axis, _n);
+    _q.setFromRotationMatrix(_m);
+    _tilt.setFromAxisAngle(X, tilt);
+    g.quaternion.copy(_q).multiply(_tilt);
+    g.position.copy(kr.origin);
+    const a = kr.hu + 0.35;
+    const b = kr.hv + 0.35;
+
+    const fadeIn = run ? Math.min(1, (now - run.startedAt) / 900) : 1;
+    const fadeOut = run?.endedAt ? Math.max(0, 1 - (now - run.endedAt) / RUN_LINGER_MS) : 1;
     const vis = fadeIn * fadeOut;
-    const doneFlash = run.endedAt ? Math.exp(-((now - run.endedAt) / 1000) * 2.5) : 0;
-    if (torus.current) {
-      const m = torus.current.material as THREE.MeshBasicMaterial;
-      m.opacity = vis * 0.75;
-      m.color.copy(runColor).multiplyScalar(1.1 + doneFlash * 3);
-      if (run.status === "completed") m.color.lerp(c.set("#4ade80"), doneFlash);
-    }
-    STEPS.forEach((s, k) => {
-      const st = run.steps[s];
+    const doneFlash = run?.endedAt ? Math.exp(-((now - run.endedAt) / 1000) * 2.5) : 0;
+    const u = m.orbit.uniforms;
+    u.uA.value = a;
+    u.uB.value = b;
+    u.uOpacity.value = vis * 0.75;
+    u.uColor.value.copy(runColor).multiplyScalar(1.1 + doneFlash * 3);
+    if (run?.status === "completed") u.uColor.value.lerp(c.set("#4ade80"), doneFlash);
+
+    for (let k = 0; k < STEPS.length; k++) {
+      const s = STEPS[k];
+      const st = run ? run.steps[s] : "queued";
+      const show = !!run?.hasSteps;
+      const bg = beadG.current[k];
+      if (bg) {
+        bg.visible = show;
+        ell(a, b, STEP_ANGLE[s] + spin, bg.position);
+      }
+      if (!show) continue;
       const pulse = st === "running" ? 0.5 + 0.5 * Math.sin(t * (reduced ? 2 : 6)) : 0;
-      const b = beads.current[k];
-      if (b) {
+      const bd = beads.current[k];
+      if (bd) {
         c.set(STEP_COLOR[st]).multiplyScalar(st === "queued" ? 0.7 : st === "running" ? 2 + pulse * 2 : 2.4);
-        const mm = b.material as THREE.MeshBasicMaterial;
-        mm.color.copy(c);
-        mm.opacity = vis;
-        b.scale.setScalar((st === "running" ? 1.3 + pulse * 0.25 : st === "done" ? 1.05 : 0.8) * Math.max(0.01, vis));
+        m.beads[k].color.copy(c);
+        m.beads[k].opacity = vis;
+        bd.scale.setScalar((st === "running" ? 1.3 + pulse * 0.25 : st === "done" ? 1.05 : 0.8) * Math.max(0.01, vis));
       }
       const h = halos.current[k];
       if (h) {
         h.visible = st !== "queued";
-        const hm = h.material as THREE.MeshBasicMaterial;
-        hm.color.set(STEP_COLOR[st]);
-        hm.opacity = vis * (st === "running" ? 0.35 + pulse * 0.4 : 0.18);
+        m.halos[k].color.set(STEP_COLOR[st]);
+        m.halos[k].opacity = vis * (st === "running" ? 0.35 + pulse * 0.4 : 0.18);
         h.scale.setScalar(st === "running" ? 1.6 + pulse * 0.9 : 1.3);
       }
-    });
-    // light that travels along the ring from the finished step to the next one
-    const ht = run.handoffAt ? (now - run.handoffAt) / 1400 : 2;
-    if (runner.current) {
-      const a0 = STEP_ANGLE[run.handoffFrom];
-      let a1 = STEP_ANGLE[run.handoffTo];
+    }
+    // light that travels along the orbit from the finished step to the next one
+    const ht = run?.handoffAt ? (now - run.handoffAt) / 1400 : 2;
+    if (runner.current && run) {
+      const a0 = STEP_ANGLE[run.handoffFrom] + spin;
+      let a1 = STEP_ANGLE[run.handoffTo] + spin;
       if (a1 < a0) a1 += Math.PI * 2;
       const e = ht >= 1 ? 1 : 1 - Math.pow(1 - Math.max(0, ht), 3);
-      ringLocal(ring.r, a0 + (a1 - a0) * e, runner.current.position);
+      ell(a, b, a0 + (a1 - a0) * e, runner.current.position);
       runner.current.scale.setScalar(ht < 1 ? 1 : 0.001);
     }
-    label.current?.setOpacity(vis);
+    // label just above the orbit on screen (screen-up = -z on the ground plane)
+    const hScreen = Math.hypot(kr.side.z * a, kr.axis.z * b);
+    labelG.current?.position.set(kr.origin.x, 0.4, kr.origin.z - hScreen - 0.5);
   });
 
-  const torusColor = useMemo(() => new THREE.Color(color), [color]);
-  const runnerColor = useMemo(() => new THREE.Color("#fde68a").multiplyScalar(5), []);
   return (
-    <group quaternion={ring.q}>
-      <group rotation={[0, -spin, 0]}>
-        <mesh ref={torus} rotation={[Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[ring.r, 0.028, 8, 320]} />
-          <meshBasicMaterial color={torusColor} transparent opacity={0} toneMapped={false} depthWrite={false} />
-        </mesh>
+    <>
+      <group ref={frame}>
+        <mesh geometry={ORBIT_GEO} material={m.orbit} frustumCulled={false} />
         {STEPS.map((s, k) => (
-          <group key={s} position={beadPos[k]}>
-            <mesh ref={(m) => void (beads.current[k] = m)}>
-              <octahedronGeometry args={[0.26, 0]} />
-              <meshBasicMaterial transparent toneMapped={false} />
-            </mesh>
-            <mesh ref={(m) => void (halos.current[k] = m)} rotation={[Math.PI / 2, 0, 0]}>
-              <ringGeometry args={[0.34, 0.42, 40]} />
-              <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
-            </mesh>
+          <group key={s} ref={(x) => void (beadG.current[k] = x)} visible={false}>
+            <mesh ref={(x) => void (beads.current[k] = x)} geometry={BEAD_GEO} material={m.beads[k]} />
+            <mesh ref={(x) => void (halos.current[k] = x)} geometry={HALO_GEO} material={m.halos[k]} />
           </group>
         ))}
         <Trail width={3.2} length={9} color="#fde68a" attenuation={(w) => w * w}>
-          <mesh ref={runner} scale={0.001}>
-            <sphereGeometry args={[0.16, 12, 12]} />
-            <meshBasicMaterial color={runnerColor} toneMapped={false} />
-          </mesh>
+          <mesh ref={runner} geometry={RUNNER_GEO} material={m.runner} scale={0.001} />
         </Trail>
-        <RunLabel id={id} color={color} pos={labelPos} lref={label} />
       </group>
-    </group>
-  );
-}
-
-export function RunRings() {
-  const [ids, setIds] = useState<string[]>([]);
-  const key = useRef(-1);
-  useFrame(() => {
-    let k = world.runs.size * 7919 + lod.version * 104729;
-    for (const r of world.runs.values()) k += r.startedAt;
-    if (k !== key.current) {
-      key.current = k;
-      const out: string[] = [];
-      for (const id of world.runs.keys()) if (isRunExpanded(id)) out.push(id);
-      setIds(out);
-    }
-  });
-  return (
-    <>
-      {ids.map((id) => (world.runs.has(id) ? <RunRing key={id} id={id} /> : null))}
+      <group ref={labelG}>{kr.run && <RunLabel run={kr.run} color={color} />}</group>
     </>
   );
 }

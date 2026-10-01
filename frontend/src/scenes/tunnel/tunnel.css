@@ -1,0 +1,2 @@
+/* in the HUD dock (KitScene hudInset), beside the LOD chip; Space also pauses */
+.tunnel-pause { padding: 7px 14px; color: #e2e8f0; font: 600 11px/1 "Public Sans", system-ui, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; white-space: nowrap; }

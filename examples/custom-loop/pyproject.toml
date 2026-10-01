@@ -1,0 +1,12 @@
+[project]
+name = "agentglow-example-custom-loop"
+version = "0.1.0"
+description = "AgentGlow manual tracing API: a hand-written voice-call agent loop (no framework, no LLM key) watched live in 3D"
+requires-python = ">=3.10"
+dependencies = ["agentglow"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agentglow = { workspace = true }  # in this repo; outside it, the published `agentglow` from PyPI is used

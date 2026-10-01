@@ -4,17 +4,15 @@
  *  - heads: bright packet heads
  */
 import { useFrame } from "@react-three/fiber";
-import { isRunExpanded } from "../shared/lod";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { TYPE_COLOR, presence, waitSeconds, world } from "../shared/world";
-import type { Galaxy } from "../shared/useSceneSetup";
+import { agentLive, kit, kitRoleU, runLocal, useKitGalaxy } from "../shared/kit";
 import { DECOR } from "./Board";
 import { FLARE_TRAVEL, cellOf } from "./Bank";
-import { laneAlpha } from "./Lanes";
-import {
-  BANK_SPINE_X, BUS_X0, GATE_X, IO_SPINE_X, IO_X, Path, bankCell, clamp01, easeInOut, easeOut, isScout, livePos, runZ, portZ, reduced, rgb,
-} from "./layout";
+import { laneAlpha, STEP_ROLE } from "./Lanes";
+import { IO_SPINE } from "./Ports";
+import { BANK_SPINE_X, Path, bankCell, bankStage, busPoint, busSpan, busV, clamp01, easeInOut, easeOut, isScout, reduced, rgb, type BusSpan } from "./layout";
 
 const MAX_WALLS = 1800;
 const MAX_HEADS = 360;
@@ -22,7 +20,13 @@ const AMBER = new THREE.Color("#fbbf24");
 const RED = new THREE.Color("#ef4444");
 const WHITE = new THREE.Color(1, 1, 1);
 
-export function Fx({ galaxy }: { galaxy: Galaxy }) {
+const SPAN: BusSpan = { u0: 0, u1: 0 };
+const _a = new THREE.Vector3();
+const _b = new THREE.Vector3();
+const _c = new THREE.Vector3();
+
+export function Fx() {
+  const galaxy = useKitGalaxy();
   const walls = useRef<THREE.InstancedMesh>(null);
   const heads = useRef<THREE.InstancedMesh>(null);
   const S = useMemo(
@@ -102,29 +106,35 @@ export function Fx({ galaxy }: { galaxy: Galaxy }) {
       head(pt.x, y + 0.12, pt.z, ang, 0.7, 0.3, col, k * 1.2);
     };
 
-    // ---------------- Hatchet: handoff streaks + bus clock packets
-    for (const r of world.runs.values()) {
-      if (!isRunExpanded(r.id)) continue; // collapsed runs live in their lane's cluster
-      const z = runZ(r.id, r.slot);
+    // ---------------- Hatchet: handoff streaks + bus clock packets (drawn runs, on their bus)
+    for (const kr of kit.runs.values()) {
+      const r = kr.run;
+      if (!r) continue;
       const a = laneAlpha(r, now);
       const rc = rgb(r.color);
-      // run start: streak from the bus origin to the plan gate
+      busSpan(kr, SPAN);
+      busPoint(kr, SPAN.u0, _a);
+      // run start: streak from the bus terminal to the plan gate (or the first chip)
       const st = now - r.startedAt;
       if (st < 1300) {
         const p = easeInOut(clamp01(st / 1300));
-        path.begin().pt(BUS_X0, z).pt(GATE_X.plan, z);
+        busPoint(kr, r.hasSteps ? kitRoleU("planner") : kr.cu, _b);
+        path.begin().pt(_a.x, _a.z).pt(_b.x, _b.z);
         cycle(p, 0.06, rc, 2.2 * (st > 1100 ? (1300 - st) / 200 : 1), 0.6);
       }
       const ho = now - r.handoffAt;
       if (r.handoffAt && ho < 1300) {
         const p = easeInOut(clamp01(ho / 1000));
         const fade = ho > 1000 ? 1 - (ho - 1000) / 300 : 1;
-        path.begin().pt(GATE_X[r.handoffFrom], z).pt(GATE_X[r.handoffTo], z);
+        busPoint(kr, kitRoleU(STEP_ROLE[r.handoffFrom]), _b);
+        busPoint(kr, kitRoleU(STEP_ROLE[r.handoffTo]), _c);
+        path.begin().pt(_b.x, _b.z).pt(_c.x, _c.z);
         cycle(p, 0.06, WHITE, 1.4 * fade, 0.5);
         cycle(p, 0.06, rc, 2.4 * fade, 0.5);
       }
       if (r.status === "started" && !reduced) {
-        path.begin().pt(BUS_X0, z).pt(BANK_SPINE_X, z);
+        busPoint(kr, SPAN.u1, _b);
+        path.begin().pt(_a.x, _a.z).pt(_b.x, _b.z);
         for (let k = 0; k < 3; k++) {
           const s = ((now / 5200 + k / 3) % 1 + 1) % 1;
           path.at(s, pt);
@@ -133,46 +143,38 @@ export function Fx({ galaxy }: { galaxy: Galaxy }) {
       }
     }
 
-    // ---------------- lineage traces: parent → child (scouts = live fan-out)
-    for (const i of world.instances.values()) {
-      const cp = livePos.get(i.id);
-      if (!cp) continue;
+    // ---------------- lineage traces: parent -> child (scouts = live fan-out)
+    for (const ag of kit.agents.values()) {
+      const i = ag.inst;
+      const cp = ag.live;
       const pres = presence(i, now);
       const col = rgb(TYPE_COLOR[i.type]);
-      const run = world.runs.get(i.run);
       if (!isScout(i)) {
-        // stub from the chip down to its gate on the bus
-        if (run) {
-          const z = runZ(run.id, run.slot);
-          wall(cp.x, cp.z - 0.75, cp.x, z + 0.55, 0.02, 0.09, 0.03, rgb(run.color), 1.4 * pres);
-        }
+        // stub from the chip back to its bus
+        runLocal(ag.run, 0, busV(), _a);
+        wall(cp.x, cp.z - 0.75, cp.x, _a.z + 0.45, 0.02, 0.09, 0.03, rgb(ag.run.color), 1.4 * pres);
       }
       if (!i.parent) continue;
-      const pp = livePos.get(i.parent);
+      const pp = agentLive(i.parent);
       if (!pp) continue;
       const par = world.instances.get(i.parent);
       const k = pres * (par ? Math.max(0.35, presence(par, now)) : 1);
       const grow = clamp01((now - i.bornAt) / 520);
-      if (isScout(i)) {
-        // octilinear PCB trace: short straight stub then diagonal to the scout
-        const sx = pp.x + 0.95;
-        path.begin().pt(pp.x + 0.6, pp.z).pt(sx, pp.z).pt(cp.x - 0.55, cp.z);
-        range(0, grow, 0.03, 0.12, 0.05, col, 2.4 * k);
-        range(0, grow, 0.03, 0.4, 0.01, col, 0.35 * k);
-        if (grow < 1) {
-          const ang = path.at(grow, pt);
-          head(pt.x, 0.15, pt.z, ang, 0.4, 0.16, WHITE, 3);
-        }
-      } else {
-        path.begin().pt(pp.x, pp.z + 0.85).pt(pp.x, pp.z + 1.2).pt(cp.x, cp.z + 1.2).pt(cp.x, cp.z + 0.85);
-        range(0, grow, 0.02, 0.06, 0.03, col, 0.9 * k);
+      // octilinear PCB trace: short straight stub then diagonal to the child
+      const sx = pp.x + 0.95;
+      path.begin().pt(pp.x + 0.6, pp.z).pt(sx, pp.z).pt(cp.x - 0.55, cp.z);
+      range(0, grow, 0.03, 0.12, 0.05, col, 2.4 * k);
+      range(0, grow, 0.03, 0.4, 0.01, col, 0.35 * k);
+      if (grow < 1) {
+        const ang = path.at(grow, pt);
+        head(pt.x, 0.15, pt.z, ang, 0.4, 0.16, WHITE, 3);
       }
     }
 
     // ---------------- messages: light-cycle packets chip → chip
     for (const cm of world.comets) {
-      const a = livePos.get(cm.from);
-      const b = livePos.get(cm.to);
+      const a = agentLive(cm.from);
+      const b = agentLive(cm.to);
       if (!a || !b) continue;
       const t = (now - cm.start) / cm.dur;
       const from = world.instances.get(cm.from);
@@ -182,31 +184,42 @@ export function Fx({ galaxy }: { galaxy: Galaxy }) {
       else range(0, 1, 0.3, 0.05, 0.05, col, 0.8 * (1 - (t - 1) * 4));
     }
 
-    // ---------------- FalkorDB flares: packet chip → controller spine → memory cell
-    for (const f of world.flares) {
-      const age = now - f.start;
-      const cp = livePos.get(f.instance);
-      const idx = cellOf(galaxy, f.node);
-      bankCell(idx, pt2);
-      const write = f.op === "write";
-      const inst = world.instances.get(f.instance);
-      const col = write ? WHITE : rgb(inst ? TYPE_COLOR[inst.type] : "#22d3ee");
-      if (!cp) continue;
-      path.begin().pt(cp.x + 0.6, cp.z).pt(BANK_SPINE_X, cp.z).pt(BANK_SPINE_X, pt2.z).pt(pt2.x - 0.4, pt2.z);
-      if (age < FLARE_TRAVEL) cycle(easeInOut(age / FLARE_TRAVEL), 0.04, col, write ? 2.4 : 1.6, 0.35);
-      else {
-        const fade = Math.exp(-((age - FLARE_TRAVEL) / 1000) * 2.4);
-        range(0, 1, 0.04, 0.05, 0.04, col, (write ? 1 : 0.7) * fade);
+    // ---------------- FalkorDB flares: packet chip -> controller spine -> memory cell (side bank, only with a graph)
+    if (kit.graphWanted && galaxy.nodes.length && kit.graph.mix > 0.05) {
+      for (const f of world.flares) {
+        const age = now - f.start;
+        const cp = agentLive(f.instance);
+        if (!cp) continue;
+        const idx = cellOf(galaxy, f.node);
+        bankCell(idx, pt2);
+        const cz = pt2.z;
+        const cx = pt2.x;
+        bankStage(cx - 0.4, cz, pt2); // the cell (stage)
+        const ex = pt2.x;
+        const ez = pt2.z;
+        bankStage(BANK_SPINE_X, cz, pt2); // the spine at the cell's row (stage)
+        const write = f.op === "write";
+        const inst = world.instances.get(f.instance);
+        const col = write ? WHITE : rgb(inst ? TYPE_COLOR[inst.type] : "#22d3ee");
+        const dir = pt2.x < cp.x ? -0.6 : 0.6;
+        path.begin().pt(cp.x + dir, cp.z).pt(pt2.x, cp.z).pt(pt2.x, pt2.z).pt(ex, ez);
+        if (age < FLARE_TRAVEL) cycle(easeInOut(age / FLARE_TRAVEL), 0.04, col, write ? 2.4 : 1.6, 0.35);
+        else {
+          const fade = Math.exp(-((age - FLARE_TRAVEL) / 1000) * 2.4);
+          range(0, 1, 0.04, 0.05, 0.04, col, (write ? 1 : 0.7) * fade);
+        }
       }
     }
 
     // ---------------- MCP: tethers while pending, snap-back on resolve, call/result packets
     const mcpPath = (inst: string, server: string) => {
-      const cp = livePos.get(inst);
+      const cp = agentLive(inst);
       const srv = world.mcpServers.get(server);
-      if (!cp || !srv) return null;
-      const pz = portZ(srv.slot);
-      path.begin().pt(cp.x - 0.6, cp.z).pt(IO_SPINE_X, cp.z).pt(IO_SPINE_X, pz).pt(IO_X + 0.8, pz);
+      const m = kit.mcp.get(server);
+      if (!cp || !srv || !m) return null;
+      const d = m.out.x < 0 ? -1 : 1;
+      const spine = m.pos.x - d * IO_SPINE;
+      path.begin().pt(cp.x + d * 0.6, cp.z).pt(spine, cp.z).pt(spine, m.pos.z).pt(m.pos.x - d * 0.8, m.pos.z);
       return srv;
     };
     for (const p of world.mcpPending.values()) {

@@ -1,19 +1,21 @@
 /**
- * The radar scope: a single shader disc on the ground plane. Range rings, 30° bearing spokes, a compass-rose
+ * Background: the radar scope, a single shader disc on the ground plane sized to the kit's core (scope.r). Range rings, 30° bearing spokes, a compass-rose
  * bezel with 5°/10° ticks, and the rotating sweep with its phosphor afterglow wedge (which also re-lights the
  * grid it passes over). Bearing labels are tiny DOM tags around the rim.
  */
 import { useFrame } from "@react-three/fiber";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D } from "../shared/Label3D";
-import { SCOPE_R, polar, sweepAngle } from "./fx";
+import { polar, scope, scopeTick, sweepAngle } from "./fx";
 
-const EXT = SCOPE_R + 1.0;
+/** disc extends this far past the scope edge (bezel + ticks) */
+const BEZEL = 1.0;
 
 const vert = /* glsl */ `
+uniform float uExt;
 varying vec2 vP;
-void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+void main(){ vP = position.xy * uExt; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 
 const frag = /* glsl */ `
 uniform float uSweep; uniform float uR;
@@ -63,19 +65,21 @@ void main(){
   gl_FragColor = vec4(col * outer, 1.0);
 }`;
 
+const MARKS = Array.from({ length: 12 }, (_, i) => i * 30);
 function BearingLabels() {
-  const marks = useMemo(
-    () =>
-      Array.from({ length: 12 }, (_, i) => {
-        const deg = i * 30;
-        return { deg, pos: polar((deg * Math.PI) / 180, SCOPE_R + 0.85, 0, new THREE.Vector3()) };
-      }),
-    [],
-  );
+  const groups = useRef<(THREE.Group | null)[]>([]);
+  useFrame(() => {
+    for (let i = 0; i < MARKS.length; i++) {
+      const g = groups.current[i];
+      if (g) polar((MARKS[i] * Math.PI) / 180, scope.r + 0.85, 0, g.position);
+    }
+  });
   return (
     <>
-      {marks.map((m) => (
-        <Label3D key={m.deg} position={m.pos} text={String(m.deg).padStart(3, "0")} font="mono" plate="none" textColor="#2fae6e" letterSpacing={0.08} size={0.24} opacity={0.85} pxRange={[6.5, 9.5]} renderOrder={12} />
+      {MARKS.map((deg, i) => (
+        <group key={deg} ref={(g) => void (groups.current[i] = g)}>
+          <Label3D text={String(deg).padStart(3, "0")} font="mono" plate="none" textColor="#2fae6e" letterSpacing={0.08} size={0.24} opacity={0.85} pxRange={[6.5, 9.5]} renderOrder={12} />
+        </group>
       ))}
     </>
   );
@@ -87,7 +91,8 @@ export function Scope() {
       new THREE.ShaderMaterial({
         uniforms: {
           uSweep: { value: 0 },
-          uR: { value: SCOPE_R },
+          uR: { value: scope.r },
+          uExt: { value: scope.r + BEZEL },
           uBase: { value: new THREE.Color("#04241a") },
           uGrid: { value: new THREE.Color("#1fa865") },
           uSweepC: { value: new THREE.Color("#5dffb4") },
@@ -99,13 +104,18 @@ export function Scope() {
       }),
     [],
   );
+  const disc = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
+    scopeTick();
     mat.uniforms.uSweep.value = sweepAngle(clock.elapsedTime);
+    mat.uniforms.uR.value = scope.r;
+    mat.uniforms.uExt.value = scope.r + BEZEL;
+    disc.current?.scale.setScalar(scope.r + BEZEL);
   });
   return (
     <>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} material={mat} renderOrder={-1}>
-        <circleGeometry args={[EXT, 160]} />
+      <mesh ref={disc} rotation={[-Math.PI / 2, 0, 0]} material={mat} renderOrder={-1}>
+        <circleGeometry args={[1, 160]} />
       </mesh>
       <BearingLabels />
     </>

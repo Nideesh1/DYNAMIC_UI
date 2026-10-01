@@ -1,5 +1,5 @@
 /**
- * MCP servers are flowers at the edge of the comb; each backend behind a server (Postgres, Snowflake, Spark…)
+ * MCP servers are flowers on the outskirts (kit McpServer slot); each backend (kit Backend slot) behind a server (Postgres, Snowflake, Spark…)
  * is one labelled PETAL. A tool call:
  *   call    → pollen tether bee → flower (dashes flow out to the flower, arrow at the flower; amber → red while it waits),
  *             light runs from the flower's heart out along the queried petal, the petal glows and its label shows the tool
@@ -9,8 +9,9 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type McpResource, type McpServer, type ResourceKind } from "../shared/world";
-import { AMBER, ArrowPool, CREAM, GOLD, HONEY, PETAL_LEN, RED, SPHERE_GEO, TUBE_GEO, WHITE, arcControl, beePos, bezier, clamp01, easeInOut, easeOut, flowerPos, glowSprite, lineMat, petalAngle, petalTip, reduced, tubeMaterial } from "./fx";
+import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
+import { AMBER, ArrowPool, CREAM, GOLD, HONEY, RED, SPHERE_GEO, TUBE_GEO, WHITE, arcControl, bezier, clamp01, easeInOut, easeOut, glowSprite, lineMat, reduced, tubeMaterial } from "./fx";
 
 const KIND_GLYPH: Record<ResourceKind, string> = { db: "⛁", warehouse: "▤", spark: "✷", api: "⇄", storage: "▣", queue: "≡" };
 
@@ -43,20 +44,37 @@ function petalMaterial(color: THREE.Color): PetalMat {
   }) as unknown as PetalMat;
 }
 
-function Petal({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number; n: number }) {
-  const ang = petalAngle(srv.slot, k, n);
-  const center = useMemo(() => flowerPos(srv.slot, new THREE.Vector3()), [srv.slot]);
-  const tip = useMemo(() => petalTip(srv.slot, k, n, new THREE.Vector3()), [srv.slot, k, n]);
+/** Petal length bounds (world units): a petal reaches from the heart toward its backend's kit position. */
+const PETAL_MIN = 1.2;
+const PETAL_MAX = 2.0;
+const _d = new THREE.Vector3();
+
+/** Backend slot: one petal of its server's flower, opening toward the backend's kit position. */
+export function Petal({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const k = backend.k;
   const col = useMemo(() => new THREE.Color(srv.color).lerp(HONEY, 0.25), [srv.color]);
   const mat = useMemo(() => petalMaterial(col), [col]);
   const halo = useMemo(() => glowSprite(col), [col]);
+  const at = useRef<THREE.Group>(null);
   const g = useRef<THREE.Group>(null);
+  const petal = useRef<THREE.Mesh>(null);
   const hs = useRef<THREE.Sprite>(null);
+  const lg = useRef<THREE.Group>(null);
   const label = useRef<Label3DHandle>(null);
   const lastText = useRef("");
   useFrame(({ clock }) => {
     const now = performance.now();
     const t = reduced ? 0 : clock.elapsedTime;
+    // kit places server + backend every frame (they ease when the periphery re-lays out)
+    _d.subVectors(backend.pos, mcp.pos);
+    const dist = Math.hypot(_d.x, _d.y);
+    const ang = Math.atan2(_d.y, _d.x);
+    const L = Math.min(PETAL_MAX, Math.max(PETAL_MIN, dist / 2.1));
+    at.current?.position.copy(mcp.pos);
+    petal.current?.position.set(L * 0.98, 0, 0.05);
+    petal.current?.scale.set(L, 0.52, 0.12);
     const busy = res.inflight > 0;
     const act = Math.exp(-((now - res.activeAt) / 1000) * 1.4);
     let latest: McpCall | null = null;
@@ -65,7 +83,7 @@ function Petal({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number
     const beat = busy ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 5) : 0;
     mat.uniforms.uGlow.value = busy ? 1.1 + beat * 0.5 : 0.28 + act * 0.8;
     if (latest && age < 1) {
-      // call: light runs heart → tip; result: tip → heart
+      // call: light runs heart -> tip; result: tip -> heart
       mat.uniforms.uHead.value = latest.phase === "call" ? easeInOut(age) : 1 - easeInOut(age);
       mat.uniforms.uHeadK.value = 1 - age * 0.4;
     } else if (busy) {
@@ -78,9 +96,12 @@ function Petal({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number
       g.current.rotation.z = ang + Math.sin(t * 0.5 + k * 1.7) * 0.03;
     }
     if (hs.current) {
+      hs.current.position.set(mcp.pos.x + Math.cos(ang) * L, mcp.pos.y + Math.sin(ang) * L, mcp.pos.z);
       hs.current.scale.setScalar(busy ? 3.4 + beat * 0.6 : 1.8 + act * 1.2);
       halo.color.copy(col).multiplyScalar(busy ? 0.32 + beat * 0.15 : 0.03 + act * 0.18);
     }
+    // label just past the petal tip, on the outward side
+    lg.current?.position.set(mcp.pos.x + Math.cos(ang) * (L * 1.96 + 0.25), mcp.pos.y + Math.sin(ang) * (L * 1.96) + 0.05, mcp.pos.z + 0.1);
     let txt = `${KIND_GLYPH[res.kind] ?? "•"} ${res.name}`;
     if (busy) {
       let tool = "";
@@ -93,40 +114,31 @@ function Petal({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number
       label.current.setEmphasis(busy);
     }
   });
-  const tipOut = Math.cos(ang) >= 0 ? 1 : -1;
+  // which way the label grows: away from the flower (decided once from the kit's target side)
+  const anchorX = mcp.out.x >= 0 ? "left" : "right";
   return (
     <>
-      <group position={center}>
-        <group ref={g} rotation={[0, 0, ang]}>
-          <mesh geometry={SPHERE_GEO} material={mat} position={[PETAL_LEN * 0.98, 0, 0.05]} scale={[PETAL_LEN, 0.52, 0.12]} />
+      <group ref={at}>
+        <group ref={g}>
+          <mesh ref={petal} geometry={SPHERE_GEO} material={mat} />
         </group>
       </group>
-      <sprite ref={hs} material={halo} position={[center.x + Math.cos(ang) * PETAL_LEN, center.y + Math.sin(ang) * PETAL_LEN, center.z]} />
-      <Label3D
-        ref={label}
-        position={[tip.x + tipOut * 0.15, tip.y + (Math.sin(ang) >= 0 ? 0.45 : -0.45), tip.z]}
-        text={res.name}
-        color={srv.color}
-        size={0.2}
-        opacity={0.6}
-        pxRange={[7.5, 11.5]}
-        renderOrder={18}
-      />
+      <sprite ref={hs} material={halo} />
+      <group ref={lg}>
+        <Label3D ref={label} text={res.name} color={srv.color} size={0.2} opacity={0.6} anchorX={anchorX} pxRange={[7.5, 11.5]} renderOrder={18} />
+      </group>
     </>
   );
 }
 
 const SEPALS = 8;
 const SEEDS = 34;
-function Flower({ srv }: { srv: McpServer }) {
-  const pos = useMemo(() => flowerPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+/** McpServer slot: the flower (sepals, seeded heart, stem) at the kit's server position. */
+export function Flower({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
   const col = useMemo(() => new THREE.Color(srv.color).lerp(HONEY, 0.25), [srv.color]);
   const m = useMemo(() => {
     const stem = tubeMaterial("#6b7a1f", 0.09, 0);
-    stem.uniforms.uP0.value.copy(pos);
-    const dirx = Math.sign(pos.x || 1);
-    stem.uniforms.uP2.value.set(pos.x + dirx * 1.5, pos.y - 9, pos.z - 2.5);
-    stem.uniforms.uP1.value.set(pos.x - dirx * 0.4, pos.y - 4, pos.z - 0.5);
     stem.uniforms.uOpacity.value = 0.32;
     const sepal = petalMaterial(new THREE.Color("#c2410c").lerp(col, 0.3));
     sepal.uniforms.uGlow.value = 0.16;
@@ -142,16 +154,19 @@ function Flower({ srv }: { srv: McpServer }) {
       seeds.setMatrixAt(i, o.matrix);
     }
     return { stem, sepal, seeds, disc: new THREE.MeshBasicMaterial({ color: new THREE.Color("#3a1d06"), toneMapped: false }), heart: glowSprite(col), halo: glowSprite(col) };
-  }, [pos, col]);
+  }, [col]);
+  const at = useRef<THREE.Group>(null);
   const hs = useRef<THREE.Sprite>(null);
   const seedsG = useRef<THREE.Group>(null);
-  const [res, setRes] = useState<McpResource[]>([]);
-  const nRes = useRef(0);
   useFrame(({ clock }) => {
-    if (srv.resources.size !== nRes.current) {
-      nRes.current = srv.resources.size;
-      setRes([...srv.resources.values()]);
-    }
+    const pos = mcp.pos;
+    at.current?.position.copy(pos);
+    // stem curls down and outward behind the flower
+    const dirx = mcp.out.x >= 0 ? 1 : -1;
+    const su = m.stem.uniforms;
+    su.uP0.value.copy(pos);
+    su.uP1.value.set(pos.x - dirx * 0.4, pos.y - 4, pos.z - 0.5);
+    su.uP2.value.set(pos.x + dirx * 1.5, pos.y - 9, pos.z - 2.5);
     const now = performance.now();
     const busy = srv.inflight > 0;
     const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.4);
@@ -163,7 +178,7 @@ function Flower({ srv }: { srv: McpServer }) {
   return (
     <>
       <mesh geometry={TUBE_GEO} material={m.stem} frustumCulled={false} />
-      <group position={pos}>
+      <group ref={at}>
         <sprite ref={hs} material={m.halo} position={[0, 0, -0.4]} />
         {Array.from({ length: SEPALS }, (_, j) => (
           <group key={j} rotation={[0, 0, (j / SEPALS) * Math.PI * 2 + 0.2]}>
@@ -174,11 +189,8 @@ function Flower({ srv }: { srv: McpServer }) {
         <group ref={seedsG}>
           <primitive object={m.seeds} />
         </group>
-        <Label3D position={[0, pos.y < 0 ? -1.2 : 1.25, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.28} pxRange={[9, 13]} />
+        <Label3D position={[0, 1.3, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.28} pxRange={[9, 13]} />
       </group>
-      {res.map((r, k) => (
-        <Petal key={r.name} srv={srv} res={r} k={k} n={res.length} />
-      ))}
     </>
   );
 }
@@ -210,12 +222,13 @@ function Tethers() {
     // curve runs bee (t=0) → flower (t=1). mode 0 = waiting (x = seconds), mode 1 = result (x = age 0..1)
     const draw = (instance: string, server: string, mode: number, x: number) => {
       if (n >= MAX_T) return;
-      const sp = beePos.get(instance);
+      const sp = agentLive(instance);
       const srv = world.mcpServers.get(server);
-      if (!sp || !srv) return;
+      const fp = serverPos(server);
+      if (!sp || !srv || !fp) return;
       const { a, b, c, p, col, k } = tmp;
       a.copy(sp);
-      flowerPos(srv.slot, b);
+      b.copy(fp);
       arcControl(a, b, 1.4, c);
       col.set(srv.color).lerp(AMBER, 0.4);
       let base: number;
@@ -270,11 +283,12 @@ function Packet({ call }: { call: McpCall }) {
   const head = useRef<THREE.Sprite>(null);
   const s = useMemo(() => ({ a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), h: new THREE.Vector3() }), []);
   useFrame(() => {
-    const sp = beePos.get(call.instance);
+    const sp = agentLive(call.instance);
+    const fp = serverPos(call.server);
     if (!head.current) return;
-    if (!sp || !srv) return void (head.current.visible = false);
+    if (!sp || !srv || !fp) return void (head.current.visible = false);
     s.a.copy(sp);
-    flowerPos(srv.slot, s.b);
+    s.b.copy(fp);
     arcControl(s.a, s.b, 1.4, s.c);
     const t = clamp01((performance.now() - call.start) / (call.phase === "call" ? call.dur : call.dur * 0.75));
     bezier(s.a, s.c, s.b, call.phase === "call" ? easeInOut(t) : 1 - easeInOut(t), s.h);
@@ -286,16 +300,12 @@ function Packet({ call }: { call: McpCall }) {
 }
 
 const MAX_PACKETS = 32;
-export function Flowers() {
-  const [servers, setServers] = useState<McpServer[]>([]);
+/** Theme extras: pollen packets + pending-call tethers bee <-> flower (flowers/petals are kit slots). */
+export function FlowerLinks() {
   const [calls, setCalls] = useState<McpCall[]>([]);
-  const key = useRef({ s: -1, n: -1, first: -1, last: -1 });
+  const key = useRef({ n: -1, first: -1, last: -1 });
   useFrame(() => {
     const k = key.current;
-    if (world.mcpServers.size !== k.s) {
-      k.s = world.mcpServers.size;
-      setServers([...world.mcpServers.values()]);
-    }
     const c = world.mcpCalls;
     const first = c.length ? c[0].id : -1;
     const last = c.length ? c[c.length - 1].id : -1;
@@ -305,15 +315,12 @@ export function Flowers() {
       k.last = last;
       // packets only for drawn bees (collapsed ones have no position); newest MAX_PACKETS
       const out: McpCall[] = [];
-      for (let j = c.length - 1; j >= 0 && out.length < MAX_PACKETS; j--) if (beePos.has(c[j].instance)) out.push(c[j]);
+      for (let j = c.length - 1; j >= 0 && out.length < MAX_PACKETS; j--) if (agentLive(c[j].instance)) out.push(c[j]);
       setCalls(out);
     }
   });
   return (
     <>
-      {servers.map((s) => (
-        <Flower key={s.name} srv={s} />
-      ))}
       {calls.map((c) => (
         <Packet key={c.id} call={c} />
       ))}

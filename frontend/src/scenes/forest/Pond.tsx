@@ -1,30 +1,44 @@
 /**
- * The knowledge graph is a moonlit pond ringed by standing stones. Graph nodes float on the water as points of
+ * Graph resource slot: the knowledge graph is a small moonlit pond ringed by standing stones beside the clearing,
+ * drawn in its own frame (radius POND_NATURAL); the kit positions, scales and fades it (only with a graph). Graph nodes float on the water as points of
  * light (sunflower spiral), links are faint threads across the surface.
  *   read  → the node brightens in the agent's colour, light flows node → canopy (arrow at the tree)
  *   write → the node flashes white, a ripple ring spreads across the water, light flows canopy → node
  * The nearest standing stone's rune glows with each touch; recently touched node names float above the water.
  */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
-import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
+import { nodeIndex } from "../shared/useSceneSetup";
 import { KIND_COLOR, hash01, world } from "../shared/world";
-import { ArrowPool, C_TEAL, C_WHITE, TYPE_C, addScaled, airControl, glowSpriteMaterial, reduced } from "./fx";
-import { POND_R, STONE_R, crownPos, pondNode } from "./layout";
+import { kit, stageToGraph, type GraphSlotProps } from "../shared/kit";
+import { ArrowPool, C_TEAL, C_WHITE, TYPE_C, addScaled, airControl, crownOf, glowSpriteMaterial, reduced } from "./fx";
+
+export const POND_R = 4.4;
+export const STONE_R = POND_R + 1.35;
+/** natural radius of the pond group in its own units (stone circle + the graph label) */
+export const POND_NATURAL = STONE_R + 0.9;
+
+/** Pond node position for graph node i of n (Vogel sunflower spiral on the water). */
+function pondNode(i: number, n: number, out: THREE.Vector3) {
+  const r = POND_R * 0.9 * Math.sqrt((i + 0.6) / n);
+  const a = i * 2.39996323;
+  return out.set(Math.cos(a) * r, 0.08, Math.sin(a) * r);
+}
 
 const MAX_FLARES = 64;
 const MAX_NODES = 180;
 const MAX_BEAMS = 40;
 const BEAM_SEG = 18;
 const MAX_RIP = 12;
-const MAX_NAMES = 4;
+const MAX_NAMES = 3;
 const N_STONES = 11;
 
 const waterVert = /* glsl */ `
 varying vec2 vP;
-void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vP = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }`;
+// pond-local ground coords: the disc is rotated -90deg about X, local (x, y) -> (x, 0, -y)
+void main(){ vP = vec2(position.x, -position.y); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 const waterFrag = /* glsl */ `
 uniform float uTime; uniform float uR;
 uniform vec4 uRip[${MAX_RIP}]; uniform vec3 uRipC[${MAX_RIP}];
@@ -68,7 +82,9 @@ void main(){ float r = length(gl_PointCoord - 0.5) * 2.0; if (r > 1.0) discard;
   float core = smoothstep(0.45, 0.0, r); float halo = pow(1.0 - r, 2.2);
   gl_FragColor = vec4(vC * (core * 1.25 + halo * 0.45), 1.0); }`;
 
-export function Pond({ galaxy: full }: { galaxy: Galaxy }) {
+export function Pond({ galaxy: full }: GraphSlotProps) {
+  // names grow toward the agents (the graph sits left of the core on wide screens; centred labels would clip at the edge)
+  const [anchor, setAnchor] = useState<"left" | "center">("center");
   const galaxy = useMemo(() => ({ nodes: full.nodes.slice(0, MAX_NODES), links: full.links }), [full]);
   const n = galaxy.nodes.length;
   const { size, gl, camera } = useThree();
@@ -156,7 +172,7 @@ export function Pond({ galaxy: full }: { galaxy: Galaxy }) {
   const runeMats = useMemo(() => stones.map(() => glowSpriteMaterial(C_TEAL)), [stones]);
   const cache = useMemo(() => new Map<string, number>(), []);
   const arrows = useMemo(() => new ArrowPool(MAX_BEAMS), []);
-  const tmp = useMemo(() => ({ v: new THREE.Vector3(), v2: new THREE.Vector3(), mid: new THREE.Vector3(), c: new THREE.Color(), c2: new THREE.Color() }), []);
+  const tmp = useMemo(() => ({ v: new THREE.Vector3(), v2: new THREE.Vector3(), mid: new THREE.Vector3(), sp: new THREE.Vector3(), c: new THREE.Color(), c2: new THREE.Color() }), []);
   const idx = (name: string) => {
     let i = cache.get(name);
     if (i === undefined) cache.set(name, (i = nodeIndex(galaxy, name)));
@@ -164,10 +180,14 @@ export function Pond({ galaxy: full }: { galaxy: Galaxy }) {
   };
 
   useFrame(({ clock }, dt) => {
+    const wantAnchor = kit.graph.out.x < -0.5 ? "left" : "center";
+    if (wantAnchor !== anchor) setAnchor(wantAnchor);
     const now = performance.now();
     const time = reduced ? 0 : clock.elapsedTime;
     const { pos, base, fire, white, fireC } = data;
-    mats.nodes.uniforms.uScale.value = (size.height * gl.getPixelRatio()) / (2 * Math.tan(((camera as THREE.PerspectiveCamera).fov * Math.PI) / 360));
+    // point sprites are sized in view space: follow the kit's group scale so the side pond stays proportionate
+    const gs = Math.max(0.05, kit.graph.scale);
+    mats.nodes.uniforms.uScale.value = ((size.height * gl.getPixelRatio()) / (2 * Math.tan(((camera as THREE.PerspectiveCamera).fov * Math.PI) / 360))) * gs;
     mats.nodes.uniforms.uTime.value = time;
     mats.water.uniforms.uTime.value = time;
     fire.fill(0);
@@ -213,11 +233,13 @@ export function Pond({ galaxy: full }: { galaxy: Galaxy }) {
         const sk = Math.round((a / (Math.PI * 2)) * N_STONES) % N_STONES;
         stoneAct[sk] = Math.min(1.6, stoneAct[sk] + (isW ? 0.9 : 0.5));
       }
-      // beam: curve runs canopy (t=0) → node (t=1); read = light flows node → tree, write = tree → node
-      const cp = crownPos.get(f.instance);
+      // beam: curve runs canopy (t=0) → node (t=1); read = light flows node → tree, write = tree → node.
+      // drawn inside the pond group: the canopy's stage position in pond-local units
+      const crown = crownOf(f.instance, tmp.sp);
+      const cp = crown ? stageToGraph(crown, crown) : undefined;
       if (cp && age < 2.2 && b < MAX_BEAMS) {
         v.set(nx, 0.1, nz);
-        airControl(cp, v, 1.6, mid);
+        airControl(cp, v, 1.6 / gs, mid);
         const fade = Math.min(1, age / 0.3) * (1 - age / 2.2) ** 1.5;
         const head = isW ? Math.min(1, age * 0.85) : 1 - Math.min(1, age * 0.85);
         for (let s = 0; s < BEAM_SEG; s++)
@@ -231,8 +253,9 @@ export function Pond({ galaxy: full }: { galaxy: Galaxy }) {
             c2.copy(isW ? C_WHITE : tc).multiplyScalar(fade * ((isW ? 0.4 : 0.16) + pk) * 0.8);
             bc.setXYZ(vi, c2.r, c2.g, c2.b);
           }
+        // the arrow at the tree end keeps its world size (the group is scaled down)
         if (isW) arrows.add(cp, mid, v, 0.9, 1, 0.4, C_WHITE, fade * 1.1);
-        else arrows.add(cp, mid, v, 0.1, -1, 0.4, tc, fade * 1.3);
+        else arrows.add(cp, mid, v, 0.1, -1, 0.4 / gs, tc, fade * 1.3);
         b++;
       }
     }
@@ -284,7 +307,7 @@ export function Pond({ galaxy: full }: { galaxy: Galaxy }) {
       let near = false;
       for (let z = 0; z < shown; z++) {
         const ng0 = nameGroups.current[z];
-        if (ng0 && Math.abs(ng0.position.z - pos[i * 3 + 2]) < 0.9 && Math.abs(ng0.position.x - pos[i * 3]) < 3.0) near = true;
+        if (ng0 && Math.abs(ng0.position.z - pos[i * 3 + 2]) * kit.graph.scale < 1.1 && Math.abs(ng0.position.x - pos[i * 3]) * kit.graph.scale < 4) near = true;
       }
       if (near) continue;
       const el = nameRefs.current[shown];
@@ -324,10 +347,10 @@ export function Pond({ galaxy: full }: { galaxy: Galaxy }) {
       <primitive object={arrows.mesh} />
       {Array.from({ length: MAX_NAMES }, (_, k) => (
         <group key={k} ref={(x) => void (nameGroups.current[k] = x)}>
-          <Label3D ref={(x) => void (nameRefs.current[k] = x)} text="" offset={[0, 0.36]} size={0.24} opacity={0} fadeMs={250} pxRange={[8, 12]} />
+          <Label3D ref={(x) => void (nameRefs.current[k] = x)} text="" offset={[0, 0.36]} anchorX={anchor} size={0.24} opacity={0} fadeMs={250} pxRange={[8, 12]} />
         </group>
       ))}
-      <GraphLabel3D position={[0, 0.2, POND_R + 2.2]} suffix=" · pond" color="#5eead4" size={0.28} opacity={0.75} pxRange={[8, 12]} />
+      <GraphLabel3D position={[anchor === "left" ? -POND_R : 0, 0.2, POND_R + 2.2]} anchorX={anchor} suffix=" · pond" color="#5eead4" size={0.28} opacity={0.75} pxRange={[8, 12]} />
     </>
   );
 }

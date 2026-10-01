@@ -1,65 +1,70 @@
 /**
- * /airport - "Radar scope".
- * A top-down air-traffic scope with a slight tilt. Agents are flights (blips with ATC data tags and history
- * trails); subagents take off from their parent along dashed directional routes; handoffs fly between blips;
- * LLM calls are transponder pings sized by tokens; MCP servers are airports on the rim with backend gates;
- * the knowledge graph is the waypoint grid; exits are landings. The sweep is the only thing that rotates.
+ * /airport - "Radar scope" (scene-kit theme, preset: radar).
+ * A top-down air-traffic scope with a slight tilt, sized to the traffic. Agents are flights (blips with ATC data
+ * tags and history trails) holding around their kit home; subagents take off from their parent along dashed
+ * directional routes; handoffs fly between blips; LLM calls are transponder pings sized by tokens; MCP servers
+ * are airports on the rim with backend gates; the knowledge graph is a small waypoint chart beside the scope
+ * (only with a graph); exits are landings. The sweep is the only thing that rotates.
  */
-import { OrbitControls } from "@react-three/drei";
-import { Canvas, useFrame } from "@react-three/fiber";
 import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
-import { useState } from "react";
-import { Hud } from "../shared/Hud";
-import { useSceneSetup } from "../shared/useSceneSetup";
-import { tick } from "../shared/world";
-import { lodTick } from "../shared/lod";
-import { AirportClusters } from "./Clusters";
+import * as THREE from "three";
+import { KitScene, kit } from "../shared/kit";
 import "./airport.css";
-import { Airports } from "./Airports";
-import { Blips, Rings, Routes } from "./Flights";
-import { Runs } from "./Runs";
+import { Airport, Gate, McpRoutes } from "./Airports";
+import { Blip, Rings, Routes } from "./Flights";
+import { polar, scope } from "./fx";
+import { RunSectors, RunStrip, runBearing } from "./Runs";
 import { Scope } from "./Scope";
-import { Waypoints } from "./Waypoints";
+import { WPT_R, Waypoints } from "./Waypoints";
 
-function Ticker() {
-  useFrame(() => {
-    tick();
-    lodTick();
-  });
-  return null;
+const _p = new THREE.Vector3();
+/** the whole scope disc + its bearing ring stays in view */
+function extents(visit: (p: THREE.Vector3, r: number) => void) {
+  const R = scope.r + 1.2;
+  visit(_p.set(R, 0, 0), 0.5);
+  visit(_p.set(-R, 0, 0), 0.5);
+  visit(_p.set(0, 0, R), 0.5);
+  visit(_p.set(0, 0, -R), 0.5);
+  // run strips on the rim
+  for (const r of kit.runs.values()) visit(polar(runBearing(r), scope.r + 2.6, 0, _p), 1.4);
 }
 
 export default function Scene() {
-  const galaxy = useSceneSetup();
-  const [selected, setSelected] = useState<string | null>(null);
   return (
-    <div className="scene-root ap-root">
-      <Canvas camera={{ position: [0, 29.5, 15.5], fov: 48 }} dpr={[1, 2]} gl={{ antialias: true, powerPreference: "high-performance" }} onPointerMissed={() => setSelected(null)}>
-        <color attach="background" args={["#010604"]} />
-        <Ticker />
-        {/* shifted left so the shared agent panel (top-right) covers less of the scope */}
-        <group position={[-2.6, 0, 0.2]}>
-          <Scope />
-          <Waypoints galaxy={galaxy} />
-          <Runs />
-          <Airports />
-          <Routes />
-          <Rings />
-          <Blips onSelect={setSelected} />
-          <AirportClusters />
-        </group>
-        <OrbitControls makeDefault enablePan={false} enableDamping dampingFactor={0.06} minDistance={12} maxDistance={48} maxPolarAngle={1.15} target={[0, 0, 1.1]} />
+    <KitScene
+      title="airport · radar scope"
+      subtitle="Agents are flights (solid = thinking, hollow = waiting, amber ring = waiting on MCP) · subagents take off from their parent · rings = LLM pings sized by tokens · ✈ MCP airports with backend gates · △ waypoints = graph memory"
+      className="ap-root"
+      preset="radar"
+      plane="xz"
+      camera={{ position: [0, 29.5, 15.5], fov: 48 }}
+      controls={{ maxPolarAngle: 1.15 }}
+      bg="#010604"
+      gl={{ antialias: true }}
+      fit={{ nRef: 6, min: 0.65, max: 1.9, minRadius: 5.5 }}
+      agentRadius={0.9}
+      graph={{ natural: WPT_R + 0.4, radius: 2.5 }}
+      peripheryGap={3.4}
+      Background={<Scope />}
+      Agent={Blip}
+      RunMarker={RunStrip}
+      McpServer={Airport}
+      Backend={Gate}
+      GraphResource={Waypoints}
+      cluster={{ radius: 1.2, variant: "stars", color: "#46ff9a" }}
+      clusterOffset={[0, 0.9, 0]}
+      extents={extents}
+      PostFX={
         <EffectComposer multisampling={0}>
           <Bloom mipmapBlur intensity={0.95} luminanceThreshold={0.22} luminanceSmoothing={0.35} radius={0.7} />
           <Vignette eskil={false} offset={0.25} darkness={0.85} />
         </EffectComposer>
-      </Canvas>
-      <Hud
-        title="airport · radar scope"
-        subtitle="Agents are flights (solid = thinking, hollow = waiting, amber ring = waiting on MCP) · subagents take off from their parent · rings = LLM pings sized by tokens · ✈ MCP airports with backend gates · △ waypoints = graph memory"
-        selected={selected}
-        onClose={() => setSelected(null)}
-      />
-    </div>
+      }
+    >
+      <RunSectors />
+      <McpRoutes />
+      <Routes />
+      <Rings />
+    </KitScene>
   );
 }

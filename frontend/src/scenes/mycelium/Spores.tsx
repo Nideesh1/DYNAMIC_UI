@@ -9,7 +9,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo } from "react";
 import * as THREE from "three";
 import { world } from "../shared/world";
-import { TYPE_C, WHITE, capPos, capSize, pointScale, pointsMaterial, reduced } from "./fx";
+import { TYPE_C, WHITE, capOf, pointScale, pointsMaterial, reduced } from "./fx";
 
 const MAX = 2600;
 
@@ -66,9 +66,11 @@ export function Spores() {
     mat.uniforms.uScale.value = pointScale(size.height, gl.getPixelRatio(), (camera as THREE.PerspectiveCamera).fov);
     // ---- emitters
     for (const inst of world.instances.values()) {
-      const cp = capPos.get(inst.id);
-      const cr = capSize.get(inst.id) ?? 0;
-      if (!cp || cr < 0.05) continue;
+      // drawn agents only (collapsed ones have no cap)
+      const cap = capOf(inst.id);
+      if (!cap || cap.r < 0.05) continue;
+      const cp = cap.p;
+      const cr = cap.r;
       const last = st.seenLlm.get(inst.id);
       if (last === undefined) st.seenLlm.set(inst.id, inst.llmCalls);
       else if (inst.llmCalls !== last) {

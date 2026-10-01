@@ -1,16 +1,24 @@
 /**
- * The network's edge: MCP servers are glowing sclerotia (nutrient stores) fed from the mat by a thick trunk
- * hypha; their backends (Postgres, Snowflake, Spark…) are nodes beyond them, each on its own thick thread.
+ * The network's edge: MCP servers are glowing sclerotia (nutrient stores) on the outskirts, fed from the colony
+ * by a thick trunk hypha; their backends (Postgres, Snowflake, Spark…) are nodes beyond them, each on its own
+ * thick thread. Servers/backends are kit slots (McpStore / McpBackend); positions come from the kit every frame.
  *   MCP call  → a hypha grows from the agent's foot to the server, beads flow OUT (server color → amber → red
  *               the longer it waits); the server → backend thread lights up and beads flow out to that backend
  *   result    → a bright pulse flows back backend → server and server → agent (arrows at the receiving end)
  */
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type McpResource, type McpServer, type ResourceKind } from "../shared/world";
-import { AMBER, ArrowPool, MAT_R, RED, TEAL, TUBE_GEO, WHITE, additiveBasic, backendPos, basePos, clamp01, easeInOut, easeOut, glowSpriteMaterial, hyphaMaterial, reduced, serverPos, type TubeMat } from "./fx";
+import { hash01, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { agentLive, kit, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
+import { AMBER, ArrowPool, RED, TEAL, TUBE_GEO, WHITE, additiveBasic, clamp01, easeInOut, easeOut, glowSpriteMaterial, hyphaMaterial, reduced, type TubeMat } from "./fx";
+
+/** heights above the forest floor (the kit lays the periphery out at y = 0) */
+const SRV_Y = 0.9;
+const BACK_Y = 0.7;
+/** one arrow pool for every MCP thread (servers/backends add, ArrowFrame flushes) */
+const arrows = new ArrowPool(64);
 
 // ------------------------------------------------------------------ geometry
 function lumpy(radius: number, seed: number) {
@@ -111,25 +119,30 @@ function driveFlow(u: TubeMat["uniforms"], busy: boolean, resultAge: number, act
 }
 
 // ------------------------------------------------------------------ backend node
-function Backend({ srv, res, k, n, arrows }: { srv: McpServer; res: McpResource; k: number; n: number; arrows: ArrowPool }) {
-  const pos = useMemo(() => backendPos(srv.slot, k, n, new THREE.Vector3()), [srv.slot, k, n]);
-  const sp = useMemo(() => serverPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+/** Backend slot: a node beyond its server on a thick thread. */
+export function McpBackend({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
   const parts = useMemo(() => kindParts(res.kind), [res.kind]);
   const col = useMemo(() => new THREE.Color(srv.color).lerp(TEAL, 0.2).lerp(WHITE, 0.25), [srv.color]);
-  const seed = useMemo(() => (srv.slot * 7 + k * 3) * 0.137, [srv.slot, k]);
+  const seed = useMemo(() => hash01(`${srv.name}:${res.name}`, 3), [srv.name, res.name]);
   const m = useMemo(() => {
     const edge = hyphaMaterial(srv.color, 0.1, 0.55, seed, 0.3);
-    edge.uniforms.uP0.value.copy(sp);
-    edge.uniforms.uP2.value.copy(pos);
-    edge.uniforms.uP1.value.copy(sp).add(pos).multiplyScalar(0.5).setY(0.2);
     edge.uniforms.uBeads.value = 4;
     return { edge, fill: additiveBasic(col), line: new THREE.LineBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), halo: glowSpriteMaterial(col) };
-  }, [srv.color, sp, pos, col, seed]);
+  }, [srv.color, col, seed]);
+  const at = useRef<THREE.Group>(null);
   const g = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
   const label = useRef<Label3DHandle>(null);
   const lastText = useRef("");
   useFrame(({ clock }) => {
+    // kit places server + backend (they ease when the periphery re-lays out)
+    const eu = m.edge.uniforms;
+    eu.uP0.value.copy(mcp.pos).setY(SRV_Y);
+    eu.uP2.value.copy(backend.pos).setY(BACK_Y);
+    eu.uP1.value.copy(eu.uP0.value).add(eu.uP2.value).multiplyScalar(0.5).setY(0.2);
+    at.current?.position.set(backend.pos.x, BACK_Y, backend.pos.z);
     const now = performance.now();
     const t = reduced ? 0 : clock.elapsedTime;
     const busy = res.inflight > 0;
@@ -169,7 +182,7 @@ function Backend({ srv, res, k, n, arrows }: { srv: McpServer; res: McpResource;
   return (
     <>
       <mesh geometry={TUBE_GEO} material={m.edge} frustumCulled={false} />
-      <group position={pos}>
+      <group ref={at}>
         <sprite ref={halo} material={m.halo} />
         <group ref={g}>
           {parts.map((p, i) => (
@@ -185,31 +198,36 @@ function Backend({ srv, res, k, n, arrows }: { srv: McpServer; res: McpResource;
   );
 }
 
-// ------------------------------------------------------------------ server node + trunk from the mat
-function Server({ srv, arrows }: { srv: McpServer; arrows: ArrowPool }) {
-  const pos = useMemo(() => serverPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+// ------------------------------------------------------------------ server node + trunk from the colony
+const _dir = new THREE.Vector3();
+/** MCP server slot: a lumpy glowing sclerotium fed by a thick trunk hypha from the colony's edge. */
+export function McpStore({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
   const col = useMemo(() => new THREE.Color(srv.color).lerp(TEAL, 0.15), [srv.color]);
-  const seed = useMemo(() => srv.slot * 0.31 + 0.2, [srv.slot]);
+  const seed = useMemo(() => hash01(srv.name, 5), [srv.name]);
   const m = useMemo(() => {
     const trunk = hyphaMaterial(col, 0.17, 0.5, seed, 0.6);
-    const l = Math.hypot(pos.x, pos.z);
-    trunk.uniforms.uP0.value.set((pos.x / l) * MAT_R * 0.9, 0.08, (pos.z / l) * MAT_R * 0.9);
-    trunk.uniforms.uP2.value.copy(pos).setY(0.15);
-    trunk.uniforms.uP1.value.copy(trunk.uniforms.uP0.value).add(trunk.uniforms.uP2.value).multiplyScalar(0.5).setY(0.1);
     trunk.uniforms.uBeads.value = 9;
     trunk.uniforms.uSpeed.value = 0.8;
     return { body: fresnelMaterial(col), core: glowSpriteMaterial(col), halo: glowSpriteMaterial(col), trunk };
-  }, [col, pos, seed]);
+  }, [col, seed]);
+  const at = useRef<THREE.Group>(null);
   const g = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
-  const [res, setRes] = useState<McpResource[]>([]);
-  const nRes = useRef(0);
   const birth = useRef(performance.now());
   useFrame(({ clock }) => {
-    if (srv.resources.size !== nRes.current) {
-      nRes.current = srv.resources.size;
-      setRes([...srv.resources.values()]);
-    }
+    const p = mcp.pos;
+    at.current?.position.set(p.x, SRV_Y, p.z);
+    // trunk: from the colony's edge (toward the server) to the server's foot
+    const tu = m.trunk.uniforms;
+    _dir.set(p.x, 0, p.z);
+    const d = _dir.length();
+    if (d > 1e-3) _dir.multiplyScalar(1 / d);
+    const r0 = Math.max(0, Math.min(d - 2.5, kit.core.r * 0.8));
+    tu.uP0.value.set(_dir.x * r0, 0.08, _dir.z * r0);
+    tu.uP2.value.set(p.x, 0.15, p.z);
+    tu.uP1.value.copy(tu.uP0.value).add(tu.uP2.value).multiplyScalar(0.5).setY(0.1);
+    tu.uBeads.value = Math.max(4, (d - r0) / 1.2);
     const now = performance.now();
     const t = reduced ? 0 : clock.elapsedTime;
     const busy = srv.inflight > 0;
@@ -223,17 +241,17 @@ function Server({ srv, arrows }: { srv: McpServer; arrows: ArrowPool }) {
       g.current.rotation.y = t * (busy ? 0.5 : 0.1);
       g.current.scale.setScalar(easeOut((now - birth.current) / 1200) * (1 + (busy ? beat * 0.06 : 0)));
     }
-    // trunk from the mat feeds the server: beads flow mat → server while it serves calls
+    // trunk feeds the server: beads flow colony -> server while it serves calls
     const latest = latestCall(srv.name);
     const resultAge = latest && latest.phase === "result" ? (now - latest.start) / latest.dur : 9;
-    driveFlow(m.trunk.uniforms, busy, 9, act, col, t, 0.3);
-    m.trunk.uniforms.uGrow.value = easeOut((now - birth.current) / 2000);
-    if (resultAge < 1) m.trunk.uniforms.uOpacity.value = 0.5 + (1 - resultAge) * 0.4;
+    driveFlow(tu, busy, 9, act, col, t, 0.3);
+    tu.uGrow.value = easeOut((now - birth.current) / 2000);
+    if (resultAge < 1) tu.uOpacity.value = 0.5 + (1 - resultAge) * 0.4;
   });
   return (
     <>
       <mesh geometry={TUBE_GEO} material={m.trunk} frustumCulled={false} />
-      <group position={pos}>
+      <group ref={at}>
         <sprite ref={halo} material={m.halo} />
         <group ref={g}>
           <mesh geometry={SCLEROTIUM} material={m.body} />
@@ -241,16 +259,13 @@ function Server({ srv, arrows }: { srv: McpServer; arrows: ArrowPool }) {
         </group>
         <Label3D position={[0, 1.55, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.28} pxRange={[9, 13]} />
       </group>
-      {res.map((r, k) => (
-        <Backend key={r.name} srv={srv} res={r} k={k} n={res.length} arrows={arrows} />
-      ))}
     </>
   );
 }
 
 // ------------------------------------------------------------------ agent ↔ server hyphae (pooled tubes)
 const MAX_T = 20;
-function AgentThreads({ arrows }: { arrows: ArrowPool }) {
+function AgentThreads() {
   const meshes = useRef<(THREE.Mesh | null)[]>([]);
   const mats = useMemo(() => Array.from({ length: MAX_T }, (_, i) => hyphaMaterial("#fff", 0.07, 0.6, i * 0.173, 0.45)), []);
   const tmp = useMemo(() => ({ col: new THREE.Color(), sp: new THREE.Vector3() }), []);
@@ -261,12 +276,13 @@ function AgentThreads({ arrows }: { arrows: ArrowPool }) {
     // curve runs agent foot (t=0) → server (t=1)
     const draw = (instance: string, server: string, mode: 0 | 1, x: number) => {
       if (n >= MAX_T) return;
-      const bp = basePos.get(instance);
+      const bp = agentLive(instance);
       const srv = world.mcpServers.get(server);
+      const sv = serverPos(server);
       const mesh = meshes.current[n];
-      if (!bp || !srv || !mesh) return;
+      if (!bp || !srv || !sv || !mesh) return;
       const u = mats[n].uniforms;
-      serverPos(srv.slot, tmp.sp);
+      tmp.sp.copy(sv);
       u.uP0.value.copy(bp).setY(0.06);
       u.uP2.value.copy(tmp.sp).setY(0.35);
       u.uP1.value.copy(u.uP0.value).add(u.uP2.value).multiplyScalar(0.5);
@@ -319,23 +335,12 @@ function AgentThreads({ arrows }: { arrows: ArrowPool }) {
   );
 }
 
+/** Theme extras: agent <-> server threads + the shared MCP arrow pool (servers/backends are kit slots). */
 export function Edge() {
-  const [servers, setServers] = useState<McpServer[]>([]);
-  const n = useRef(-1);
-  const arrows = useMemo(() => new ArrowPool(64), []);
-  useFrame(() => {
-    if (world.mcpServers.size !== n.current) {
-      n.current = world.mcpServers.size;
-      setServers([...world.mcpServers.values()]);
-    }
-  });
   return (
     <>
-      {servers.map((s) => (
-        <Server key={s.name} srv={s} arrows={arrows} />
-      ))}
-      <AgentThreads arrows={arrows} />
-      <ArrowFrame arrows={arrows} />
+      <AgentThreads />
+      <ArrowFrame />
       <primitive object={arrows.mesh} />
     </>
   );
@@ -345,7 +350,7 @@ export function Edge() {
  * Flush the shared arrow pool after every priority-0 frame callback (servers/backends mount later than this,
  * so mount order can't be relied on), then reset it for the next frame. Runs before the composer (priority 1).
  */
-function ArrowFrame({ arrows }: { arrows: ArrowPool }) {
+function ArrowFrame() {
   useFrame(() => {
     arrows.end();
     arrows.begin();

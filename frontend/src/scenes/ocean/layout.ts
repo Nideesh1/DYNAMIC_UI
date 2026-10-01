@@ -1,82 +1,46 @@
-/** Spatial layout for the deep-sea scene: run lanes (currents), step columns, jelly homes, shared positions. */
+/**
+ * Deep-sea skin helpers on top of the kit (preset: drift, every run's current lies horizontal). The kit owns where
+ * jellies, currents, anglerfish and the reef patch are; this file only has the look's shared math.
+ */
 import * as THREE from "three";
-import { hash01, type AgentType, type Instance, type StepName } from "../shared/world";
-import { alt, isSubRole, jit } from "../shared/spread";
-import { laneOfSlot, laneRank, lod } from "../shared/lod";
+import { drift, kit, type LayoutPreset } from "../shared/kit";
 
-export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+export { reduced } from "../shared/kit";
+import { reduced } from "../shared/kit";
 /** global motion multiplier for ambient (non-lifecycle) animation */
 export const MOTION = reduced ? 0.25 : 1;
 
-export const FLOOR_Y = -7.2;
-export const X0 = -12;
-export const X1 = 12;
-export const STEP_X: Record<StepName, number> = { plan: -7.5, research: 0, write: 7.5 };
-
-const LANE_Y = [5.0, 1.1, -2.8];
-export const laneY = (slot: number) => LANE_Y[slot % 3] + (slot >= 3 ? 1.2 : 0);
-export const laneZ = (slot: number) => (slot >= 3 ? -6 - (slot - 3) * 2.5 : -(slot % 3) * 0.7);
-/** Lane a run is drawn in: its slot, or (while LOD groups a crowd) slot % 6 so 200 runs never sink off-screen. */
-export const laneSlot = (slot: number) => (lod.grouped ? laneOfSlot(slot) : slot);
-/** Offset of a run's current when several expanded runs share one LOD lane (laneRank): ±y steps, pushed back in depth. */
-export function runOffset(runId: string, out: THREE.Vector3) {
-  const a = alt(laneRank(runId));
-  return out.set(0, a * 1.3, -Math.abs(a) * 2.2);
-}
-/** the current's gentle wave (local y offset at x) */
-export const waveY = (x: number, slot: number) => Math.sin(x * 0.32 + slot * 1.9) * 0.45 + Math.sin(x * 0.11 + slot) * 0.3;
-export const waveZ = (x: number, slot: number) => Math.sin(x * 0.2 + slot * 0.7) * 0.35;
-/** slow drift of a whole current */
-export const bob = (_slot: number, _t: number) => 0;
-
-/** world position of a point on run `slot`'s current at x */
-export function currentPoint(slot: number, x: number, t: number, out: THREE.Vector3) {
-  return out.set(x, laneY(slot) + bob(slot, t) + waveY(x, slot), laneZ(slot) + waveZ(x, slot));
-}
-
-const SCOUT_ANG = [-0.55, 0.55, -1.25, 1.25, 0, -1.6];
-export const isScout = isSubRole;
-export const stepOf = (t: AgentType): StepName => (t === "planner" ? "plan" : t === "writer" ? "write" : "research");
-
 /**
- * where an instance lives once fully born (before idle drift). `k` = its stable index among same-role agents of its run
- * (shared/spread roleIndex). Seeded per run (scout fan lean/size) and per agent (small offsets) so runs never repeat.
+ * drift, but every run's current runs left -> right (jellies hang above it, scouts fan out below): runs keep the
+ * drift ring anchors, only the frame angle is fixed.
  */
-export function homeOf(i: Instance, slot: number, k: number, t: number, out: THREE.Vector3) {
-  const id = i.id;
-  let x = STEP_X[stepOf(i.type)] + jit(id, 41) * 1.2 + alt(k) * 1.9;
-  let dy = 1.15 + jit(id, 42) * 0.5 + (k ? 0.6 : 0);
-  let dz = 0.4 + jit(id, 43) * 0.7;
-  if (isScout(i.type)) {
-    const a = SCOUT_ANG[k % SCOUT_ANG.length] + jit(i.run, 44) * 0.5 + jit(id, 45) * 0.16;
-    const r = 3.6 * (0.85 + 0.3 * hash01(i.run, 46)) + Math.floor(k / SCOUT_ANG.length) * 1.4;
-    x = Math.sin(a) * r;
-    dy = 0.2 - Math.cos(a) * 1.1 + jit(id, 47) * 0.35;
-    dz = 2.2 + jit(id, 48) * 0.8;
-  }
-  // each run's school drifts along its current a little; back-row currents (slot ≥ 3) sit right behind a front one
-  // in screen space, so their schools shift further over to stay readable
-  x += jit(i.run, 49) * 2.4 + (slot >= 3 ? 3 : 0);
-  currentPoint(slot, x, t, out);
-  out.add(runOffset(i.run, _off));
-  out.y += dy;
-  out.z += dz;
-  return out;
-}
+export const oceanDrift: LayoutPreset = {
+  ...drift,
+  name: "ocean-drift",
+  run(i, ctx, out) {
+    drift.run(i, ctx, out);
+    out.angle = -Math.PI / 2;
+  },
+};
 
-const _off = new THREE.Vector3();
-
-/** live world positions of each jelly (written by the jelly every frame, read by comets/beams/tethers) */
-export const jellyPos = new Map<string, THREE.Vector3>();
-/** live world positions of MCP satellites (lure bulbs) */
-export const satPos = new Map<string, THREE.Vector3>();
-
-export const selection = { id: null as string | null };
+/** the current's gentle wave (run-local offsets at u, per run seed) */
+export const waveY = (x: number, seed: number) => Math.sin(x * 0.32 + seed * 1.9) * 0.45 + Math.sin(x * 0.11 + seed) * 0.3;
+export const waveZ = (x: number, seed: number) => Math.sin(x * 0.2 + seed * 0.7) * 0.35;
 
 export function hash(s: string) {
   let h = 7;
   for (let k = 0; k < s.length; k++) h = (h * 31 + s.charCodeAt(k)) >>> 0;
   return h;
+}
+
+/** Lure bulb of an MCP anglerfish (stage space): the fish sits at the kit's server slot and faces the core. */
+const LURE = new THREE.Vector3(0.95, 0.75, 0.25);
+export const ANGLER_SCALE = 1.15;
+export function lurePos(server: string, out: THREE.Vector3): THREE.Vector3 | undefined {
+  const m = kit.mcp.get(server);
+  if (!m) return undefined;
+  const face = m.out.x > 0 ? -1 : 1; // the fish turns toward the core
+  return out.set(m.pos.x + LURE.x * face * ANGLER_SCALE, m.pos.y + LURE.y * ANGLER_SCALE, m.pos.z + LURE.z * ANGLER_SCALE * face);
 }
 
 export const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);

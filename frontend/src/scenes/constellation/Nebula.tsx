@@ -1,5 +1,6 @@
 /**
- * The knowledge graph is a distant spiral nebula: graph entities are its stars (colored faintly by kind), relations
+ * The knowledge graph is a small distant spiral nebula on the side (scene-kit GraphResource, drawn in its own frame
+ * centred at 0; the kit places, scales and fades it, only when the session has a graph): graph entities are its stars (colored faintly by kind), relations
  * are hair-thin filaments. A read makes the node flare in the reader's tint and a thin beam carries a spark from the
  * node to the agent star; a write flares the node white, pops a ripple ring and sends the spark agent → node.
  */
@@ -7,9 +8,10 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
-import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
+import { nodeIndex } from "../shared/useSceneSetup";
+import { agentLive, GraphStageSpace, graphToStage, kit, type GraphSlotProps } from "../shared/kit";
 import { KIND_COLOR, hash01, world } from "../shared/world";
-import { ArrowPool, CurvePool, ICE, NEBULA_C, NEBULA_RX, NEBULA_RY, STAR_C, SparkPool, WHITE, bezier, bow, clamp01, reduced, ringTexture, spriteMat, starPos } from "./fx";
+import { ArrowPool, CurvePool, ICE, NEBULA_RX, NEBULA_RY, STAR_C, SparkPool, WHITE, bezier, bow, clamp01, reduced, ringTexture, spriteMat } from "./fx";
 
 const MAX_NODES = 260;
 const MAX_BEAMS = 40;
@@ -43,7 +45,7 @@ void main(){
   col = mix(col, teal, smoothstep(0.62, 0.9, fbm(q * 0.7 + 9.0)) * 0.6);
   col = mix(col, rose, smoothstep(0.55, 0.85, fbm(q * 0.9 - 5.0)) * 0.35);
   float dens = pow(f, 1.6) * arms * mask;
-  vec3 c = col * dens * (0.75 + uAct * 0.35) + vec3(0.55, 0.6, 0.95) * core * 0.16;
+  vec3 c = col * dens * (1.05 + uAct * 0.45) + vec3(0.55, 0.6, 0.95) * core * 0.24;
   gl_FragColor = vec4(c, 1.0);
 }`;
 
@@ -56,7 +58,7 @@ void main(){ float r = length(gl_PointCoord - 0.5) * 2.0; if (r > 1.0) discard;
   float core = smoothstep(0.4, 0.0, r); float halo = pow(1.0 - r, 2.4);
   gl_FragColor = vec4(vC * (core * 1.25 + halo * 0.4), 1.0); }`;
 
-export function Nebula({ galaxy: full }: { galaxy: Galaxy }) {
+export function Nebula({ galaxy: full }: GraphSlotProps) {
   const galaxy = useMemo(() => ({ nodes: full.nodes.slice(0, MAX_NODES), links: full.links }), [full]);
   const n = galaxy.nodes.length;
   const { size, gl, camera } = useThree();
@@ -89,7 +91,7 @@ export function Nebula({ galaxy: full }: { galaxy: Galaxy }) {
         x = Math.cos(th) * r * NEBULA_RX * 0.95 * sc;
         y = Math.sin(th) * r * NEBULA_RY * 0.95 * sc;
       }
-      pos.set([NEBULA_C.x + x * ct - y * st, NEBULA_C.y + x * st + y * ct, NEBULA_C.z + (hash01(nd.id, 4) - 0.5) * 4], i * 3);
+      pos.set([x * ct - y * st, x * st + y * ct, (hash01(nd.id, 4) - 0.5) * 4], i * 3);
     });
     const base = galaxy.nodes.map((nd) => new THREE.Color(KIND_COLOR[nd.kind] ?? "#94a3b8").lerp(TINT, 0.55).multiplyScalar(0.5));
     const baseSize = galaxy.nodes.map((nd) => 0.32 + Math.pow(hash01(nd.id, 5), 4) * 0.5);
@@ -131,7 +133,7 @@ export function Nebula({ galaxy: full }: { galaxy: Galaxy }) {
   const arrows = useMemo(() => new ArrowPool(MAX_BEAMS), []);
   const sparks = useMemo(() => new SparkPool(MAX_BEAMS), []);
   const cache = useMemo(() => new Map<string, number>(), [galaxy]); // eslint-disable-line react-hooks/exhaustive-deps
-  const tmp = useMemo(() => ({ v: new THREE.Vector3(), ctrl: new THREE.Vector3(), h: new THREE.Vector3(), c: new THREE.Color(), act: 0 }), []);
+  const tmp = useMemo(() => ({ v: new THREE.Vector3(), w: new THREE.Vector3(), ctrl: new THREE.Vector3(), h: new THREE.Vector3(), c: new THREE.Color(), act: 0 }), []);
   const idx = (name: string) => {
     let i = cache.get(name);
     if (i === undefined) cache.set(name, (i = nodeIndex(galaxy, name)));
@@ -140,13 +142,14 @@ export function Nebula({ galaxy: full }: { galaxy: Galaxy }) {
 
   useFrame(({ clock }) => {
     const now = performance.now();
+    const gs = Math.max(1e-4, kit.graph.scale);
     const time = reduced ? 0 : clock.elapsedTime;
     const fov = (camera as THREE.PerspectiveCamera).fov;
     const dpr = gl.getPixelRatio();
-    mats.nodes.uniforms.uScale.value = (size.height * dpr) / (2 * Math.tan((fov * Math.PI) / 360));
+    mats.nodes.uniforms.uScale.value = (size.height * dpr) / (2 * Math.tan((fov * Math.PI) / 360)) * kit.graph.scale * 1.7; // view-space point sprites follow the side graph's scale (x1.7: still read as stars when small)
     sparks.setScale(size.height, dpr, fov);
     const { pos, base, baseSize, fire, white, fireC, phase } = data;
-    const { v, ctrl, h, c } = tmp;
+    const { v, w, ctrl, h, c } = tmp;
     fire.fill(0);
     white.fill(0);
     beams.begin();
@@ -180,19 +183,20 @@ export function Nebula({ galaxy: full }: { galaxy: Galaxy }) {
         rp++;
       }
       // beam: curve runs agent (t=0) → node (t=1); read sparks flow node → agent, write sparks agent → node
-      const sp = starPos.get(f.instance);
+      const sp = agentLive(f.instance);
       if (sp && age < 2.0) {
-        bow(sp, v, 1.2, 2.5, ctrl);
+        graphToStage(v, w); // beams live on stage (inverse group below), the node end follows the side graph
+        bow(sp, w, 1.2, 2.5, ctrl);
         const fade = Math.min(1, age / 0.25) * Math.pow(1 - age / 2.0, 1.5);
         const head = isW ? Math.min(1, age * 0.9) : 1 - Math.min(1, age * 0.9);
         c.copy(isW ? WHITE : tc).lerp(WHITE, 0.2);
-        beams.add(sp, ctrl, v, c, (isW ? 0.26 : 0.1) * fade, 0.04, 0.99, 0, 1, time, head, 1.1 * fade);
+        beams.add(sp, ctrl, w, c, (isW ? 0.26 : 0.1) * fade, 0.04, 0.99, 0, 1, time, head, 1.1 * fade);
         if (head > 0.02 && head < 0.98) {
-          bezier(sp, ctrl, v, head, h);
+          bezier(sp, ctrl, w, head, h);
           sparks.add(h, 0.5, c, 1.1 * fade);
         }
-        if (isW) arrows.add(sp, ctrl, v, 0.95, 1, 0.34, WHITE, fade * 0.9);
-        else arrows.add(sp, ctrl, v, 0.07, -1, 0.34, c, fade * 1.1);
+        if (isW) arrows.add(sp, ctrl, w, 0.95, 1, 0.34, WHITE, fade * 0.9);
+        else arrows.add(sp, ctrl, w, 0.07, -1, 0.34, c, fade * 1.1);
       }
     }
     for (let z = rp; z < MAX_RIPPLES; z++) {
@@ -242,7 +246,8 @@ export function Nebula({ galaxy: full }: { galaxy: Galaxy }) {
       const i = idx(f.node);
       for (let z = 0; z < shown; z++) {
         const g0 = nameGroups.current[z];
-        if (g0 && Math.abs(g0.position.y - pos[i * 3 + 1]) < 0.9 && Math.abs(g0.position.x - pos[i * 3]) < 4.5) skip = true;
+        // labels are px-clamped: keep them apart in stage units (local = stage / graph scale)
+        if (g0 && Math.abs(g0.position.y - pos[i * 3 + 1]) < 0.9 / gs && Math.abs(g0.position.x - pos[i * 3]) < 4.5 / gs) skip = true;
       }
       if (skip) continue;
       const el = nameRefs.current[shown];
@@ -268,7 +273,7 @@ export function Nebula({ galaxy: full }: { galaxy: Galaxy }) {
   const tilt = -0.18;
   return (
     <>
-      <mesh material={mats.gas} position={[NEBULA_C.x, NEBULA_C.y, NEBULA_C.z - 1]} rotation={[0, 0, tilt]} renderOrder={-5}>
+      <mesh material={mats.gas} position={[0, 0, -1]} rotation={[0, 0, tilt]} renderOrder={-5}>
         <planeGeometry args={[NEBULA_RX * 2.6, NEBULA_RY * 2.9]} />
       </mesh>
       <lineSegments geometry={data.lgeo} material={mats.fil} frustumCulled={false} />
@@ -276,15 +281,18 @@ export function Nebula({ galaxy: full }: { galaxy: Galaxy }) {
       {mats.ripples.map((m, k) => (
         <sprite key={k} ref={(x) => void (ripples.current[k] = x)} material={m} visible={false} />
       ))}
-      <primitive object={beams.obj} />
-      <primitive object={arrows.mesh} />
-      <primitive object={sparks.obj} />
+      {/* stage space (the side-graph transform undone): beams/sparks/arrows keep their stage size */}
+      <GraphStageSpace>
+        <primitive object={beams.obj} />
+        <primitive object={arrows.mesh} />
+        <primitive object={sparks.obj} />
+      </GraphStageSpace>
       {Array.from({ length: MAX_NAMES }, (_, k) => (
         <group key={k} ref={(x) => void (nameGroups.current[k] = x)}>
           <Label3D ref={(x) => void (nameRefs.current[k] = x)} text="" offset={[0, 0.4]} size={0.24} opacity={0} fadeMs={250} pxRange={[8, 12]} />
         </group>
       ))}
-      <GraphLabel3D position={[NEBULA_C.x - NEBULA_RX * 0.95, NEBULA_C.y + NEBULA_RY * 0.45, NEBULA_C.z]} suffix=" · nebula" color="#8b9cff" letterSpacing={0.04} size={0.28} opacity={0.6} pxRange={[8, 12]} />
+      <GraphLabel3D position={[0, NEBULA_RY * 1.15, 0]} suffix=" · nebula" color="#8b9cff" letterSpacing={0.04} size={0.28} opacity={0.6} pxRange={[8, 12]} />
     </>
   );
 }

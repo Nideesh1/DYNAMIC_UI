@@ -1,12 +1,12 @@
-/** Agent instances = luminous capsule ships riding their run's lane. Spawn out of a hyperspace flash, spin while thinking, dim while waiting, jump to lightspeed on exit. */
+/** Agent instances = luminous capsule ships flying into the tunnel on their run's lane. Spawn out of a hyperspace
+ * flash, spin while thinking, dim while waiting, jump to lightspeed down the tunnel on exit. Subagents ride a fork
+ * that branches off their parent's lane. */
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { TYPE_COLOR, energy, hash01, presence, world } from "../shared/world";
-import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
-import { FORK, LANE_R, MOTION, SHIP_LOCAL, type ShipInfo, ease3, glowTexture, runLaneAngle, runZ, ships, smooth } from "./lanes";
-import { useLiveKeys } from "./Runs";
-import { isExpanded, lodScale } from "../shared/lod";
+import { TYPE_COLOR, energy, presence, world } from "../shared/world";
+import { agentLive, fit, kit, type AgentSlotProps } from "../shared/kit";
+import { MOTION, type ShipInfo, ease3, glowTexture, ships } from "./lanes";
 
 const AMBER = new THREE.Color("#f59e0b");
 const RED = new THREE.Color("#ef4444");
@@ -28,30 +28,28 @@ const RAYS = (() => {
   return g;
 })();
 
-/** z profile of a scout's sub-lane: 0 on the main lane, 1 on the forked parallel section */
-function forkProfile(z: number) {
-  return smooth(0, 1, (FORK.start - z) / (FORK.start - FORK.out)) * (1 - smooth(0, 1, (FORK.back - z) / (FORK.back - FORK.end)));
-}
+const _e = new THREE.Euler();
+/** shared geometries (hundreds of ships can mount at once when a crowd ungroups) */
+const G = {
+  capsule: new THREE.CapsuleGeometry(0.36, 1.15, 6, 18),
+  fin: new THREE.BoxGeometry(0.05, 1.25, 0.5),
+  engine: new THREE.SphereGeometry(0.22, 16, 12),
+  halo: new THREE.PlaneGeometry(2.6, 2.6),
+  sel: new THREE.TorusGeometry(1.05, 0.035, 6, 48),
+  hit: new THREE.SphereGeometry(1.1, 10, 8),
+  flash: new THREE.SphereGeometry(0.45, 16, 12),
+  ring: new THREE.RingGeometry(0.85, 1, 48),
+};
+/** ship size per unit of agent.scale, and its nose-down pitch (we fly behind and a little above) */
+const SHIP_K = 0.78;
+const PITCH = -0.62;
 
-function buildFork(off: number) {
-  const pts: THREE.Vector3[] = [];
-  const K = 14;
-  for (let j = 0; j <= K; j++) {
-    const z = FORK.start + ((FORK.end - FORK.start) * j) / K;
-    const pr = forkProfile(z);
-    const o = off * pr;
-    const R = LANE_R - 0.25 * pr;
-    pts.push(new THREE.Vector3(Math.cos(o) * R, Math.sin(o) * R, z));
-  }
-  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 56, 0.045, 5, false);
-}
-
-function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSelect: (id: string) => void }) {
-  const i0 = world.instances.get(id);
-  const type = i0?.type ?? "planner";
-  const isScout = isSubRole(type);
+/** Agent slot: a capsule ship flying into the tunnel at the kit's slot on its run's lane (drawn position = `live`). */
+export function Ship({ agent, selected, onSelect }: AgentSlotProps) {
+  const id = agent.id;
+  const type = agent.inst.type;
   const color = useMemo(() => new THREE.Color(TYPE_COLOR[type]), [type]);
-  const info = useMemo<ShipInfo>(() => ({ pos: new THREE.Vector3(0, 0, -200), color: color.clone(), energy: 0, active: 0, presence: 0, seed: Math.random() }), [color]);
+  const info = useMemo<ShipInfo>(() => ({ color: color.clone(), energy: 0, active: 0, presence: 0, seed: Math.random() }), [color]);
   useEffect(() => {
     ships.set(id, info);
     return () => {
@@ -69,40 +67,19 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
   const flashCore = useRef<THREE.Mesh>(null);
   const flashRing = useRef<THREE.Mesh>(null);
   const burst = useRef<THREE.LineSegments>(null);
-  const fork = useRef<THREE.Group>(null);
-  const forkMesh = useRef<THREE.Mesh>(null);
-  const start = useRef<{ x: number; y: number; zl: number } | null>(null);
+  const start = useRef<THREE.Vector3 | null>(null);
   const exitAt = useRef<THREE.Vector3 | null>(null);
-  const fan = useRef(0);
-  // seeded placement (stable for the ship's lifetime): fan slot leans per run, depth along the lane per agent,
-  // same-role ships of one run spread along the lane instead of stacking
-  const place = useMemo(() => {
-    const inst = world.instances.get(id);
-    if (!inst) return { fan: 0, dz: 0 };
-    const k = roleIndex(inst);
-    if (isScout) {
-      const side = hash01(inst.run, 63) < 0.5 ? -1 : 1;
-      return { fan: jit(inst.run, 64) * 0.14 + side * alt(k) * (0.34 + 0.08 * hash01(inst.run, 65)), dz: jit(id, 66) * 1.6 };
-    }
-    return { fan: 0, dz: jit(id, 67) * 1.6 + alt(k) * 2.4 };
-  }, [id, isScout]);
-  const builtOff = useRef(Number.NaN);
   const c = useMemo(() => new THREE.Color(), []);
   const glow = useMemo(() => glowTexture(), []);
   const engineBase = useMemo(() => color.clone().lerp(WHITE, 0.55), [color]);
 
-  useEffect(() => () => forkMesh.current?.geometry.dispose(), []);
-
   useFrame(({ clock }, rawDt) => {
-    const i = world.instances.get(id);
+    const i = agent.inst;
     const g = root.current;
-    if (!i || !g) return;
+    if (!g) return;
     const dt = Math.min(rawDt, 0.1);
     const now = performance.now();
     const t = clock.elapsedTime;
-    const run = world.runs.get(i.run);
-    const a0 = runLaneAngle(i.run, run?.slot ?? 0);
-    const rz = runZ.get(i.run) ?? -175;
     const p = presence(i, now);
     const e = energy(i, now);
     const age = (now - i.bornAt) / 1000;
@@ -110,39 +87,31 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
     let toolWait = 0;
     for (const pend of world.mcpPending.values()) if (pend.instance === id) toolWait = Math.max(toolWait, (now - pend.since) / 1000 + 0.01);
     const waiting = !thinking && !i.exitAt;
+    const fs = fit.scale;
 
-    // ---- fan-out slot (scouts spread around the researcher's lane)
-    let off = 0;
-    if (isScout) {
-      fan.current += (place.fan - fan.current) * Math.min(1, dt * 3);
-      off = fan.current;
-    }
-    const localZ = SHIP_LOCAL[i.type] + place.dz;
-    const ang = a0 + off;
-    const R = LANE_R - (isScout ? 0.25 : 0);
-    const bob = Math.sin(t * 1.1 + info.seed * 6) * 0.35 * MOTION;
-    const tx = Math.cos(ang) * R;
-    const ty = Math.sin(ang) * R;
-
-    // ---- birth: emerge from the parent ship (or out of deep space) and warp into place
+    // ---- birth: emerge from the parent ship (or out of deep space down the tunnel) and warp into the kit's slot
     if (!start.current) {
-      const par = i.parent ? ships.get(i.parent) : undefined;
-      start.current = par && par.presence > 0 ? { x: par.pos.x, y: par.pos.y, zl: par.pos.z - rz } : { x: tx * 0.7, y: ty * 0.7, zl: localZ - 45 };
+      const par = i.parent ? agentLive(i.parent) : undefined;
+      start.current = par ? par.clone() : agent.pos.clone().setZ(-45);
     }
     const s0 = start.current;
     const u = ease3(age / 1.15);
-    let x = s0.x + (tx - s0.x) * u;
-    let y = s0.y + (ty - s0.y) * u;
-    let z = rz + s0.zl + (localZ + bob - s0.zl) * u;
+    const bob = Math.sin(t * 1.1 + info.seed * 6) * 0.18 * MOTION * fs;
+    let x = s0.x + (agent.pos.x - s0.x) * u;
+    let y = s0.y + (agent.pos.y + bob - s0.y) * u;
+    let z = s0.z + (agent.pos.z - s0.z) * u;
     let sxy = p;
     let sz = p * (1 + 4 * (1 - u));
     let flashBoost = Math.max(0, 1 - age / 0.5) * 2.5;
 
-    // ---- exit: jump to lightspeed (done) or implode (failed)
+    // ---- exit: jump to lightspeed down the tunnel (done) or implode (failed)
     let te = 0;
     if (i.exitAt) {
       te = (now - i.exitAt) / 1000;
       if (!exitAt.current) exitAt.current = new THREE.Vector3(x, y, z);
+      x = exitAt.current.x;
+      y = exitAt.current.y;
+      z = exitAt.current.z;
       if (i.status === "failed") {
         sxy *= Math.max(0, 1 - te * 1.3);
         sz = sxy;
@@ -154,10 +123,14 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
       }
       flashBoost += Math.max(0, 1 - te / 0.5) * 4;
     }
+    agent.live.set(x, y, z);
 
     const throb = waiting ? (toolWait ? 0.07 * Math.sin(t * 3.2) : 0.05 * Math.sin(t * 1.6)) * MOTION : 0;
     g.position.set(x, y, z);
-    const ls = lodScale();
+    // nose into the tunnel, pitched down a little so the hull reads (we fly behind and above the ships)
+    _e.set(PITCH, 0, 0);
+    g.quaternion.setFromEuler(_e);
+    const ls = agent.scale * SHIP_K;
     g.scale.set(sxy * (1 + throb) * (selected ? 1.15 : 1) * ls, sxy * (1 + throb) * (selected ? 1.15 : 1) * ls, sz * ls);
 
     // spin along the flight axis
@@ -187,8 +160,7 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
       sel.current.rotation.z -= dt * 1.5;
     }
 
-    // registry for comets / lasers / streaks / tethers
-    info.pos.set(x, y, z);
+    // look state for the engine streaks (positions come from agentLive)
     info.energy = e;
     info.active = thinking ? 1 : waiting ? 0.2 : 0.6;
     info.presence = i.exitAt ? p * Math.max(0, 1 - te * 2) : p;
@@ -201,10 +173,10 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
       const ft = birthT < 1 ? birthT : exitT;
       f.visible = ft < 1;
       if (f.visible) {
-        if (birthT < 1) f.position.set(s0.x, s0.y, rz + s0.zl);
+        if (birthT < 1) f.position.copy(s0);
         else if (exitAt.current) f.position.copy(exitAt.current);
         const k = 1 - ft;
-        f.scale.setScalar(0.35 + ft * 1.9);
+        f.scale.setScalar((0.35 + ft * 1.9) * fs);
         c.copy(birthT < 1 ? color : i.status === "failed" ? RED : WHITE).lerp(WHITE, 0.3).multiplyScalar(2.4 * k);
         (flashCore.current!.material as THREE.MeshBasicMaterial).color.copy(c);
         (flashCore.current!.material as THREE.MeshBasicMaterial).opacity = k * k;
@@ -216,90 +188,57 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
       }
     }
 
-    // ---- scout sub-lane: the researcher's lane forks, one branch per scout
-    if (isScout && fork.current && forkMesh.current) {
-      fork.current.position.z = rz;
-      fork.current.rotation.z = a0;
-      if (Math.abs(off - builtOff.current) > 0.004 || Number.isNaN(builtOff.current)) {
-        builtOff.current = off;
-        const old = forkMesh.current.geometry;
-        forkMesh.current.geometry = buildFork(off);
-        old.dispose();
-      }
-      const geo = forkMesh.current.geometry;
-      const grow = ease3(age / 1.3);
-      geo.setDrawRange(0, Math.floor(56 * grow) * 5 * 6);
-      const fm = forkMesh.current.material as THREE.MeshBasicMaterial;
-      fm.color.copy(color).multiplyScalar(1.4 + e * 2 + (thinking ? 0.6 : 0));
-      fm.opacity = p * 0.9;
-    }
   });
 
   return (
     <>
       <group ref={root} position={[0, 0, -200]}>
         <group ref={spin}>
-          <mesh rotation={[Math.PI / 2, 0, 0]}>
-            <capsuleGeometry args={[0.36, 1.15, 6, 18]} />
+          <mesh geometry={G.capsule} rotation={[Math.PI / 2, 0, 0]}>
             <meshStandardMaterial ref={hull} color={color.clone().multiplyScalar(0.35)} emissive={color} emissiveIntensity={1} metalness={0.5} roughness={0.3} toneMapped={false} transparent />
           </mesh>
           {[0, 1, 2].map((k) => (
-            <mesh key={k} rotation={[0, 0, (k * Math.PI * 2) / 3]} position={[0, 0, 0.45]}>
-              <boxGeometry args={[0.05, 1.25, 0.5]} />
+            <mesh geometry={G.fin} key={k} rotation={[0, 0, (k * Math.PI * 2) / 3]} position={[0, 0, 0.45]}>
               <meshBasicMaterial color={color.clone().lerp(WHITE, 0.3).multiplyScalar(1.6)} toneMapped={false} />
             </mesh>
           ))}
         </group>
-        <mesh ref={engine} position={[0, 0, 0.95]}>
-          <sphereGeometry args={[0.22, 16, 12]} />
+        <mesh geometry={G.engine} ref={engine} position={[0, 0, 0.95]}>
           <meshBasicMaterial toneMapped={false} />
         </mesh>
-        <mesh ref={halo} position={[0, 0, 0.6]}>
-          <planeGeometry args={[2.6, 2.6]} />
+        <mesh geometry={G.halo} ref={halo} position={[0, 0, 0.6]}>
           <meshBasicMaterial map={glow} color={color.clone().multiplyScalar(1.6)} transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
         </mesh>
-        <mesh ref={sel} visible={false}>
-          <torusGeometry args={[1.05, 0.035, 6, 48]} />
+        <mesh geometry={G.sel} ref={sel} visible={false}>
           <meshBasicMaterial color={new THREE.Color(3, 3, 3)} toneMapped={false} />
         </mesh>
-        <mesh
+        <mesh geometry={G.hit}
           onClick={(ev) => (ev.stopPropagation(), onSelect(id))}
           onPointerOver={() => (document.body.style.cursor = "pointer")}
           onPointerOut={() => (document.body.style.cursor = "")}
         >
-          <sphereGeometry args={[1.1, 10, 8]} />
           <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
         </mesh>
       </group>
       <group ref={flash} visible={false}>
-        <mesh ref={flashCore}>
-          <sphereGeometry args={[0.45, 16, 12]} />
+        <mesh geometry={G.flash} ref={flashCore}>
           <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
         </mesh>
-        <mesh ref={flashRing}>
-          <ringGeometry args={[0.85, 1, 48]} />
+        <mesh geometry={G.ring} ref={flashRing}>
           <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
         </mesh>
         <lineSegments ref={burst} geometry={RAYS}>
           <lineBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
         </lineSegments>
       </group>
-      {isScout && (
-        <group ref={fork}>
-          <mesh ref={forkMesh}>
-            <bufferGeometry />
-            <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
-          </mesh>
-        </group>
-      )}
     </>
   );
 }
 
-/** Engine streak particles behind every ship; length/brightness grow with thinking + LLM energy. */
-function ShipStreaks() {
+/** Engine streak particles behind every ship (toward the camera); length/brightness grow with thinking + LLM energy. */
+export function ShipStreaks() {
   const PER = 9;
-  const MAX = 30 * PER;
+  const MAX = 64 * PER;
   const ref = useRef<THREE.InstancedMesh>(null);
   const tmp = useMemo(() => new THREE.Object3D(), []);
   const col = useMemo(() => new THREE.Color(), []);
@@ -307,18 +246,22 @@ function ShipStreaks() {
     const m = ref.current;
     if (!m) return;
     const t = clock.elapsedTime * Math.max(0.2, MOTION);
+    const fs = fit.scale;
     let n = 0;
-    for (const s of ships.values()) {
+    for (const a of kit.agents.values()) {
       if (n + PER > MAX) break;
-      if (s.presence <= 0.01) continue;
+      const s = ships.get(a.id);
+      if (!s || s.presence <= 0.01) continue;
+      const pos = a.live;
+      const k0 = a.scale * 0.75;
       const speed = 0.6 + s.active * 1.4 + s.energy * 1.5;
       for (let k = 0; k < PER; k++) {
         const ph = (t * speed + k / PER + s.seed * 7) % 1;
-        const a = s.seed * 40 + k * 2.39996;
-        const r = 0.25 + 0.55 * ((k * 0.618 + s.seed) % 1);
-        const len = 0.5 + s.active * 0.9 + s.energy * 2.6;
-        tmp.position.set(s.pos.x + Math.cos(a) * r, s.pos.y + Math.sin(a) * r, s.pos.z + 1 + ph * (2.5 + s.energy * 4));
-        tmp.scale.set(0.035, 0.035, len);
+        const ang = s.seed * 40 + k * 2.39996;
+        const r = (0.25 + 0.55 * ((k * 0.618 + s.seed) % 1)) * k0;
+        const len = (0.5 + s.active * 0.9 + s.energy * 2.6) * fs;
+        tmp.position.set(pos.x + Math.cos(ang) * r, pos.y + Math.sin(ang) * r + 0.35 * k0, pos.z + (1 + ph * (2.5 + s.energy * 4)) * fs);
+        tmp.scale.set(0.035 * fs, 0.035 * fs, len);
         tmp.updateMatrix();
         m.setMatrixAt(n, tmp.matrix);
         col.copy(s.color).multiplyScalar((0.25 + s.active * 0.9 + s.energy * 2.2) * (1 - ph) * s.presence);
@@ -338,14 +281,77 @@ function ShipStreaks() {
   );
 }
 
-export function Ships({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) {
-  const ids = useLiveKeys(() => world.instances, isExpanded);
-  return (
-    <group>
-      {ids.map((id) => (
-        <Ship key={id} id={id} selected={selected === id} onSelect={onSelect} />
-      ))}
-      <ShipStreaks />
-    </group>
-  );
+const FORK_SEG = 14;
+const MAX_FORKS = 64;
+const SEG_GEO = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true);
+const UPV = new THREE.Vector3(0, 1, 0);
+const _a = new THREE.Vector3();
+const _b = new THREE.Vector3();
+const _d = new THREE.Vector3();
+const _o = new THREE.Object3D();
+
+/** fork point at t of a subagent's sub-lane: leaves the parent along its lane (+side), bends over to the child */
+function forkPoint(p: THREE.Vector3, c: THREE.Vector3, side: THREE.Vector3, reach: number, t: number, out: THREE.Vector3) {
+  const a = 1 - t;
+  // cubic bezier p, p + side*reach, c - side*reach*0.3, c
+  const w0 = a * a * a;
+  const w1 = 3 * a * a * t;
+  const w2 = 3 * a * t * t;
+  const w3 = t * t * t;
+  out.copy(p).multiplyScalar(w0 + w1).addScaledVector(c, w2 + w3);
+  out.addScaledVector(side, reach * (w1 - 0.3 * w2));
+  return out;
 }
+
+/** The scout sub-lanes: a glowing fork from the parent ship to each subagent (pooled cylinders, grows at birth). */
+export function Forks() {
+  const mesh = useMemo(() => {
+    const m = new THREE.InstancedMesh(SEG_GEO, new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), MAX_FORKS * FORK_SEG);
+    m.frustumCulled = false;
+    m.setColorAt(0, new THREE.Color(0, 0, 0));
+    m.count = 0;
+    return m;
+  }, []);
+  const col = useMemo(() => new THREE.Color(), []);
+  useFrame(() => {
+    const now = performance.now();
+    const fs = fit.scale;
+    let n = 0;
+    for (const a of kit.agents.values()) {
+      if (n + FORK_SEG > MAX_FORKS * FORK_SEG) break;
+      const pid = a.inst.parent;
+      if (!pid) continue;
+      const p = agentLive(pid);
+      if (!p) continue;
+      const i = a.inst;
+      const grow = ease3((now - i.bornAt) / 1300);
+      const fade = i.exitAt ? Math.max(0, 1 - (now - i.exitAt) / 700) : 1;
+      if (fade <= 0) continue;
+      const e = energy(i, now);
+      col.copy(TYPE_COLOR_C[i.type]).multiplyScalar((1.2 + e * 2 + (i.status === "thinking" ? 0.6 : 0)) * fade * 0.8);
+      const reach = Math.max(1.2, Math.abs(a.live.x - p.x) * 0.9);
+      const nSeg = Math.max(1, Math.round(FORK_SEG * grow));
+      forkPoint(p, a.live, a.run.side, reach, 0, _a);
+      for (let k = 1; k <= nSeg; k++) {
+        forkPoint(p, a.live, a.run.side, reach, k / FORK_SEG, _b);
+        _a.z -= 0.6 * fs;
+        _b.z -= 0.6 * fs;
+        _d.subVectors(_b, _a);
+        const len = _d.length();
+        _o.position.copy(_a).add(_b).multiplyScalar(0.5);
+        if (len > 1e-5) _o.quaternion.setFromUnitVectors(UPV, _d.divideScalar(len));
+        _o.scale.set(0.05 * fs, Math.max(1e-4, len), 0.05 * fs);
+        _o.updateMatrix();
+        mesh.setMatrixAt(n, _o.matrix);
+        mesh.setColorAt(n, col);
+        n++;
+        _a.copy(_b).setZ(_b.z + 0.6 * fs);
+      }
+    }
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  });
+  return <primitive object={mesh} />;
+}
+const TYPE_COLOR_C = Object.fromEntries(Object.entries(TYPE_COLOR).map(([k, v]) => [k, new THREE.Color(v)])) as Record<keyof typeof TYPE_COLOR, THREE.Color>;
