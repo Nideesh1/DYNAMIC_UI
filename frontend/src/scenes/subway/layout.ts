@@ -1,113 +1,71 @@
-/** Shared geometry for the /subway transit map: every run is a radial LINE out of Graph Central. */
+/**
+ * Subway skin helpers on top of the kit's `lanes` preset: every run is a horizontal LINE (the kit run frame:
+ * u along `side`, v along `axis`), top-level agents are trains on the trunk (v = 0), subagents run on spurs that
+ * branch off just downstream of their parent, run parallel, and merge back.
+ */
 import * as THREE from "three";
-import { type AgentType, type Instance, type StepName } from "../shared/world";
-import { laneOfRun, laneRank, lod } from "../shared/lod";
-import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
+import { fit, kit, runLocal, type KitAgent, type KitRun } from "../shared/kit";
+import { isSubRole } from "../shared/spread";
 
-export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-
-/** distances along a line (from the hub centre) */
-export const R = {
-  STEM: 4.6, // where the line leaves the Graph Central concourse
-  PLAN: 7.6,
-  RES: 12,
-  SPLIT_A: 13.9, // spurs fully diverged
-  SPLIT_B: 16.5, // spurs start merging
-  MERGE: 18.3,
-  WRITE: 19.8,
-  END: 21.8,
-};
-export const STATION_R: Record<StepName, number> = { plan: R.PLAN, research: R.RES, write: R.WRITE };
+export { reduced } from "../shared/kit";
 export const TRACK_Y = 0.05;
 export const TRAIN_Y = 0.3;
-export const HUB_Y = 0.5;
+export const isScout = isSubRole;
 
-// 3 concurrent runs → evenly spread; extra slots fill the gaps
-const SLOT_DEG = [270, 30, 150, 210, 330, 90];
-export function slotAngle(slot: number) {
-  return (SLOT_DEG[slot % SLOT_DEG.length] * Math.PI) / 180 + Math.floor(slot / SLOT_DEG.length) * 0.22;
+export function hdr(color: string, k: number) {
+  return new THREE.Color(color).multiplyScalar(k);
 }
-/** a run's line angle: its slot direction swung by a seeded ±~10° so no two runs lay track in the same place */
-export function lineAngle(runId: string, slot: number) {
-  return slotAngle(slot) + jit(runId, 21) * 0.36;
+
+/** live train positions + their u along the track (written by trains each frame; read by births/beams) */
+export const trainPos = new Map<string, { pos: THREE.Vector3; u: number }>();
+
+/** A spur (run-local): leaves the trunk at u0, fully off by u0+div, back on the trunk at u1. */
+export type Spur = { u0: number; u1: number; div: number; base: number; off: number };
+
+/** v of the track a top-level train runs on (0 = the trunk; a second same-role agent gets its own siding) */
+export const trunkV = (a: KitAgent) => (a.depth === 0 ? (a.sib ? a.ev : 0) : a.ev);
+
+/** Spur of a subagent train, from its parent's position (run-local). */
+export function spurOf(a: KitAgent, out: Spur): Spur {
+  const p = a.inst.parent ? kit.agents.get(a.inst.parent) : undefined;
+  const base = p ? trunkV(p) : 0;
+  const pu = p ? p.eu : a.eu - 2.8 * fit.spread;
+  const off = a.ev - base;
+  out.base = base;
+  out.off = off;
+  out.div = 0.7 + 0.14 * Math.abs(off);
+  out.u0 = pu + 0.5;
+  out.u1 = Math.max(out.u0 + 2 * out.div + 0.8, 2 * a.eu - out.u0);
+  return out;
 }
 
 const smooth = (x: number) => {
   const t = Math.min(1, Math.max(0, x));
   return t * t * (3 - 2 * t);
 };
-/** 0 on the trunk, 1 on the parallel part of a spur (diverge after research, merge before write) */
-export function spurShape(r: number) {
-  if (r <= R.RES || r >= R.MERGE) return 0;
-  if (r < R.SPLIT_A) return smooth((r - R.RES) / (R.SPLIT_A - R.RES));
-  if (r <= R.SPLIT_B) return 1;
-  return smooth(1 - (r - R.SPLIT_B) / (R.MERGE - R.SPLIT_B));
-}
-export function laneOffset(k: number, n: number) {
-  return (k - (Math.max(1, n) - 1) / 2) * 1.45;
+/** 0 on the trunk, 1 on the parallel part of the spur */
+export function spurShape(u: number, s: Spur) {
+  if (u <= s.u0 || u >= s.u1) return 0;
+  if (u < s.u0 + s.div) return smooth((u - s.u0) / s.div);
+  if (u <= s.u1 - s.div) return 1;
+  return smooth((s.u1 - u) / s.div);
 }
 
-/** world point at distance r along the line at `angle`, lateral offset `off` */
-export function linePoint(angle: number, r: number, off: number, y: number, out: THREE.Vector3) {
-  const c = Math.cos(angle);
-  const s = Math.sin(angle);
-  return out.set(c * r - s * off, y, s * r + c * off);
+/** Stage point of a train at run-local u on its track (trunk or spur). */
+export function trackPoint(r: KitRun, u: number, spur: Spur | null, v0: number, y: number, out: THREE.Vector3) {
+  const v = spur ? spur.base + spur.off * spurShape(u, spur) : v0;
+  runLocal(r, u, v, out);
+  out.y = y;
+  return out;
 }
 
-export function homeR(type: AgentType) {
-  if (type === "planner") return R.PLAN;
-  if (type === "researcher") return R.RES;
-  if (type === "writer") return R.WRITE;
-  return (R.SPLIT_A + R.SPLIT_B) / 2;
-}
-export const isScout = isSubRole;
-/** stable spur lane of a scout within its run (lowest free lane while it lives) */
-export const scoutLane = (i: Instance) => roleIndex(i);
-
-/** a train's resting distance along its line: seeded per agent, same-role trains in one run spread out */
-export function homeROf(i: Instance) {
-  const base = homeR(i.type);
-  if (isScout(i.type)) return base + jit(i.id, 22) * 1.3; // stays on the parallel part of the spur
-  return base + jit(i.id, 23) * 0.7 + alt(roleIndex(i)) * 1.3;
+/** Trunk extent (run-local u) of a run: its footprint plus a little track past the end trains. */
+export function trunkSpan(r: KitRun, out: { u0: number; u1: number }) {
+  out.u0 = r.cu - r.hu - 0.6;
+  out.u1 = r.cu + r.hu + 0.6;
+  return out;
 }
 
-/** per-run max number of scouts seen (only grows, so spurs don't collapse while scouts fade) */
-export const scoutCount = new Map<string, number>();
-
-/** live train positions (written by trains each frame; read by comets/beams/shuttles) */
-export const trainPos = new Map<string, { pos: THREE.Vector3; r: number }>();
-
-// Graph Central: node local positions + spin, so other components can find a node in world space
-export const hub = { angle: 0, pos: [] as THREE.Vector3[] };
-export function nodeWorld(i: number, out: THREE.Vector3) {
-  const p = hub.pos[i];
-  if (!p) return out.set(0, HUB_Y, 0);
-  const c = Math.cos(hub.angle);
-  const s = Math.sin(hub.angle);
-  return out.set(p.x * c + p.z * s, p.y + HUB_Y, -p.x * s + p.z * c);
-}
-
-// MCP airports on the outer edge
-export const AIRPORT_R = 25.5;
-export function airportAngle(slot: number) {
-  return ((slot * 72 - 54) * Math.PI) / 180;
-}
-export function airportPos(slot: number, out: THREE.Vector3) {
-  const a = airportAngle(slot);
-  return out.set(Math.cos(a) * AIRPORT_R, 0.9, Math.sin(a) * AIRPORT_R);
-}
-
-export function hdr(color: string, k: number) {
-  return new THREE.Color(color).multiplyScalar(k);
-}
-
-// ------------------------------------------------------------------ LOD: compact slots while grouped
-/**
- * Layout slot for a run. Unchanged when not grouped; while grouped, the expanded run ranked k in lane L
- * (lod laneRank) gets L + 6k, so focus runs fan out one-sidedly from their lane's spot instead of using
- * huge unbounded slots (the lane's cluster sits on the other side).
- */
-export function displaySlot(runId: string, slot: number) {
-  if (!lod.grouped) return slot;
-  return laneOfRun(runId) + 6 * laneRank(runId);
-}
+// Graph Central: node local positions (side graph frame) so other components can find a node on stage
+export const hub = { pos: [] as THREE.Vector3[] };
+export const HUB_Y = 0.5;

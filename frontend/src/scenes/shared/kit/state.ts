@@ -1,0 +1,191 @@
+/**
+ * Scene kit state: one mutable singleton (like `world`), written once per frame by kitTick() and read by the
+ * theme's slot components inside their own useFrame. See index.ts for the overview.
+ */
+import * as THREE from "three";
+import type { Instance, McpResource, McpServer, Run } from "../world";
+
+/** Which world plane the 2D layout lives on. "xy": camera looks down -z (neural). "xz": ground plane (subway). */
+export type Plane = "xy" | "xz";
+
+export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** One drawn agent (expanded instance). Stable object for the agent's lifetime: keep a reference in your slot. */
+export type KitAgent = {
+  /** unique per object (use as React key: a collapsed-then-expanded agent gets a fresh object) */
+  uid: number;
+  id: string;
+  inst: Instance;
+  /** the run this agent belongs to (kit run frame) */
+  run: KitRun;
+  /** run-local layout coords (before centering): u along run.side, v along run.axis (world units) */
+  u: number;
+  v: number;
+  /** eased u/v (siblings joining re-space smoothly) */
+  eu: number;
+  ev: number;
+  /** stage-space home position the kit wants (re-laid out on membership change) */
+  target: THREE.Vector3;
+  /** eased home position (~0.6s) */
+  pos: THREE.Vector3;
+  /**
+   * drawn position. The kit copies `pos` into it at the start of every frame; a theme that moves agents around
+   * their home (drift, train shuttle, holding pattern) overwrites it in its Agent useFrame. Beams, tethers and
+   * edges read `live` (via agentLive()).
+   */
+  live: THREE.Vector3;
+  /** eased size multiplier: roleScale(inst) * fit.scale. Multiply your agent geometry by it. */
+  scale: number;
+  /** nesting depth (0 = top-level agent of its run, 1 = subagent, 2 = sub-subagent ...) */
+  depth: number;
+  /** stable index among the living siblings that share this agent's parent, and the sibling count */
+  sib: number;
+  sibs: number;
+  /** most children this agent has had at once while visible (sibling fans never collapse while fading) */
+  kidsMax: number;
+  /** set false after the first layout (pos snaps to target instead of easing) */
+  fresh: boolean;
+};
+
+/** One drawn run (expanded run with visible agents, or a just-started run). */
+export type KitRun = {
+  uid: number;
+  id: string;
+  /** world run (undefined for agents whose run we never saw start, e.g. a late-joining viewer) */
+  run: Run | undefined;
+  /** rank among visible runs (oldest first) and the visible run count */
+  index: number;
+  count: number;
+  color: string;
+  /** eased stage-space anchor of the run group (the centre of its agents) */
+  origin: THREE.Vector3;
+  target: THREE.Vector3;
+  /** unit stage vectors: `axis` = direction subagents fan out, `side` = line top-level agents sit on */
+  axis: THREE.Vector3;
+  side: THREE.Vector3;
+  /** eased layout angle of the axis in the 2D layout plane (radians, ccw from screen-right) */
+  angle: number;
+  targetAngle: number;
+  /** eased run-local centroid (subtract from agent u/v: runLocal() does it) and half extents (world units) */
+  cu: number;
+  cv: number;
+  hu: number;
+  hv: number;
+  /** targets for the centroid/extents */
+  tcu: number;
+  tcv: number;
+  fresh: boolean;
+  /** visible agents in this run (updated each layout pass) */
+  members: number;
+  /** footprint scratch (internal) */
+  u0: number;
+  u1: number;
+  v0: number;
+  v1: number;
+};
+
+export type KitBackend = { uid: number; res: McpResource; k: number; n: number; target: THREE.Vector3; pos: THREE.Vector3; fresh: boolean };
+export type KitMcp = {
+  uid: number;
+  name: string;
+  srv: McpServer;
+  /** +1 / -1: which way is "outward" from the core along screen-x (sides) or the radial direction sign (rim) */
+  out: THREE.Vector3;
+  target: THREE.Vector3;
+  pos: THREE.Vector3;
+  backends: Map<string, KitBackend>;
+  fresh: boolean;
+};
+
+export type KitGraph = {
+  /** eased stage-space centre of the side graph */
+  pos: THREE.Vector3;
+  target: THREE.Vector3;
+  /** world radius the side graph should occupy */
+  radius: number;
+  /** theme graph's natural radius (local units); scale = radius / natural * mix */
+  natural: number;
+  /** current group scale (stage = pos + local * scale) */
+  scale: number;
+  /** 0..1 presence (fades in at the side when the graph appears mid-session) */
+  mix: number;
+  fresh: boolean;
+};
+
+export const kit = {
+  plane: "xy" as Plane,
+  agents: new Map<string, KitAgent>(),
+  runs: new Map<string, KitRun>(),
+  mcp: new Map<string, KitMcp>(),
+  /** active cluster lanes (grouped mode): eased stage positions by lane */
+  clusterPos: [] as THREE.Vector3[],
+  clusterTarget: [] as THREE.Vector3[],
+  clusterFresh: [] as boolean[],
+  graph: {
+    pos: new THREE.Vector3(),
+    target: new THREE.Vector3(),
+    radius: 2.6,
+    natural: 1,
+    scale: 0,
+    mix: 0,
+    fresh: true,
+  } as KitGraph,
+  /** eased half extents of the core (agents + clusters) in the 2D layout plane (world units) */
+  core: { hw: 4, hh: 4, r: 4, thw: 4, thh: 4 },
+  /** bump when the corresponding list membership changes (slot lists re-render) */
+  agentsVersion: 0,
+  runsVersion: 0,
+  mcpVersion: 0,
+  /** the theme's GraphResource wants to draw (session has a graph AND the galaxy has nodes) */
+  graphWanted: false,
+  /** visible runs, oldest first (rebuilt when runsVersion bumps) */
+  runOrder: [] as KitRun[],
+};
+export type Kit = typeof kit;
+
+// ------------------------------------------------------------------ plane mapping + helpers (no allocations)
+
+/** 2D layout coords (a = screen-right, b = screen-up) to a stage-space point on the kit plane. */
+export function planePoint(a: number, b: number, out: THREE.Vector3) {
+  return kit.plane === "xy" ? out.set(a, b, 0) : out.set(a, 0, -b);
+}
+/** 2D layout direction to a stage-space unit vector. */
+export const planeDir = planePoint;
+/** Stage point to 2D layout coords (a, b). */
+export function planeA(p: THREE.Vector3) {
+  return p.x;
+}
+export function planeB(p: THREE.Vector3) {
+  return kit.plane === "xy" ? p.y : -p.z;
+}
+
+/** Stage position of run-local coords (u along side, v along axis), using the run's eased frame + centroid. */
+export function runLocal(r: KitRun, u: number, v: number, out: THREE.Vector3) {
+  return out.copy(r.origin).addScaledVector(r.side, u - r.cu).addScaledVector(r.axis, v - r.cv);
+}
+
+/** Drawn position of an agent (undefined when it isn't drawn: collapsed into a cluster, or gone). */
+export function agentLive(id: string): THREE.Vector3 | undefined {
+  return kit.agents.get(id)?.live;
+}
+/** Eased stage position of an MCP server / one of its backends. */
+export function serverPos(name: string): THREE.Vector3 | undefined {
+  return kit.mcp.get(name)?.pos;
+}
+export function backendPos(server: string, res: string): THREE.Vector3 | undefined {
+  return kit.mcp.get(server)?.backends.get(res)?.pos;
+}
+/** Stage position of a point given in the side graph's local frame (theme graph units). */
+export function graphToStage(local: THREE.Vector3, out: THREE.Vector3) {
+  const g = kit.graph;
+  return out.copy(local).multiplyScalar(g.scale).add(g.pos);
+}
+/** A stage point expressed in the side graph's local frame (draw beams inside the graph group with it). */
+export function stageToGraph(stage: THREE.Vector3, out: THREE.Vector3) {
+  const g = kit.graph;
+  return out.copy(stage).sub(g.pos).divideScalar(Math.max(1e-4, g.scale));
+}
+
+let uidSeq = 0;
+/** next unique object id (React keys) */
+export const nextUid = () => ++uidSeq;

@@ -13,8 +13,9 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, presence, roleScale, world, type Instance } from "../shared/world";
-import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
+import { TYPE_COLOR, presence, roleScale, world } from "../shared/world";
+import { showLabel } from "../shared/lod";
+import { kit, type AgentSlotProps } from "../shared/kit";
 import {
   AMBER,
   CurvePool,
@@ -35,7 +36,6 @@ import {
   cruiseAlt,
   easeInOut,
   easeOut,
-  flightSlot,
   glowSprite,
   holdingPos,
   ping,
@@ -54,7 +54,9 @@ const LAND_S = 1.7;
 
 const fmtTok = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
-function Blip({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => void }) {
+/** Agent slot: a flight blip holding a slow pattern around its kit home. */
+export function Blip({ agent, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
   const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
@@ -95,9 +97,8 @@ function Blip({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   useFrame(({ clock }) => {
     const now = performance.now();
     const t = clock.elapsedTime;
-    const slot = flightSlot(inst);
     const cruiseY = cruiseAlt(inst);
-    holdingPos(inst, slot, t, s.hold);
+    holdingPos(inst, agent.pos, t, s.hold);
     s.hold.y = cruiseY;
     // glide when LOD re-lays out the sector (snap on first frame)
     if (!s.init) s.cruise.copy(s.hold);
@@ -124,11 +125,12 @@ function Blip({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     if (s.land >= 1 && !s.landed) {
       s.landed = true;
       s.ground.set(s.pos.x, 0.02, s.pos.z);
-      ping(s.ground, 1.1 * roleScale(inst), inst.status === "failed" ? RED : PHOSPHOR, 1300, 0.9);
+      ping(s.ground, 1.1 * agent.scale, inst.status === "failed" ? RED : PHOSPHOR, 1300, 0.9);
     }
     s.ground.set(s.pos.x, 0.02, s.pos.z);
+    agent.live.copy(s.pos);
     s.vis = presence(inst, now);
-    s.scale = roleScale(inst) * lodScale();
+    s.scale = agent.scale;
 
     // ---- transponder ping on every LLM call, sized by tokens
     if (inst.llmCalls !== s.llm) {
@@ -181,7 +183,8 @@ function Blip({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   const k = inst.id.split(":")[2];
   const big = !inst.subagent;
   const callsign = `${inst.name.toUpperCase()}${k !== undefined && /^\d+$/.test(k) ? ` ${Number(k) + 1}` : ""}`;
-  const left = Math.sin(flightSlot(inst).bearing) < -0.15; // tag goes on the outward side of the scope
+  // tag goes on the outward side of the scope (decided once: the tag never flips while flying)
+  const left = useMemo(() => Math.sin(bearingOf(agent.target)) < -0.15 && Math.hypot(agent.target.x, agent.target.z) > 1.5, [agent]);
   return (
     <group ref={root}>
       <group ref={body}>
@@ -192,7 +195,7 @@ function Blip({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       <mesh
         geometry={HIT}
         material={HIT_MAT}
-        scale={roleScale(inst)}
+        scale={roleScale(inst) * 1.2}
         onClick={select}
         onPointerOver={() => (document.body.style.cursor = "pointer")}
         onPointerOut={() => (document.body.style.cursor = "")}
@@ -215,34 +218,11 @@ function Blip({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
         size={big ? 0.36 : 0.3}
         secondarySize={big ? 0.3 : 0.27}
         opacity={0}
-        pxRange={big ? [8.5, 12.5] : [7.5, 10.5]}
+        fit
+        pxRange={big ? [8.5, 13] : [7.5, 11]}
         renderOrder={26}
       />
     </group>
-  );
-}
-
-export function Blips({ onSelect }: { onSelect: (id: string) => void }) {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.instances;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // collapsed runs are drawn by their sector's cluster (Clusters.tsx)
-      setList([...m.values()].filter(isExpanded));
-    }
-  });
-  return (
-    <>
-      {list.map((i) => (
-        <Blip key={i.id} inst={i} onSelect={onSelect} />
-      ))}
-    </>
   );
 }
 
@@ -265,7 +245,8 @@ export function Routes() {
     dots.material.uniforms.uScale.value = size.height * 0.9;
     const { a, b, c, h, col } = v;
 
-    for (const inst of world.instances.values()) {
+    for (const ka of kit.agents.values()) {
+      const inst = ka.inst;
       const s = blips.get(inst.id);
       if (!s || s.vis <= 0.01) continue;
       // altitude stalk + ground shadow
@@ -273,9 +254,8 @@ export function Routes() {
       dots.add(s.ground.x, 0.03, s.ground.z, 0.22 * s.scale, s.color, 0.35 * s.vis);
       // radar history dots (analytic: the holding pattern's past positions)
       if (s.takeoff >= 1 && !reduced) {
-        const slot = flightSlot(inst);
         for (let k = 1; k <= TRAIL_N; k++) {
-          holdingPos(inst, slot, t - k * TRAIL_DT, a);
+          holdingPos(inst, ka.pos, t - k * TRAIL_DT, a);
           const f = 1 - k / (TRAIL_N + 1);
           dots.add(a.x, s.pos.y, a.z, (inst.subagent ? 0.16 : 0.24) * (0.6 + f * 0.4), s.color, 0.55 * f * f * s.vis);
         }

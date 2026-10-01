@@ -1,4 +1,8 @@
-/** Graph Central - the FalkorDB interchange in the middle of the map, plus flares / transfer beams to trains. */
+/**
+ * Graph resource slot: Graph Central - the FalkorDB interchange, now a small station on the side of the map
+ * (only when the session has a graph). Drawn in its own frame (radius ~HUB_R); the kit places/scales/fades it.
+ * Flares / transfer beams to trains are drawn on stage (Transfers, FlareLabels) via nodeWorld().
+ */
 import { Sparkles } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
@@ -6,9 +10,22 @@ import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
 import { KIND_COLOR, TYPE_COLOR, world } from "../shared/world";
-import { hdr, hub, HUB_Y, nodeWorld, R, reduced, trainPos } from "./layout";
+import { agentLive, graphToStage, kit, useKitGalaxy, type GraphSlotProps } from "../shared/kit";
+import { hdr, hub, HUB_Y, reduced } from "./layout";
 
 const RING = 2.55;
+/** concourse radius (where the old lines used to terminate) and the slot's natural radius */
+const CONCOURSE = 3.75;
+export const HUB_R = CONCOURSE + 0.3;
+
+const _l = new THREE.Vector3();
+/** Stage position of hub node i (the hub is placed/scaled by the kit). */
+export function nodeWorld(i: number, out: THREE.Vector3) {
+  const p = hub.pos[i];
+  if (!p) _l.set(0, HUB_Y, 0);
+  else _l.set(p.x, p.y + HUB_Y, p.z);
+  return graphToStage(_l, out);
+}
 
 function layout(n: number) {
   const pts: THREE.Vector3[] = [];
@@ -25,9 +42,8 @@ export const HUB_NODES = 200;
 /** galaxy node index → index in our representative sample */
 export const sampleIndex = (g: Galaxy, name: string) => nodeIndex(g, name) % Math.min(HUB_NODES, g.nodes.length);
 
-export function GraphCentral({ galaxy }: { galaxy: Galaxy }) {
+export function GraphCentral({ galaxy }: GraphSlotProps) {
   const n = Math.min(HUB_NODES, galaxy.nodes.length);
-  const spin = useRef<THREE.Group>(null);
   const inst = useRef<THREE.InstancedMesh>(null);
   const core = useRef<THREE.Mesh>(null);
   const pos = useMemo(() => layout(n), [n]);
@@ -65,9 +81,7 @@ export function GraphCentral({ galaxy }: { galaxy: Galaxy }) {
     return g;
   }, [galaxy, pos]);
 
-  useFrame((_, dt) => {
-    void dt; // map stays still
-    if (spin.current) spin.current.rotation.y = hub.angle;
+  useFrame(() => {
     const mesh = inst.current;
     if (!mesh) return;
     const now = performance.now();
@@ -106,7 +120,7 @@ export function GraphCentral({ galaxy }: { galaxy: Galaxy }) {
 
   return (
     <group position={[0, HUB_Y, 0]}>
-      <group ref={spin}>
+      <group>
         <instancedMesh ref={inst} args={[undefined, undefined, Math.max(1, n)]}>
           <sphereGeometry args={[0.095, 10, 10]} />
           <meshBasicMaterial toneMapped={false} />
@@ -117,11 +131,11 @@ export function GraphCentral({ galaxy }: { galaxy: Galaxy }) {
       </group>
       {/* interchange concourse: concentric rings where the lines terminate */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -HUB_Y + 0.04, 0]}>
-        <ringGeometry args={[R.STEM - 0.18, R.STEM + 0.18, 128]} />
+        <ringGeometry args={[CONCOURSE - 0.18, CONCOURSE + 0.18, 128]} />
         <meshBasicMaterial color={hdr("#a5b4fc", 1.3)} transparent opacity={0.55} toneMapped={false} side={THREE.DoubleSide} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -HUB_Y + 0.03, 0]}>
-        <circleGeometry args={[R.STEM - 0.2, 96]} />
+        <circleGeometry args={[CONCOURSE - 0.2, 96]} />
         <meshBasicMaterial color="#0b1030" transparent opacity={0.75} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -HUB_Y + 0.05, 0]}>
@@ -137,7 +151,7 @@ export function GraphCentral({ galaxy }: { galaxy: Galaxy }) {
         <meshBasicMaterial color={hdr("#e0e7ff", 3)} toneMapped={false} />
       </mesh>
       <Sparkles count={reduced ? 20 : 60} scale={[7, 1.4, 7]} size={1.8} speed={0.25} color="#a5b4fc" opacity={0.55} />
-      <GraphLabel3D position={[0, 2.1, 0]} suffix=" · Graph Central" color="#a5b4fc" size={0.36} pxRange={[9.5, 14]} />
+      <GraphLabel3D position={[0, 2.4, 0]} suffix=" · Graph Central" color="#a5b4fc" size={0.36} pxRange={[9.5, 14]} />
     </group>
   );
 }
@@ -145,7 +159,8 @@ export function GraphCentral({ galaxy }: { galaxy: Galaxy }) {
 // ------------------------------------------------------------------ flares: rings at nodes + transfer beams + packets
 
 const MAX = 48;
-export function Transfers({ galaxy }: { galaxy: Galaxy }) {
+export function Transfers() {
+  const galaxy = useKitGalaxy();
   const rings = useRef<THREE.InstancedMesh>(null);
   const packets = useRef<THREE.InstancedMesh>(null);
   const geo = useMemo(() => {
@@ -164,6 +179,11 @@ export function Transfers({ galaxy }: { galaxy: Galaxy }) {
     const rm = rings.current;
     const pm = packets.current;
     if (!rm || !pm) return;
+    if (!galaxy.nodes.length || !kit.graphWanted) {
+      rm.count = pm.count = 0;
+      geo.setDrawRange(0, 0);
+      return;
+    }
     const now = performance.now();
     const p = geo.getAttribute("position") as THREE.BufferAttribute;
     const col = geo.getAttribute("color") as THREE.BufferAttribute;
@@ -192,11 +212,11 @@ export function Transfers({ galaxy }: { galaxy: Galaxy }) {
       else c.copy(tc).multiplyScalar(2.4 * (1 - age));
       rm.setColorAt(k, c);
       // beam train → node
-      const tp = trainPos.get(f.instance);
+      const tpos = agentLive(f.instance);
       const t = Math.min(1, (now - f.start) / 700);
-      if (tp && age < 0.75) {
+      if (tpos && age < 0.75) {
         const fade = 1 - age / 0.75;
-        p.setXYZ(k * 2, tp.pos.x, tp.pos.y, tp.pos.z);
+        p.setXYZ(k * 2, tpos.x, tpos.y, tpos.z);
         p.setXYZ(k * 2 + 1, node.x, node.y, node.z);
         if (write) c.setRGB(2.6, 2.6, 3).multiplyScalar(fade);
         else c.copy(tc).multiplyScalar(1.2 * fade);
@@ -204,7 +224,7 @@ export function Transfers({ galaxy }: { galaxy: Galaxy }) {
         col.setXYZ(k * 2 + 1, c.r * 0.7, c.g * 0.7, c.b * 0.7);
         // packet: read = data flows node → train, write = train → node
         const u = write ? t : 1 - t;
-        tmp.position.set(tp.pos.x + (node.x - tp.pos.x) * u, tp.pos.y + (node.y - tp.pos.y) * u + Math.sin(u * Math.PI) * 0.6, tp.pos.z + (node.z - tp.pos.z) * u);
+        tmp.position.set(tpos.x + (node.x - tpos.x) * u, tpos.y + (node.y - tpos.y) * u + Math.sin(u * Math.PI) * 0.6, tpos.z + (node.z - tpos.z) * u);
         tmp.rotation.set(0, 0, 0);
         tmp.scale.setScalar(t >= 1 ? 0.0001 : write ? 1.4 : 1);
         tmp.updateMatrix();
@@ -279,7 +299,9 @@ function FlareLabel({ galaxy, op }: { galaxy: Galaxy; op: "read" | "write" }) {
   );
 }
 
-export function FlareLabels({ galaxy }: { galaxy: Galaxy }) {
+export function FlareLabels() {
+  const galaxy = useKitGalaxy();
+  if (!galaxy.nodes.length) return null;
   return (
     <>
       <FlareLabel galaxy={galaxy} op="read" />

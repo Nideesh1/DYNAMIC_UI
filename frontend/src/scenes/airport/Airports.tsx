@@ -6,11 +6,12 @@
  *   result       → a bright packet runs gate → airport → flight, arrows pointing home
  */
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type McpResource, type McpServer, type ResourceKind } from "../shared/world";
-import { AMBER, CurvePool, GlowPool, PHOSPHOR, RED, Style, WHITE, additive, additiveLine, airportPos, arcControl, bezier, blips, clamp01, easeInOut, gatePos, glowSprite, reduced } from "./fx";
+import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { kit, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
+import { AMBER, CurvePool, GlowPool, PHOSPHOR, RED, Style, WHITE, additive, additiveLine, arcControl, bezier, blips, clamp01, easeInOut, glowSprite, reduced } from "./fx";
 
 const KIND_ICON: Record<ResourceKind, string> = { db: "◉", warehouse: "▤", spark: "✷", api: "⇄", storage: "▣", queue: "≡" };
 
@@ -24,14 +25,18 @@ const TOWER_CAB = new THREE.CylinderGeometry(0.17, 0.12, 0.14, 8).translate(0, 0
 const GATE = new THREE.BoxGeometry(0.42, 0.18, 0.42).translate(0, 0.09, 0);
 const GATE_EDGES = new THREE.EdgesGeometry(GATE);
 
-function Gate({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number; n: number }) {
-  const pos = useMemo(() => gatePos(srv.slot, k, n, new THREE.Vector3()), [srv.slot, k, n]);
+/** Backend slot: a gate further out, wired to its airport by a taxiway (McpRoutes). */
+export function Gate({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const at = useRef<THREE.Group>(null);
   const col = useMemo(() => tint(srv.color).lerp(WHITE, 0.2), [srv.color]);
   const m = useMemo(() => ({ fill: additive(col), line: additiveLine(col), halo: glowSprite(col) }), [col]);
   const halo = useRef<THREE.Sprite>(null);
   const label = useRef<Label3DHandle>(null);
   const last = useRef("");
   useFrame(({ clock }) => {
+    at.current?.position.set(backend.pos.x, 0, backend.pos.z);
     const now = performance.now();
     const busy = res.inflight > 0;
     const act = Math.exp(-((now - res.activeAt) / 1000) * 1.4);
@@ -57,7 +62,7 @@ function Gate({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number;
     }
   });
   return (
-    <group position={pos}>
+    <group ref={at}>
       <mesh geometry={GATE} material={m.fill} />
       <lineSegments geometry={GATE_EDGES} material={m.line} />
       <sprite ref={halo} material={m.halo} position={[0, 0.15, 0]} />
@@ -66,19 +71,19 @@ function Gate({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number;
   );
 }
 
-function Airport({ srv }: { srv: McpServer }) {
-  const pos = useMemo(() => airportPos(srv.slot, new THREE.Vector3()), [srv.slot]);
-  const heading = useMemo(() => Math.atan2(pos.x, -pos.z), [pos]);
+/** MCP server slot: an airport on the scope rim (crossed runways + control-tower beacon). */
+export function Airport({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
+  const at = useRef<THREE.Group>(null);
+  const rot = useRef<THREE.Group>(null);
+  // label side from the kit's target (doesn't swing while easing)
+  const heading = useMemo(() => Math.atan2(mcp.target.x, -mcp.target.z), [mcp]);
   const col = useMemo(() => tint(srv.color), [srv.color]);
   const m = useMemo(() => ({ fill: additive(col), line: additiveLine(col), tower: additive(col), cab: additive(WHITE), beacon: glowSprite(col) }), [col]);
   const beacon = useRef<THREE.Sprite>(null);
-  const [res, setRes] = useState<McpResource[]>([]);
-  const nRes = useRef(-1);
   useFrame(({ clock }) => {
-    if (srv.resources.size !== nRes.current) {
-      nRes.current = srv.resources.size;
-      setRes([...srv.resources.values()]);
-    }
+    at.current?.position.set(mcp.pos.x, 0, mcp.pos.z);
+    if (rot.current) rot.current.rotation.y = -Math.atan2(mcp.pos.x, -mcp.pos.z);
     const now = performance.now();
     const busy = srv.inflight > 0;
     const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.3);
@@ -93,8 +98,8 @@ function Airport({ srv }: { srv: McpServer }) {
     beacon.current?.scale.setScalar(1.4 + blink * (busy ? 1.6 : 0.7));
   });
   return (
-    <>
-      <group position={pos} rotation={[0, -heading, 0]}>
+    <group ref={at}>
+      <group ref={rot}>
         <group rotation={[0, 0.5, 0]}>
           <mesh geometry={RUNWAY} material={m.fill} />
           <lineSegments geometry={RUNWAY_EDGES} material={m.line} />
@@ -110,7 +115,6 @@ function Airport({ srv }: { srv: McpServer }) {
         </group>
       </group>
       <Label3D
-        position={[pos.x, 0, pos.z]}
         offset={[Math.sin(heading) * 1.15, Math.cos(heading) * 1.0 - 0.45]}
         text={[
           { text: srv.name.replace(/[^a-z0-9]/gi, "").slice(0, 4).toUpperCase().padEnd(4, "X") + "  ", color: srv.color },
@@ -123,15 +127,12 @@ function Airport({ srv }: { srv: McpServer }) {
         size={0.3}
         pxRange={[8, 11.5]}
       />
-      {res.map((r, k) => (
-        <Gate key={r.name} srv={srv} res={r} k={k} n={res.length} />
-      ))}
-    </>
+    </group>
   );
 }
 
-/** Pooled routes: flight ↔ airport (pending / result) and airport ↔ gate taxiways. */
-function McpRoutes() {
+/** Theme extra, pooled routes: flight ↔ airport (pending / result) and airport ↔ gate taxiways. */
+export function McpRoutes() {
   const pool = useMemo(() => new CurvePool(140, 64), []);
   const heads = useMemo(() => new GlowPool(64), []);
   const v = useMemo(() => ({ ap: new THREE.Vector3(), gp: new THREE.Vector3(), c: new THREE.Vector3(), h: new THREE.Vector3(), col: new THREE.Color(), col2: new THREE.Color() }), []);
@@ -152,13 +153,13 @@ function McpRoutes() {
       if (!prev || cl.start > prev.start) latest.set(key, cl);
     }
 
-    for (const srv of world.mcpServers.values()) {
-      airportPos(srv.slot, ap);
+    for (const m of kit.mcp.values()) {
+      const srv = m.srv;
       col.set(srv.color).lerp(PHOSPHOR, 0.25);
-      const n = srv.resources.size;
-      let k = 0;
-      for (const res of srv.resources.values()) {
-        gatePos(srv.slot, k++, n, gp);
+      for (const be of m.backends.values()) {
+        const res = be.res;
+        ap.copy(m.pos);
+        gp.copy(be.pos);
         ap.y = gp.y = 0.03;
         c.copy(ap).add(gp).multiplyScalar(0.5);
         const act = Math.exp(-((now - res.activeAt) / 1000) * 1.4);
@@ -180,8 +181,9 @@ function McpRoutes() {
     const draw = (instance: string, server: string, mode: 0 | 1, x: number) => {
       const s = blips.get(instance);
       const srv = world.mcpServers.get(server);
-      if (!s || !srv) return;
-      airportPos(srv.slot, ap);
+      const m = kit.mcp.get(server);
+      if (!s || !srv || !m) return;
+      ap.copy(m.pos);
       ap.y = 0.25;
       arcControl(s.pos, ap, 1.2, 0.4, c);
       col.set(srv.color).lerp(PHOSPHOR, 0.25);
@@ -215,21 +217,3 @@ function McpRoutes() {
   );
 }
 
-export function Airports() {
-  const [servers, setServers] = useState<McpServer[]>([]);
-  const n = useRef(-1);
-  useFrame(() => {
-    if (world.mcpServers.size !== n.current) {
-      n.current = world.mcpServers.size;
-      setServers([...world.mcpServers.values()]);
-    }
-  });
-  return (
-    <>
-      {servers.map((s) => (
-        <Airport key={s.name} srv={s} />
-      ))}
-      <McpRoutes />
-    </>
-  );
-}

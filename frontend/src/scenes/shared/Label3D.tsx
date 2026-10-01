@@ -24,6 +24,7 @@ import { Suspense, useEffect, useImperativeHandle, useMemo, useRef, type ReactNo
 import * as THREE from "three";
 import interUrl from "./fonts/inter-latin-500-normal.woff";
 import monoUrl from "./fonts/jetbrains-mono-latin-500-normal.woff";
+import { fit } from "./kit/fit";
 import { STEPS, useWorld, type Run } from "./world";
 
 // ------------------------------------------------------------------ types
@@ -96,6 +97,8 @@ export interface Label3DProps {
   glow?: number;
   /** thin line from the anchor point (position) to the plate (use with `offset`) */
   leader?: boolean;
+  /** follow the kit's adaptive fit (fit.label): bigger when few agents, smaller when crowded (still within pxRange) */
+  fit?: boolean;
   ref?: Ref<Label3DHandle>;
   /** extra objects in billboard space (decorations) */
   children?: ReactNode;
@@ -268,6 +271,7 @@ const DEFAULTS = {
   pxRange: [7.5, 15] as [number, number] | null,
   glow: 1,
   leader: false,
+  fit: false,
 };
 
 function Label3DInner(props: Label3DProps) {
@@ -499,15 +503,17 @@ function Label3DInner(props: Label3DProps) {
     b.quaternion.copy(s.q.invert()).multiply(camera.quaternion);
     // world size → clamp to a css-px range; undo parent scale so `size` stays world units
     const dist = s.wp.distanceTo(camera.position);
-    let sc = 1;
+    // kit fit: world size follows fit.label (few agents = bigger labels), then the px clamp applies
+    const fk = q.fit ? fit.label : 1;
+    let sc = fk;
     if (q.pxRange) {
       const pc = camera as THREE.PerspectiveCamera;
       const oc = camera as THREE.OrthographicCamera;
       const worldPerPx = pc.isPerspectiveCamera
         ? (2 * dist * Math.tan(THREE.MathUtils.degToRad(pc.fov) / 2)) / (pc.zoom * vp.height)
         : (oc.top - oc.bottom) / (oc.zoom * vp.height);
-      const px = q.size / Math.max(worldPerPx, 1e-6);
-      sc = THREE.MathUtils.clamp(px, q.pxRange[0], q.pxRange[1]) / px;
+      const px = (q.size * fk) / Math.max(worldPerPx, 1e-6);
+      sc = (THREE.MathUtils.clamp(px, q.pxRange[0], q.pxRange[1]) / px) * fk;
     }
     b.scale.setScalar(sc / (o.matrixWorld.getMaxScaleOnAxis() || 1));
     const a = s.cur * (1 - q.depthFade * THREE.MathUtils.smoothstep(dist, q.fadeRange[0], q.fadeRange[1]));

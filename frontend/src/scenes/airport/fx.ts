@@ -7,11 +7,11 @@
  * increasing clockwise, like a real scope.
  */
 import * as THREE from "three";
-import { TYPE_COLOR, hash01, world, type AgentType, type Instance } from "../shared/world";
-import { alt } from "../shared/spread";
-import { laneOfRun, laneRank, lod } from "../shared/lod";
+import { TYPE_COLOR, hash01, type AgentType, type Instance } from "../shared/world";
+import { kit } from "../shared/kit";
 
-export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+export { reduced } from "../shared/kit";
+import { reduced } from "../shared/kit";
 
 // ------------------------------------------------------------------ palette
 export const PHOSPHOR = new THREE.Color("#46ff9a");
@@ -33,7 +33,11 @@ export const easeInOut = (x: number) => {
 };
 
 // ------------------------------------------------------------------ scope geometry
-export const SCOPE_R = 10;
+/** Scope radius follows the kit's core (radar preset): small scope around a few flights, bigger when busy. */
+export const scope = { r: 6 };
+export function scopeTick() {
+  scope.r = Math.max(5, kit.core.r + 1.3);
+}
 export const TAU = Math.PI * 2;
 /** Sweep speed (rad/s). The sweep is the one rotating thing in the scene. */
 export const SWEEP_SPEED = reduced ? 0.22 : 0.85;
@@ -49,87 +53,18 @@ export function polar(bearing: number, r: number, y: number, out: THREE.Vector3)
 }
 export const bearingOf = (p: THREE.Vector3) => Math.atan2(p.x, -p.z);
 
-/** Run sectors: slot k sits at k·60° plus a per-run twist, so concurrent runs claim different parts of the scope. */
-export function runBearing(runId: string) {
-  // grouped (LOD): the lane's sector; extra expanded runs of a clicked lane fan out to either side
-  if (lod.grouped) return (laneOfRun(runId) * TAU) / 6 + alt(laneRank(runId)) * 0.55 + (hash01(runId, 1) - 0.5) * 0.12;
-  const r = world.runs.get(runId);
-  const slot = r ? r.slot : Math.floor(hash01(runId, 9) * 6);
-  return (slot * TAU) / 6 + (hash01(runId, 1) - 0.5) * 0.32;
-}
-/** MCP airports sit on the rim between run sectors. */
-const AIRPORT_BEARINGS = [30, 210, 330, 150, 90, 270, 0, 180].map((d) => (d * Math.PI) / 180);
-export const AIRPORT_R = SCOPE_R + 1.55;
-export function airportPos(slot: number, out: THREE.Vector3) {
-  const b = AIRPORT_BEARINGS[slot % AIRPORT_BEARINGS.length] + Math.floor(slot / AIRPORT_BEARINGS.length) * 0.26;
-  return polar(b, AIRPORT_R + Math.floor(slot / AIRPORT_BEARINGS.length) * 0.8, 0, out);
-}
-/** Backend gate k of n for an airport: further out, fanned along the rim. */
-export function gatePos(slot: number, k: number, n: number, out: THREE.Vector3) {
-  const b = AIRPORT_BEARINGS[slot % AIRPORT_BEARINGS.length] + Math.floor(slot / AIRPORT_BEARINGS.length) * 0.26;
-  return polar(b + (k - (n - 1) / 2) * 0.17, AIRPORT_R + 2.35, 0, out);
-}
-
-// ------------------------------------------------------------------ flight layout (stable per instance lifetime)
-type Slot = { bearing: number; r: number; depth: number; key: number };
-const slots = new Map<string, Slot>();
-/** layout key of a run's sector (slots are re-laid out when LOD moves the run) */
-const sectorKey = (runId: string) => (lod.grouped ? 1 + laneOfRun(runId) * 64 + laneRank(runId) : 0);
-const sibling = new Map<string, number>(); // instance id → index among living siblings
-
-function siblingIndex(inst: Instance): number {
-  const have = sibling.get(inst.id);
-  if (have !== undefined) return have;
-  const taken = new Set<number>();
-  for (const [id, k] of sibling) {
-    const o = world.instances.get(id);
-    if (!o) {
-      sibling.delete(id);
-      continue;
-    }
-    if (o.run === inst.run && o.parent === inst.parent) taken.add(k);
-  }
-  let k = 0;
-  while (taken.has(k)) k++;
-  sibling.set(inst.id, k);
-  return k;
-}
-
-/** Cruise slot of a flight on the scope: roots near the centre of their run's sector, children further out. */
-export function flightSlot(inst: Instance): Slot {
-  const have = slots.get(inst.id);
-  const key = sectorKey(inst.run);
-  if (have && have.key === key) return have;
-  for (const id of slots.keys()) if (!world.instances.has(id) && !world.archive.has(id)) slots.delete(id);
-  const parentInst = inst.parent ? world.instances.get(inst.parent) ?? world.archive.get(inst.parent) : undefined;
-  const k = siblingIndex(inst);
-  let s: Slot;
-  if (!parentInst) {
-    const base = runBearing(inst.run);
-    const r = 3.3 + hash01(inst.id, 2) * 0.8 + (k ? 1.2 : 0);
-    s = { bearing: base + alt(k) * (2.4 / r) + (hash01(inst.id, 3) - 0.5) * 0.12, r, depth: 0, key };
-  } else {
-    const p = flightSlot(parentInst);
-    const r = Math.min(SCOPE_R - 1.5, p.r + (inst.subagent ? 2.7 : 2.3) + (k % 2 ? 0.9 : 0) + (hash01(inst.id, 4) - 0.5) * 0.5);
-    const spacing = 2.3 / r;
-    const twist = (hash01(inst.run, 5) - 0.5) * 0.3;
-    s = { bearing: p.bearing + twist * (k ? 1 : 0.4) + alt(k) * spacing + (hash01(inst.id, 6) - 0.5) * 0.06, r, depth: p.depth + 1, key };
-  }
-  slots.set(inst.id, s);
-  return s;
-}
-
 export const cruiseAlt = (inst: Instance) => (inst.subagent ? 0.55 : 1.1);
 
-/** Holding pattern: a small, slow ellipse around the cruise slot (analytic → trails are free). */
-export function holdingPos(inst: Instance, s: Slot, t: number, out: THREE.Vector3) {
-  polar(s.bearing, s.r, 0, out);
+/** Holding pattern: a small, slow ellipse around the flight's kit home (analytic, so trails are free). */
+export function holdingPos(inst: Instance, home: THREE.Vector3, t: number, out: THREE.Vector3) {
+  out.set(home.x, 0, home.z);
   if (reduced) return out;
+  const bearing = bearingOf(home);
   const ph = hash01(inst.id, 7) * TAU;
   const w = (TAU / 26) * (hash01(inst.id, 8) > 0.5 ? 1 : -1);
   const a = inst.subagent ? 0.32 : 0.45;
-  const hx = Math.cos(s.bearing);
-  const hz = Math.sin(s.bearing);
+  const hx = Math.cos(bearing);
+  const hz = Math.sin(bearing);
   const u = Math.cos(t * w + ph) * a;
   const v = Math.sin(t * w + ph) * a * 0.55;
   out.x += hx * u - hz * v;

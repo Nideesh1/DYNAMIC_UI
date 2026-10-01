@@ -1,31 +1,43 @@
 /**
- * Runs = sectors of the scope. Each run claims a bearing (its flights cruise there) marked by an arc on the
- * bezel in the run's colour and a strip label (topic). When the run has Hatchet steps, the arc splits into
- * three segments plan › research › write: queued dim, running pulsing, done steady.
+ * Runs = sectors of the scope. Each run's flights hold in its part of the scope (kit radar preset); the run is
+ * marked by an arc on the bezel at its bearing in the run's colour and a strip label (topic). When the run has
+ * Hatchet steps, the arc splits into three segments plan › research › write: queued dim, running pulsing, done steady.
  */
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, useWorld, world, type Run } from "../shared/world";
-import { isRunExpanded, lod } from "../shared/lod";
-import { CurvePool, PHOSPHOR, SCOPE_R, WHITE, clamp01, easeOut, polar, reduced, runBearing } from "./fx";
+import { RUN_LINGER_MS, STEPS, useWorld, type Run } from "../shared/world";
+import { kit, type KitRun, type RunSlotProps } from "../shared/kit";
+import { CurvePool, PHOSPHOR, WHITE, bearingOf, clamp01, easeOut, polar, reduced, scope } from "./fx";
 
 const HALF = 0.36; // sector half-width on the bezel (rad)
 
-function RunLabel({ run }: { run: Run }) {
-  useWorld();
-  const b = runBearing(run.id);
-  const pos = useMemo(() => polar(b, SCOPE_R + 1.75, 0, new THREE.Vector3()), [b]);
-  // the strip grows outward from its anchor on the rim, so it never covers the sector it labels
+/** bearing of a run's sector: where its group sits, or (a centred single run) the way it fans */
+export function runBearing(r: KitRun) {
+  return Math.hypot(r.origin.x, r.origin.z) > 1.2 ? bearingOf(r.origin) : bearingOf(r.axis);
+}
+
+/** Run marker slot: the flight strip label on the rim at the run's bearing. */
+export function RunStrip({ run: kr }: RunSlotProps) {
+  const g = useRef<THREE.Group>(null);
+  useFrame(() => {
+    if (g.current) polar(runBearing(kr), scope.r + 1.75, 0, g.current.position);
+  });
+  // anchor side decided from the target layout (doesn't flip while easing)
+  const b = runBearing(kr);
   const sx = Math.sin(b);
   const cy = Math.cos(b);
+  return <group ref={g}>{kr.run && <RunLabel run={kr.run} anchorX={sx > 0.35 ? "left" : sx < -0.35 ? "right" : "center"} anchorY={cy > 0.35 ? "bottom" : cy < -0.35 ? "top" : "middle"} />}</group>;
+}
+
+function RunLabel({ run, anchorX, anchorY }: { run: Run; anchorX: "left" | "right" | "center"; anchorY: "top" | "bottom" | "middle" }) {
+  useWorld();
   const done = run.status !== "started";
   return (
     <Label3D
-      position={pos}
-      anchorX={sx > 0.35 ? "left" : sx < -0.35 ? "right" : "center"}
-      anchorY={cy > 0.35 ? "bottom" : cy < -0.35 ? "top" : "middle"}
+      anchorX={anchorX}
+      anchorY={anchorY}
       textAlign="left"
       plate="bar"
       text={run.topic}
@@ -42,33 +54,23 @@ function RunLabel({ run }: { run: Run }) {
   );
 }
 
-export function Runs() {
-  const [list, setList] = useState<Run[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
+/** Theme extra: the bezel arcs of every drawn run in one pooled line draw. */
+export function RunSectors() {
   const pool = useMemo(() => new CurvePool(40, 1), []);
   const col = useMemo(() => new THREE.Color(), []);
   useFrame(({ clock }) => {
-    const m = world.runs;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // collapsed runs are drawn by their sector's cluster
-      setList([...m.values()].filter((r) => isRunExpanded(r.id)));
-    }
     const now = performance.now();
     const t = clock.elapsedTime;
     pool.begin(t);
-    for (const run of m.values()) {
-      if (!isRunExpanded(run.id)) continue;
-      const b = runBearing(run.id);
+    for (const kr of kit.runs.values()) {
+      const run = kr.run;
+      if (!run) continue;
+      const b = runBearing(kr);
       const grow = easeOut((now - run.startedAt) / 1000);
       const fade = run.endedAt ? clamp01(1 - (now - run.endedAt - (RUN_LINGER_MS - 2500)) / 2500) : 1;
       const k = grow * fade;
       col.set(run.color).lerp(PHOSPHOR, 0.15);
-      const r = SCOPE_R + 0.3;
+      const r = scope.r + 0.3;
       if (run.hasSteps) {
         const w = (2 * HALF * grow) / 3;
         for (let i = 0; i < STEPS.length; i++) {
@@ -90,12 +92,5 @@ export function Runs() {
     }
     pool.end();
   });
-  return (
-    <>
-      <primitive object={pool.lines} />
-      {list.map((r) => (
-        <RunLabel key={r.id} run={r} />
-      ))}
-    </>
-  );
+  return <primitive object={pool.lines} />;
 }

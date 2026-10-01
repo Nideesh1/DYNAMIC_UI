@@ -1,10 +1,7 @@
-/** Neural scene: shaders, shared geometries, easing, and the spatial layout (runs, somas, MCP organs). */
+/** Neural scene: shaders, shared geometries, easing (placement comes from the scene kit). */
 import * as THREE from "three";
-import { TYPE_COLOR, hash01, world, type AgentType, type Instance } from "../shared/world";
-import { laneRank } from "../shared/lod";
-import { alt } from "../shared/spread";
-
-export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+import { TYPE_COLOR, type AgentType } from "../shared/world";
+export { reduced } from "../shared/kit";
 
 // ------------------------------------------------------------------ easing
 export const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
@@ -209,108 +206,6 @@ export function bowControl(a: THREE.Vector3, b: THREE.Vector3, lift: number, out
   out.x += (out.x / len) * lift;
   out.y += (out.y / len) * lift;
   out.z += lift * 0.9;
-  return out;
-}
-
-// ------------------------------------------------------------------ layout (stage space; brain at origin, ~±4.4 x, ±3 y)
-type Slot = { dir: THREE.Vector3; tan: THREE.Vector3; fan: THREE.Vector3; gangR: number; somaR: number; spread: number; fanLen: number };
-function mk(dx: number, dy: number, tx: number, ty: number, gangR: number, somaR: number, spread: number, fanLen: number): Slot {
-  const dir = new THREE.Vector3(dx, dy, 0).normalize();
-  const tan = new THREE.Vector3(tx, ty, 0).normalize();
-  const fan = tan.clone().multiplyScalar(0.62).add(new THREE.Vector3(0, 0, 0.78)).normalize();
-  return { dir, tan, fan, gangR, somaR, spread, fanLen };
-}
-const SLOTS: Slot[] = [
-  mk(-1, 0, 0, -1, 13.2, 8.0, 2.9, 3.0),
-  mk(1, 0, 0, -1, 13.2, 8.0, 2.9, 3.0),
-  mk(0, 1, 1, 0, 8.5, 5.5, 3.9, 1.9),
-  mk(0, -1, 1, 0, 9.3, 5.7, 3.9, 2.2),
-  mk(-0.82, 0.57, 0.57, 0.82, 11.5, 7.2, 2.6, 2.5),
-  mk(0.82, -0.57, 0.57, 0.82, 11.5, 7.2, 2.6, 2.5),
-];
-export const slotOf = (s: number) => SLOTS[((s % SLOTS.length) + SLOTS.length) % SLOTS.length];
-
-/** Hatchet ganglion position for a run slot and step index 0..2. */
-export function gangPos(slot: number, step: number, out: THREE.Vector3) {
-  const S = slotOf(slot);
-  out.copy(S.dir).multiplyScalar(S.gangR).addScaledVector(S.tan, (step - 1) * S.spread);
-  out.z = -0.6;
-  return out;
-}
-/** Where an agent of type `type` lives in a run's pathway (scouts handled in somaTarget). */
-export function anchorPos(slot: number, type: AgentType, out: THREE.Vector3) {
-  const S = slotOf(slot);
-  out.copy(S.dir).multiplyScalar(S.somaR);
-  if (type === "planner") out.addScaledVector(S.tan, -S.spread * 0.9).addScaledVector(S.dir, 0.4), (out.z = 0.5);
-  else if (type === "writer") out.addScaledVector(S.tan, S.spread * 0.9).addScaledVector(S.dir, 0.4), (out.z = 0.5);
-  return out;
-}
-
-/** Target soma position for an instance (scouts fan out from the researcher across screen + depth). */
-const JIT = new THREE.Vector3();
-/** Offset along the lane tangent for the k-th expanded run sharing a lane (LOD; 0 when not grouped). */
-export const RANK_GAP = 3.8;
-export function rankOffset(runId: string) {
-  return alt(laneRank(runId)) * RANK_GAP;
-}
-export function somaTarget(inst: Instance, out: THREE.Vector3) {
-  const run = world.runs.get(inst.run);
-  const slot = run ? run.slot : 0;
-  const S = slotOf(slot);
-  anchorPos(slot, inst.type, out);
-  const ro = rankOffset(inst.run);
-  if (ro) out.addScaledVector(S.tan, ro);
-  if (isScout(inst.type)) {
-    let n = 0;
-    let k = 0;
-    for (const o of world.instances.values()) {
-      if (o.run !== inst.run || !isScout(o.type)) continue;
-      n++;
-      if (o.index < inst.index) k++;
-    }
-    const tilt = (hash01(inst.run, 1) - 0.5) * 0.9; // each run fans out at its own angle
-    const th = (n <= 1 ? 0 : (-1 + (2 * k) / (n - 1)) * 1.1) + tilt;
-    const len = S.fanLen * (0.85 + 0.35 * hash01(inst.id, 2));
-    out.addScaledVector(S.dir, Math.cos(th) * len + 0.4).addScaledVector(S.fan, Math.sin(th) * len);
-  } else {
-    let dup = 0; // same-role agents in one run would otherwise stack on the same anchor
-    for (const o of world.instances.values()) if (o.run === inst.run && o.type === inst.type && o.index < inst.index) dup++;
-    if (dup) out.addScaledVector(S.fan, (dup % 2 ? 1 : -1) * Math.ceil(dup / 2) * 1.6);
-  }
-  // small per-agent jitter so nothing lands on the exact same coordinates twice
-  return out.add(JIT.set(hash01(inst.id, 3) - 0.5, hash01(inst.id, 4) - 0.5, hash01(inst.id, 5) - 0.5).multiplyScalar(0.9));
-}
-
-/** Live soma positions by instance id (stage space), written by each Soma every frame. */
-export const somaPos = new Map<string, THREE.Vector3>();
-
-// MCP servers sit on an outer ring (diagonals first); their backends fan out beyond them.
-const SAT_SPOTS: [number, number, number][] = [
-  [-11.8, 7.0, -2],
-  [11.8, 7.0, -2],
-  [-11.8, -5.8, -2],
-  [11.8, -5.8, -2],
-  [0, -9.0, -2.5],
-  [0, 9.6, -3],
-  [-14, 6.5, -4],
-  [14, -6.5, -4],
-];
-export function satPos(slot: number, out: THREE.Vector3) {
-  const s = SAT_SPOTS[slot % SAT_SPOTS.length];
-  const ring = Math.floor(slot / SAT_SPOTS.length);
-  return out.set(s[0] * (1 + ring * 0.15), s[1] * (1 + ring * 0.15), s[2] - ring * 3);
-}
-/** Backend k of n for a server: fanned outward/sideways from the server. */
-export function backendPos(slot: number, k: number, n: number, out: THREE.Vector3) {
-  satPos(slot, out);
-  if (Math.abs(out.x) < 1) {
-    out.x += (k - (n - 1) / 2) * 3.4;
-    out.y += Math.sign(out.y || 1) * 1.0;
-  } else {
-    out.x += Math.sign(out.x) * 3.3;
-    out.y += (k - (n - 1) / 2) * 2.1;
-  }
-  out.z -= 0.4;
   return out;
 }
 

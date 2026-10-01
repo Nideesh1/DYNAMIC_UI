@@ -134,3 +134,20 @@
 .hud-lod button { all: unset; cursor: pointer; font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid rgba(148, 163, 255, 0.25); color: #c7d2fe; }
 .hud-lod button:hover { background: rgba(129, 140, 248, 0.2); color: #f8fafc; }
 @media (max-width: 1100px) { .hud-lod { top: auto; bottom: 96px; } }
+
+/* ── Compact HUD for small scenes (embeds like 600x400, phones): panels shrink so the scene stays visible ── */
+.scene-root { container: agscene / size; }
+@container agscene (max-width: 760px) {
+  .scene-root .hud-sub, .scene-root .hud-nav, .scene-root .hud-counts { display: none; }
+  .scene-root .hud-top { padding: 7px 11px; max-width: calc(100% - 32px); }
+  .scene-root .hud-title { font-size: 14px; }
+  .scene-root .hud-ticker { width: min(300px, calc(100% - 32px)); font-size: 10.5px; padding: 6px 9px; gap: 2px; }
+  .scene-root .hud-tick:nth-child(n + 4) { display: none; }
+  .scene-root .hud-agents { width: min(230px, 40%); max-height: 55%; font-size: 12px; padding: 7px 9px; }
+  .scene-root .hud-lod { top: auto; bottom: 64px; }
+}
+@container agscene (max-height: 520px) {
+  .scene-root .hud-tick:nth-child(n + 3) { display: none; }
+  .scene-root .hud-agents { max-height: 52%; }
+  .scene-root .hud-counts { display: none; }
+}
