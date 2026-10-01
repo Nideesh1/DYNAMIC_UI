@@ -25,7 +25,7 @@ Pick your path. Each one ends at **http://localhost:8100/neural** (no agents yet
 npx agentglow setup                  # once: hooks + traces into ~/.claude/settings.json (backed up), opens the 3D view
 claude                               # then just use Claude Code as usual
 ```
-The server auto-starts with every `claude` session; watch at http://localhost:8100/neural. Undo with `npx agentglow remove`.
+The server runs in the background (on macOS/Linux it also starts at login and restarts on crash; on Windows it starts with each `claude` session); watch at http://localhost:8100/neural. Undo with `npx agentglow remove`.
 uv and Python are fetched automatically on first run. Just trying it? `npx agentglow claude` runs one session with
 AgentGlow attached and installs nothing.
 Prefer asking Claude? Install the [agentglow skill](skills/agentglow) and say *"show my agents in 3D"*:

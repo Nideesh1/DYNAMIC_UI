@@ -14,6 +14,7 @@ import {
   startBackground, stopServer,
 } from "./lib/server.mjs";
 import { which } from "./lib/uv.mjs";
+import { hasAutostart, installAutostart, launchdLogPath, loginPath, removeAutostart, stopLoginItem } from "./lib/autostart.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const here = path.dirname(SELF);
@@ -30,6 +31,7 @@ const HELP = `agentglow ${VERSION}: watch Claude Code agents in 3D
   npx agentglow stop                  stop the background server
   npx agentglow remove                undo setup: remove the hooks and stop the server
   npx agentglow claude [-- <args>]    try it without installing: one claude session with AgentGlow
+
 
 More: npx agentglow start [--background] [--port N]   (serve = start in the foreground)
 Env:  AGENTGLOW_URL (remote server), AGENTGLOW_API_KEY (ingest key), AGENTGLOW_CACHE_DIR
@@ -57,6 +59,8 @@ function parseArgs(argv) {
     else if (a === "--no-open") o.open = false;
     else if (a === "--install") o.install = true;
     else if (a === "--uninstall") o.uninstall = true;
+    else if (a === "--remove") o.remove = true;
+    else if (a === "--no-autostart") o.autostart = false;
     else if (a === "--background" || a === "-b") o.background = true;
     else if (a === "--quiet" || a === "-q") o.quiet = true;
     else if (a === "-h" || a === "--help") o.help = true;
@@ -154,9 +158,19 @@ async function cmdSetup(o) {
   if (remote) {
     if ((await probe(remote, 4000)) !== "agentglow") console.error(`agentglow: warning: ${remote}/live/health did not answer like AgentGlow.`);
   } else {
+    // Default: the OS owns the server (login item: launchd / systemd --user / Task Scheduler), so it is already
+    // running for every claude session, survives reboots and restarts on crash. The SessionStart hook installed
+    // above stays as a cheap safety net. If the login item can't be installed, the hook alone covers it.
+    // Login item by default on macOS/Linux only; Windows keeps per-session auto-start via the SessionStart hook
+    // (explicit `npx agentglow autostart` still registers one there).
+    const wantLogin = o.autostart === true || (o.autostart !== false && process.platform !== "win32");
+    const login = wantLogin ? installLoginItem(port) : null;
     try {
-      const s = await startLocal(port);
-      console.log(s.started ? `Started the AgentGlow server on port ${port}.` : `AgentGlow server already running on port ${port}.`);
+      if (login?.startsNow && (await waitHealthy(port, 120000))) console.log(`AgentGlow server is running on port ${port} (managed by ${login.method}).`);
+      else {
+        const s2 = await startLocal(port);
+        console.log(s2.started ? `Started the AgentGlow server on port ${port}.` : `AgentGlow server already running on port ${port}.`);
+      }
     } catch (e) {
       console.error(`agentglow: ${e.message}`);
       console.error(`The hooks are installed; start the server with: npx agentglow start --background${portFlag(port)}`);
@@ -166,6 +180,50 @@ async function cmdSetup(o) {
   if (o.open) openBrowser(view);
   console.log(`\nDone. Just run \`claude\` as usual. View: ${view}  Undo: npx agentglow remove`);
   return 0;
+}
+
+/** Register the server as a login item (launchd / systemd --user / Task Scheduler or Startup folder).
+ * Returns { method, path, startsNow } or null if it could not be installed (setup then relies on the hook). */
+function installLoginItem(port) {
+  const script = installCliCopy({ srcCliDir: here, version: VERSION });
+  const node = nodeForHook() || process.execPath;
+  const command = startHookCommand({ port, version: VERSION, node, script, cacheDir: process.env.AGENTGLOW_CACHE_DIR });
+  // macOS/Linux: the supervisor runs the server in the foreground (argv, no shell); Windows keeps the shell command
+  const argv = [node, script, "start", "--port", String(port)];
+  const env = { PATH: loginPath({ node }), HOME: os.homedir() };
+  for (const k of ["AGENTGLOW_CACHE_DIR", "AGENTGLOW_API_KEY", "AGENTGLOW_INGEST_KEY", "AGENTGLOW_SECRET", "AGENTGLOW_PY_SPEC"]) {
+    if (process.env[k]) env[k] = process.env[k];
+  }
+  try {
+    const r = installAutostart({ command, argv, env });
+    const logs = process.platform === "darwin" ? launchdLogPath() : process.platform === "win32" ? null : "journalctl --user -u agentglow";
+    console.log(`Server starts at login via ${r.method}${logs ? ` (logs: ${logs})` : ""}.`);
+    return { ...r, startsNow: process.platform !== "win32" };
+  } catch (e) {
+    console.error(`agentglow: note: could not register a login item (${e.message}); the server will start with each claude session instead.`);
+    return null;
+  }
+}
+
+async function waitHealthy(port, ms) {
+  const until = Date.now() + ms;
+  let said = false;
+  while (Date.now() < until) {
+    if ((await probe(localBase(port), 1500)) === "agentglow") return true;
+    if (!said && Date.now() > until - ms + 4000) { console.log("First start downloads Python + the server (~30-60s) ..."); said = true; }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return false;
+}
+
+/** `autostart` = setup (which now includes the login item); `autostart --remove` = drop just the login item. */
+async function cmdAutostart(o) {
+  if (o.remove) {
+    removeAutostart();
+    console.log(`Removed the AgentGlow login item. The hooks stay; the server now starts with each claude session.`);
+    return 0;
+  }
+  return cmdSetup({ ...o, autostart: true });
 }
 
 async function cmdRemove(o) {
@@ -178,10 +236,16 @@ async function cmdRemove(o) {
     if (st?.backup) console.log(`  Settings from before setup:     ${st.backup}  (restore: cp "${st.backup}" "${file}")`);
   } else console.log(`No AgentGlow entries in ${file}.`);
   const port = o.portSet ? o.port : st?.port || o.port;
-  if (!remoteUrl() && (st?.startHook || !st)) {
+  const login = hasAutostart();
+  if (!remoteUrl() && !login && (st?.startHook || !st)) {
     const s = await stopServer(port);
     if (s === "stopped") console.log(`Stopped the AgentGlow server on port ${port}.`);
     else if (s === "not-ours") console.log(`An AgentGlow server on port ${port} was not started by this CLI; left it running.`);
+  }
+  if (login) {  // `remove` undoes everything, incl. the login item (it points at the CLI copy removed below)
+    removeAutostart();
+    await stopServer(port);  // in case a session-started server is also running
+    console.log(`Removed the AgentGlow login item and stopped its server.`);
   }
   try { removeCliCopies(); } catch { /* ignore */ }
   return 0;
@@ -254,6 +318,7 @@ async function cmdStatus(o) {
   console.log(`server:  ${health?.ok ? `healthy at ${base} (server ${health.version || "?"})` : starting ? `starting on port ${port}` : `not running at ${base}`}`);
   if (!remote) console.log(`port:    ${port}${pid ? `  pid ${pid} (started by this CLI)` : ""}`);
   console.log(`hooks:   ${installed ? `installed in ${file}${startHook ? " (server auto-starts with claude)" : ""}` : "not installed (run: npx agentglow setup)"}`);
+  if (hasAutostart()) console.log(`login:   server starts at login and restarts on crash`);
   if (health?.ok) console.log(`view:    ${base}/neural`);
   return 0;
 }
@@ -314,6 +379,8 @@ async function main() {
   switch (o.cmd) {
     case "setup":
       return cmdSetup(o);
+    case "autostart":
+      return cmdAutostart(o);
     case "remove":
     case "uninstall":
       return cmdRemove(o);
@@ -328,6 +395,10 @@ async function main() {
     case "stop": {
       const port = effectivePort(o);
       const r = await stopServer(port);
+      if (r === "not-ours" && hasAutostart() && stopLoginItem()) {
+        console.log(`Stopped the AgentGlow server on port ${port} (it starts again at next login or with the next claude session).`);
+        return 0;
+      }
       if (r === "stopped") console.log(`Stopped the AgentGlow server on port ${port}.`);
       else if (r === "not-ours") console.log(`The AgentGlow server on port ${port} was not started by this CLI; stop it where it runs.`);
       else console.log(`No AgentGlow server on port ${port}.`);

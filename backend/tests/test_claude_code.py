@@ -101,13 +101,18 @@ def test_full_session_maps_to_spawns_tools_and_exits():
 
 
 def test_each_prompt_is_its_own_run():
+    """Multiple prompts in same session share the same run (one persistent claude ball).
+    Run completes only at SessionEnd."""
     seq = [hook("UserPromptSubmit", user_message="one"), hook("Stop", last_assistant_message="a"),
-           hook("UserPromptSubmit", prompt="two"), hook("Stop")]
+           hook("UserPromptSubmit", prompt="two"), hook("Stop", last_assistant_message="b"),
+           hook("SessionEnd")]
     evs, _ = replay(seq)
     runs = [(e["run_id"], e["status"], e["topic"]) for e in evs if e["type"] == "run"]
-    assert [(r, st) for r, st, _ in runs] == [(f"{SID}:1", "started"), (f"{SID}:1", "completed"),
-                                             (f"{SID}:2", "started"), (f"{SID}:2", "completed")]
+    # Both prompts share the same run_id; run completes only at SessionEnd
+    assert [(r, st) for r, st, _ in runs] == [(f"{SID}:1", "started"), (f"{SID}:1", "completed")]
     assert all(topic.startswith(LABEL + " · ") for *_, topic in runs)
+    spawns = [e["agent"] for e in evs if e["type"] == "spawn"]
+    assert spawns == ["claude"]  # only ONE claude spawn, not two
 
 
 def test_out_of_order_async_hooks_and_unknown_events():
@@ -121,6 +126,7 @@ def test_out_of_order_async_hooks_and_unknown_events():
         tool("PostToolUse", "Agent", "toolu_a", subagent_type="Explore"),
         hook("Stop"),
         tool("PostToolUse", "Read", "toolu_late"),  # late event after Stop: dropped
+        hook("SessionEnd"),
     ]
     evs, c = replay(seq)
     assert [e["agent"] for e in evs if e["type"] == "spawn"] == ["claude", "Explore"]
@@ -149,7 +155,8 @@ def test_sessions_are_bounded():
 
 
 def test_background_subagents_keep_the_run_and_main_agent_alive():
-    """Agents launched with run_in_background: Stop comes first, results arrive as <task-notification> prompts."""
+    """Agents launched with run_in_background: Stop comes first, results arrive as <task-notification> prompts.
+    The same run spans multiple prompts; completes only at SessionEnd."""
     bg = ("bg-1", "Explore")
     seq = [
         hook("UserPromptSubmit", user_message="fan out"),
@@ -162,6 +169,7 @@ def test_background_subagents_keep_the_run_and_main_agent_alive():
         hook("SubagentStop", agent_id=bg[0], agent_type=bg[1], last_assistant_message="found 3"),
         hook("UserPromptSubmit", user_message="<task-notification> <task-id>a1</task-id> <summary>Agent done</summary>"),
         hook("Stop", last_assistant_message="All done: 3"),
+        hook("SessionEnd"),
     ]
     evs, c = replay(seq)
     assert [e["agent"] for e in evs if e["type"] == "spawn"] == ["claude", "Explore"]
@@ -173,16 +181,20 @@ def test_background_subagents_keep_the_run_and_main_agent_alive():
 
 
 def test_deferred_turn_closes_after_grace_without_notification():
-    from agentglow.claude_code import GRACE_MS
-
+    """Background subagent runs but no wrap-up notification: main ball stays open until SessionEnd or idle."""
     hub, cc = Hub(), ClaudeCodeAdapter()
-    for i, p in enumerate([hook("UserPromptSubmit", user_message="go"),
-                           tool("PreToolUse", "Agent", "a", subagent_type="Explore", description="d"),
-                           hook("SubagentStart", agent_id="b", agent_type="Explore"), tool("PostToolUse", "Agent", "a"),
-                           hook("Stop", last_assistant_message="waiting"), hook("SubagentStop", agent_id="b")]):
-        hub.ingest_live(cc.handle(p, i))
-    assert hub.mapper.runs  # main still open, waiting for the wrap-up turn
-    hub.ingest_live(cc.tick(5 + GRACE_MS))
+    t = 0
+    for p in [hook("UserPromptSubmit", user_message="go"),
+              tool("PreToolUse", "Agent", "a", subagent_type="Explore", description="d"),
+              hook("SubagentStart", agent_id="b", agent_type="Explore"), tool("PostToolUse", "Agent", "a"),
+              hook("Stop", last_assistant_message="waiting"), hook("SubagentStop", agent_id="b")]:
+        hub.ingest_live(cc.handle(p, t))
+        t += 1
+    # Main ball is still open; stop was called but main wasn't closed, only LLM ended
+    assert hub.mapper.runs
+    # Send SessionEnd to close the run
+    hub.ingest_live(cc.handle(hook("SessionEnd"), t))
+    # Now the run should be completed
     assert not hub.mapper.runs and [e["text"] for e in hub.buffer if e["type"] == "final"] == ["waiting"]
 
 

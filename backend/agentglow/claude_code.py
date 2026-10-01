@@ -50,7 +50,7 @@ PREVIEW = 600
 TRACE_WAIT_MS = 15_000  # hooks+traces: an agent's exit waits this long for its trace spans (token counts)
 MAX_TRACES = 64
 HOLD_MS = 1000  # a SubagentStart that beat its Agent PreToolUse (async hooks) waits this long for it
-GRACE_MS = 8000  # main agent outlives its Stop while background subagents run, then this long for their wrap-up turn
+MAX_ORPHANS = 16  # cap on orphaned agents per session: a lost hook can't leak spans forever
 SOURCE_RE = re.compile(r"^agent\.(?:builtin|custom|plugin)\.(.+)$")
 
 
@@ -110,7 +110,6 @@ class _Turn:
     subs: dict = field(default_factory=dict)  # agent_id -> _Agent
     tasks: list = field(default_factory=list)  # [tool_use_id, subagent_type, task span, claimed]
     stopped: bool = False
-    deferred: bool = False  # Stop seen but background subagents still run: main stays on screen, waiting
     final: str = ""
     start: int = 0
     traced: bool = False  # session has OTel traces: mute 0-token hook pulses
@@ -135,6 +134,11 @@ class _Session:
     stopping: dict = field(default_factory=dict)  # Agent tool_use_id -> (_Agent, exit attrs, deadline)
     traced_agents: OrderedDict = field(default_factory=OrderedDict)  # Agent tool_use_ids whose trace span came
     ending: int | None = None  # SessionEnd seen: close once traces are in, or at this deadline
+    tool_owner: dict = field(default_factory=dict)  # tool_use_id -> _Agent, regardless of whose turn is current:
+    # routes a late PostToolUse (e.g. a backgrounded Bash call) back to the agent that started it, even if that
+    # agent's turn has since been superseded by a newer one continuing the same run (see _maybe_close_orphan)
+    orphans: list = field(default_factory=list)  # _Agent mains left open/superseded, awaiting _maybe_close_orphan;
+    # swept on session end/idle so an abandoned background item (hook never arrives) can't leak forever
 
 
 @dataclass
@@ -196,10 +200,16 @@ class ClaudeCodeAdapter:
                 if now >= deadline:
                     self._finish_sub(s, tid, now, out)
             t = s.turn
-            if t and t.deferred and not t.subs and now - s.last >= GRACE_MS:
-                self._stop_turn(s, t, t.final, now, out, force=True)
+            # If OTel traces are on and we're waiting for token spans, close the turn when timeout expires
             if t and t.wait_until is not None and now >= t.wait_until:
-                self._stop_turn(s, t, t.final, now, out, force=True)
+                self._stop_turn(s, t, t.final, now, out, status="ok")
+                t.wait_until = None
+            # Safety net: don't let orphans pile up (a lost hook can't leak forever)
+            while len(s.orphans) > MAX_ORPHANS:
+                ag = s.orphans.pop(0)
+                if not ag.closed:
+                    extra = {"agentglow.final": ag.turn.final[:2000], "agentglow.output_text": ag.turn.final[:2000]} if ag.turn.final else {}
+                    self._close_agent(ag, now, out, extra, "unset")
             if now - s.last >= self.idle_ms or (s.ending is not None and now >= s.ending):
                 self._close_session(s, now, out)
                 self.sessions.pop(sid, None)
@@ -214,17 +224,18 @@ class ClaudeCodeAdapter:
         s.model = str(p.get("model") or s.model)
 
     def _on_UserPromptSubmit(self, s: _Session, p: dict, now: int, out: list) -> None:
+        """Handle a new user prompt: resume the same turn if it's stopped and a notification arrived,
+        otherwise open a new turn (which reuses the existing main agent if it's still live)."""
         notify = p.get("agentglow_notification")  # scrub_hook keeps only this of a <task-notification> prompt
         t = s.turn
-        if t and t.deferred and notify is not None:  # a background subagent reported back: same run continues
-            t.stopped = t.deferred = False
-            assert t.main is not None
+
+        # Fast path: a background subagent just reported back; resume the same turn
+        if t and t.stopped and notify is not None and t.main is not None and not t.main.closed:
+            t.stopped = False
             self._start_llm(t.main, now, out)
             return
-        if t and t.deferred:
-            self._stop_turn(s, t, t.final, now, out, force=True)
-        elif t and not t.stopped:  # previous turn never got its Stop (interrupted)
-            self._stop_turn(s, t, "", now, out, status="error", force=True)
+
+        # Otherwise, open a turn (which reuses main if it's live, or creates a new one)
         self._open_turn(s, "", now, out)
 
     def _on_PreToolUse(self, s: _Session, p: dict, now: int, out: list) -> None:
@@ -250,10 +261,12 @@ class ClaudeCodeAdapter:
                 if t[0] is None and t[1] == sub:
                     t[0] = tid
                     ag.tools[tid] = t[2]
+                    s.tool_owner[tid] = ag
                     return
             ag.turn.tasks.append([tid, sub, span, False])
             out.append({"kind": "start", "span": span})
             ag.tools[tid] = span
+            s.tool_owner[tid] = ag
             for aid, (hp, meta, ts) in list(s.held.items()):  # its SubagentStart came first: spawn it now
                 if meta.get("toolUseId") == tid or (not meta.get("toolUseId") and str(hp.get("agent_type")) == sub):
                     del s.held[aid]
@@ -261,6 +274,7 @@ class ClaudeCodeAdapter:
                     break
             if s.done_ids.pop(tid, None) is not None:
                 self._end_tool(ag, tid, now, out)
+                s.tool_owner.pop(tid, None)
             return
         else:
             attrs = {"openinference.span.kind": "TOOL", "tool.name": name, "input.value": _preview(tin)}
@@ -272,12 +286,14 @@ class ClaudeCodeAdapter:
             span = self._span(ag.turn, ag.span, name, now, attrs)
         out.append({"kind": "start", "span": span})
         ag.tools[tid] = span
+        s.tool_owner[tid] = ag
         if s.done_ids.pop(tid, None) is not None:  # its PostToolUse already came (async reorder)
             self._end_tool(ag, tid, now, out)
+            s.tool_owner.pop(tid, None)
 
     def _on_PostToolUse(self, s: _Session, p: dict, now: int, out: list, status: str = "ok") -> None:
         tid = str(p.get("tool_use_id") or "")
-        ag = self._agent_for(s, p, now, out, open_turn=False)
+        ag = s.tool_owner.pop(tid, None) or self._agent_for(s, p, now, out, open_turn=False)
         if ag is None or tid not in ag.tools:
             if tid:
                 s.done_ids[tid] = None
@@ -290,6 +306,7 @@ class ClaudeCodeAdapter:
         self._end_tool(ag, tid, now, out, status, extra)
         if not ag.tools and not ag.closed and not (ag is ag.turn.main and ag.turn.stopped):
             self._start_llm(ag, now, out)
+        self._maybe_close_orphan(s, ag, now, out)
 
     def _on_PostToolUseFailure(self, s: _Session, p: dict, now: int, out: list) -> None:
         self._on_PostToolUse(s, p, now, out, status="error")
@@ -353,16 +370,24 @@ class ClaudeCodeAdapter:
             s.stopping[ag.tool_use_id] = (ag, extra, now + TRACE_WAIT_MS)
             return
         self._close_agent(ag, now, out, extra)
+        self._maybe_close_orphan(s, ag.turn.main, now, out)
 
     def _on_Stop(self, s: _Session, p: dict, now: int, out: list) -> None:
+        """Stop the current turn: end thinking, close tools and stand-in tasks. Never close t.main itself."""
         t = s.turn
         if t and not t.stopped:
             text = str(p.get("last_assistant_message") or "").strip()
-            if s.traces and not t.subs and t.main is not None:  # wait for the turn's last llm span (tokens)
-                t.stopped, t.final, t.wait_until = True, text, now + TRACE_WAIT_MS
-                self._end_llm(t.main, now, out)
-                return
-            self._stop_turn(s, t, text, now, out, force=False)
+            t.stopped = True
+            t.final = text or t.final
+            self._end_llm(t.main, now, out) if t.main else None
+            # If OTel traces are on and this turn's main is waiting for token spans, set a deadline
+            if s.traces and t.main is not None and not t.subs and not t.main.tools:
+                t.wait_until = now + TRACE_WAIT_MS
+            # Close stand-in task spans (never got a real PreToolUse)
+            for t_span in t.tasks:
+                if t_span[0] is None:
+                    t_span[0] = "standin"
+                    self._end(t_span[2], now, out, "unset")
 
     def _on_SessionEnd(self, s: _Session, p: dict, now: int, out: list) -> None:
         if s.traces and self._pending_traces(s):  # trace spans still on the way: tick() / traces() close it
@@ -387,10 +412,49 @@ class ClaudeCodeAdapter:
                                             "attributes": {**span["attributes"], **(extra or {})}}})
 
     def _open_turn(self, s: _Session, prompt: str, now: int, out: list) -> _Turn:
-        if s.turn and s.turn.wait_until is not None:  # previous turn still waiting for its traces
-            self._stop_turn(s, s.turn, s.turn.final, now, out, force=True)
+        """Open/reopen a turn, reusing the previous turn's main agent if it's still open and not already closed.
+        Only create a brand new agent span if no live main exists (first turn or previous was closed)."""
+        prev = s.turn
+
+        # Finalize the previous turn defensively if needed (mark stopped, close LLM span, close stand-in tasks)
+        if prev is not None and not prev.stopped:
+            prev.stopped = True
+            self._end_llm(prev.main, now, out) if prev.main else None
+            for t in prev.tasks:
+                if t[0] is None:  # stand-in task span (never got a real PreToolUse)
+                    t[0] = "standin"
+                    self._end(t[2], now, out, "unset")
+
+        # Determine the source: reuse prev.main if it exists and is not closed, else try orphans, else None
+        source = None
+        if prev is not None and prev.main is not None and not prev.main.closed:
+            source = prev.main
+        elif s.orphans:
+            source = s.orphans[-1]
+
+        # If prev.main exists but is not our source and not already closed/in orphans, move it to orphans
+        if prev is not None and prev.main is not None and prev.main is not source and not prev.main.closed:
+            if prev.main not in s.orphans:
+                s.orphans.append(prev.main)
+
+        # Reuse source if available (same agent, same run_id, no new span emitted)
+        if source is not None:
+            if source in s.orphans:
+                s.orphans.remove(source)
+            s.n += 1
+            run_id = source.turn.run_id
+            trace_id = source.turn.trace_id
+            turn = s.turn = _Turn(run_id, trace_id, main=source, subs=source.turn.subs, tasks=source.turn.tasks, start=now, traced=s.traces)
+            source.turn = turn
+            s.turns = (s.turns + [turn])[-8:]
+            self._start_llm(source, now, out)
+            return turn
+
+        # No live source: create a brand new main agent span (only place a "claude" spawn should originate)
         s.n += 1
-        turn = s.turn = _Turn(f"{s.id}:{s.n}", _hex(16), start=now, traced=s.traces)
+        run_id = f"{s.id}:{s.n}"
+        trace_id = _hex(16)
+        turn = s.turn = _Turn(run_id, trace_id, start=now, traced=s.traces)
         s.turns = (s.turns + [turn])[-8:]
         topic = run_label(s.cwd, s.id, now)
         span = self._span(turn, None, "claude", now, {
@@ -433,42 +497,65 @@ class ClaudeCodeAdapter:
         ag.closed = True
         self._end(ag.span, now, out, status, extra)
 
-    def _stop_turn(self, s: _Session, turn: _Turn, text: str, now: int, out: list, status: str = "ok",
-                   force: bool = True) -> None:
-        """End the main agent's turn: its thinking span, tools still open (denied/interrupted) and stand-in task spans.
-        With background subagents still running (and not `force`), the main agent stays open (deferred) until they
-        report back: their `<task-notification>` prompt resumes this same run; tick() closes it after GRACE_MS."""
-        turn.stopped, turn.wait_until = True, None
-        if not force and turn.subs and turn.main is not None:
-            turn.deferred, turn.final = True, text or turn.final
-            self._end_llm(turn.main, now, out)
+    def _maybe_close_orphan(self, s: _Session, ag: _Agent | None, now: int, out: list) -> None:
+        """A tool or subagent just finished: if it belonged to a turn that was left open/orphaned (superseded by a
+        newer turn continuing the same run, see _on_UserPromptSubmit) and nothing else is pending for it, close
+        its main agent for real now - this is what finally ends the run once the last background item lands."""
+        if ag is None:
             return
-        turn.deferred = False
-        for tid, (ag, _, _) in list(s.stopping.items()):
-            if ag.turn is turn:
-                self._finish_sub(s, tid, now, out)
+        t = ag.turn
+        if ag is not t.main or t is s.turn or ag.closed or t.main.tools or t.subs:
+            return
+        extra = {"agentglow.final": t.final[:2000], "agentglow.output_text": t.final[:2000]} if t.final else {}
+        self._close_agent(ag, now, out, extra, "ok")
+        if ag in s.orphans:
+            s.orphans.remove(ag)
+
+    def _stop_turn(self, s: _Session, turn: _Turn, text: str, now: int, out: list, status: str = "ok") -> None:
+        """Really close a turn's main agent for good: end its thinking span, close tools and stand-in tasks.
+        Used only by _close_session and the trace-wait-timeout path."""
+        turn.stopped = True
+        turn.wait_until = None  # clear any trace-wait deadline
+        # Close stand-in task spans
         for t in turn.tasks:
             if t[0] is None:
                 t[0] = "standin"
                 self._end(t[2], now, out, "unset")
-        if turn.main is not None:
+        # Close any subagents still waiting in s.stopping
+        for tid, (ag, _, _) in list(s.stopping.items()):
+            if ag.turn is turn:
+                self._finish_sub(s, tid, now, out)
+        # Really close the main agent
+        if turn.main is not None and not turn.main.closed:
             extra = {"agentglow.final": text[:2000], "agentglow.output_text": text[:2000]} if text else {}
             self._close_agent(turn.main, now, out, extra, status)
+            if turn.main in s.orphans:
+                s.orphans.remove(turn.main)
 
     def _finish_sub(self, s: _Session, tool_use_id: str, now: int, out: list) -> None:
         item = s.stopping.pop(tool_use_id, None)
         if item is not None:
             self._close_agent(item[0], now, out, item[1])
+            self._maybe_close_orphan(s, item[0].turn.main, now, out)
 
     def _close_session(self, s: _Session, now: int, out: list) -> None:
+        # Close any subagents still waiting in s.stopping
         for tid in list(s.stopping):
             self._finish_sub(s, tid, now, out)
+        # Close any active subagents
         for ag in list(s.agents.values()):
             self._close_agent(ag, now, out, {}, "unset")
         s.agents.clear()
-        if s.turn and (s.turn.deferred or not s.turn.stopped):
-            self._stop_turn(s, s.turn, s.turn.final, now, out, status="ok" if s.turn.deferred else "unset")
+        # Close the current turn's main if it exists and not yet closed
+        if s.turn and s.turn.main is not None and not s.turn.main.closed:
+            self._stop_turn(s, s.turn, s.turn.final, now, out, status="ok")
         s.turn = None
+        # Close any orphaned turns' mains (earlier turns left open for background work)
+        for ag in list(s.orphans):
+            if not ag.closed:
+                extra = {"agentglow.final": ag.turn.final[:2000], "agentglow.output_text": ag.turn.final[:2000]} if ag.turn.final else {}
+                self._close_agent(ag, now, out, extra, "unset")
+        s.orphans.clear()
 
     # ------------------------------------------------------------------ OTel traces (claude_code.* spans)
     def traces(self, spans: list[dict], now: int) -> list[dict]:
@@ -547,7 +634,7 @@ class ClaudeCodeAdapter:
                 s.traced_agents.popitem(last=False)
             self._finish_sub(s, tid, now, out)
         elif kind == "interaction" and turn is not None and turn.wait_until is not None:
-            self._stop_turn(s, turn, turn.final, now, out, force=True)
+            self._stop_turn(s, turn, turn.final, now, out)
         if s.ending is not None and not self._pending_traces(s):
             self._close_session(s, now, out)
             self.sessions.pop(s.id, None)
