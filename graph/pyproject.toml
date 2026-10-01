@@ -1,0 +1,11 @@
+[project]
+name = "cb6-graph"
+version = "0.1.0"
+description = "Manhattan CB6 knowledge graph in FalkorDB via graphiti-core"
+requires-python = ">=3.11"
+dependencies = [
+    "graphiti-core[falkordb,google-genai]==0.30.2",
+    "rapidfuzz",
+    "python-dotenv",
+    "fastembed>=0.8.1",
+]

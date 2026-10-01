@@ -1,0 +1,23 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# scraped / generated data (regenerate with the scripts)
+*/data/
+corpus/
+graph/cache/
+screens/*.yml
+
+# build + deps
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+
+# logs / tooling
+*.log
+.playwright-mcp/
+.DS_Store
+graph/*.log

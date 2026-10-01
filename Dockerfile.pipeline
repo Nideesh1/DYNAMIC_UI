@@ -1,0 +1,13 @@
+# Data pipeline image: scrapers + File Search upload + graphiti/FalkorDB graph build.
+# Runs automatically before the app in `docker compose up` (see pipeline.sh).
+FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONUNBUFFERED=1 GRAPHITI_TELEMETRY_ENABLED=false
+WORKDIR /app
+COPY graph/pyproject.toml graph/uv.lock /app/graph/
+RUN cd /app/graph && uv sync --frozen --no-dev --no-install-project
+COPY graph/*.py /app/graph/
+COPY blockparty/scrape.py /app/blockparty/scrape.py
+COPY cb6/scrape.py /app/cb6/scrape.py
+COPY build_docs.py upload_filesearch.py pipeline.sh /app/
+CMD ["/app/pipeline.sh"]

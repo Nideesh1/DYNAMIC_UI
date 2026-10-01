@@ -1,0 +1,12 @@
+.env
+**/.venv
+**/node_modules
+**/dist
+**/__pycache__
+*/data
+corpus
+graph/cache
+screens
+*.log
+.git
+.playwright-mcp

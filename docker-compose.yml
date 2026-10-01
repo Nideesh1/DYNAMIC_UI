@@ -1,0 +1,46 @@
+services:
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      - "6379:6379"   # graph (redis protocol)
+      - "3000:3000"   # FalkorDB browser UI
+    volumes:
+      - falkordb_data:/var/lib/falkordb/data
+    restart: unless-stopped
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"   # UI at / and API at /api
+    env_file: .env
+    environment:
+      FALKOR_HOST: falkordb
+    volumes:          # scraped data + File Search store id (generate with the scripts in README)
+      - ./blockparty/data:/app/blockparty/data:ro
+      - ./cb6/data:/app/cb6/data:ro
+      - ./corpus:/app/corpus:ro
+    depends_on:
+      falkordb:
+        condition: service_started
+      pipeline:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  pipeline:         # scrape -> docs -> File Search -> graph; skips finished steps
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    env_file: .env
+    environment:
+      FALKOR_HOST: falkordb
+    volumes:
+      - ./blockparty/data:/app/blockparty/data
+      - ./cb6/data:/app/cb6/data
+      - ./corpus:/app/corpus
+      - ./graph/cache:/app/graph/cache
+    depends_on:
+      - falkordb
+
+volumes:
+  falkordb_data:
+    name: falkordb_data
