@@ -37,15 +37,15 @@ jobs:
           npm run build:app
           npm run build:lib
 
-      - name: Test + build Python package
-        working-directory: backend
+      - name: Test + build Python package (uv workspace at repo root → dist/)
         run: |
-          uv run pytest -q
-          uv build
-          python3 -c "import zipfile,glob; z=zipfile.ZipFile(glob.glob('dist/*.whl')[0]); n=[f for f in z.namelist() if 'static/index.html' in f]; assert n, 'UI missing from wheel'; print('wheel ok:', n)"
+          uv sync --all-packages --frozen
+          uv run --package agentglow pytest backend/tests -q
+          uv build --package agentglow --out-dir dist
+          uv run --no-project python -c "import zipfile,glob; z=zipfile.ZipFile(glob.glob('dist/*.whl')[0]); n=[f for f in z.namelist() if 'static/index.html' in f]; assert n, 'UI missing from wheel'; print('wheel ok:', n)"
 
       - uses: actions/upload-artifact@v4
-        with: { name: python-dist, path: backend/dist/ }
+        with: { name: python-dist, path: dist/ }
       - uses: actions/upload-artifact@v4
         with:
           name: npm-package

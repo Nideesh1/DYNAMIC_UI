@@ -26,8 +26,9 @@ jobs:
           npm ci
           npm run build:app
           npm run build:lib
-      - name: Backend
-        working-directory: backend
+      - name: Python (uv workspace at repo root)
         run: |
-          uv run pytest -q
-          uv build
+          uv sync --all-packages --frozen
+          uv run --package agentglow pytest backend/tests -q
+          uv run --package agentglow-example-deepagents-hatchet --directory examples/deepagents-hatchet python -c "import app.tools, app.demo_graph"
+          uv build --package agentglow --out-dir dist

@@ -1,0 +1,10 @@
+# uv workspace root (virtual: not a package itself). One lockfile for everything:
+#   uv sync --all-packages                     # agentglow + the examples into ./.venv
+#   uv run agentglow serve                     # the server
+#   uv run --package agentglow pytest backend/tests -q
+#   uv build --package agentglow               # sdist + wheel → ./dist
+[tool.uv.workspace]
+members = ["backend", "examples/deepagents-hatchet"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
