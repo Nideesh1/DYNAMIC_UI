@@ -9,7 +9,7 @@ import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { KIND_COLOR, world } from "../shared/world";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
-import { SPHERE_GEO, TYPE_C, addScaled, glowSpriteMaterial, reduced, somaPos } from "./fx";
+import { ArrowPool, SPHERE_GEO, TYPE_C, addScaled, glowSpriteMaterial, reduced, somaPos } from "./fx";
 
 export const ORB_R = 3.3;
 const MAX_NODES = 200;
@@ -178,6 +178,7 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
     [],
   );
   const cache = useMemo(() => new Map<string, number>(), []);
+  const arrows = useMemo(() => new ArrowPool(MAX_BEAMS), []);
   const tmp = useMemo(() => ({ v: new THREE.Vector3(), v2: new THREE.Vector3(), mid: new THREE.Vector3(), c: new THREE.Color(), c2: new THREE.Color() }), []);
   const idx = (name: string) => {
     let i = cache.get(name);
@@ -199,6 +200,7 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
     const ripC = mats.orb.uniforms.uRipC.value as THREE.Vector3[];
     const ripA = mats.orb.uniforms.uRipA.value as number[];
     let b = 0;
+    arrows.begin();
     let rp = 0;
     for (const f of world.flares) {
       const i = idx(f.node);
@@ -217,14 +219,16 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
         ripA[rp] = age / 1.8;
         rp++;
       }
-      // soft beam soma → node with a slow packet (read: node→agent, write: agent→node)
+      // beam: curve runs agent (t=0) → graph node (t=1). Data flow:
+      //   read  = data comes OUT of the graph: pulse node → agent, arrow at the agent (agent color)
+      //   write = agent → FalkorDB: solid white beam, pulse agent → node, arrow at the node
       const sp = somaPos.get(f.instance);
       if (sp && age < 2.2 && b < MAX_BEAMS) {
         v.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
         mid.copy(sp).add(v).multiplyScalar(0.5);
         mid.z += 1.0;
         const fade = Math.min(1, age / 0.3) * (1 - age / 2.2) ** 1.5;
-        const head = isW ? Math.min(1, age * 1.1) : 1 - Math.min(1, age * 1.1);
+        const head = isW ? Math.min(1, age * 0.85) : 1 - Math.min(1, age * 0.85);
         for (let s = 0; s < BEAM_SEG; s++)
           for (let e = 0; e < 2; e++) {
             const t = (s + e) / BEAM_SEG;
@@ -233,14 +237,17 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
             const vi = (b * BEAM_SEG + s) * 2 + e;
             bp.setXYZ(vi, v2.x, v2.y, v2.z);
             const pk = Math.exp(-(((t - head) / 0.1) ** 2)) * 1.3;
-            c2.copy(isW ? WHITE : tc).multiplyScalar(fade * (0.22 + pk) * 0.75);
+            c2.copy(isW ? WHITE : tc).multiplyScalar(fade * ((isW ? 0.5 : 0.2) + pk) * 0.75);
             bc.setXYZ(vi, c2.r, c2.g, c2.b);
           }
+        if (isW) arrows.add(sp, mid, v, 0.9, 1, 0.42, WHITE, fade * 1.1);
+        else arrows.add(sp, mid, v, 0.1, -1, 0.42, tc, fade * 1.3);
         b++;
       }
     }
     for (let z = rp; z < MAX_RIPPLES; z++) ripA[z] = -1;
     data.bgeo.setDrawRange(0, b * BEAM_SEG * 2);
+    arrows.end();
     bp.needsUpdate = true;
     bc.needsUpdate = true;
 
@@ -314,6 +321,7 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
         <points geometry={data.ngeo} material={mats.nodes} frustumCulled={false} />
       </group>
       <lineSegments geometry={data.bgeo} material={mats.beam} frustumCulled={false} />
+      <primitive object={arrows.mesh} />
       {Array.from({ length: MAX_NAMES }, (_, k) => (
         <group key={k} ref={(x) => void (nameGroups.current[k] = x)}>
           <Html center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>

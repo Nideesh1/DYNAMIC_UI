@@ -302,3 +302,62 @@ export function addScaled(c: THREE.Color, src: THREE.Color, k: number) {
   c.b += src.b * k;
   return c;
 }
+
+/** Pooled instanced arrowheads placed on quadratic curves (data-flow direction on beams/tethers). */
+export class ArrowPool {
+  mesh: THREE.InstancedMesh;
+  private colors: Float32Array;
+  private n = 0;
+  private max: number;
+  private o = new THREE.Object3D();
+  private a = new THREE.Vector3();
+  private b = new THREE.Vector3();
+  private d = new THREE.Vector3();
+  private static UP = new THREE.Vector3(0, 1, 0);
+  constructor(max: number) {
+    this.max = max;
+    this.colors = new Float32Array(max * 3);
+    this.mesh = new THREE.InstancedMesh(ARROW_GEO, new THREE.MeshBasicMaterial({ blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }), max);
+    this.mesh.instanceColor = new THREE.InstancedBufferAttribute(this.colors, 3);
+    this.mesh.frustumCulled = false;
+    this.mesh.count = 0;
+  }
+  begin() {
+    this.n = 0;
+  }
+  /** Arrow at curve parameter t, pointing toward p2 (dir=+1) or toward p0 (dir=-1). */
+  add(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, t: number, dir: 1 | -1, size: number, color: THREE.Color, k = 1) {
+    if (this.n >= this.max) return;
+    bezier(p0, p1, p2, t, this.a);
+    bezier(p0, p1, p2, Math.min(1, Math.max(0, t + 0.02 * dir)), this.b);
+    this.d.subVectors(this.b, this.a);
+    if (this.d.lengthSq() < 1e-8) return;
+    this.o.position.copy(this.a);
+    this.o.quaternion.setFromUnitVectors(ArrowPool.UP, this.d.normalize());
+    this.o.scale.set(size * 0.4, size, size * 0.4);
+    this.o.updateMatrix();
+    this.mesh.setMatrixAt(this.n, this.o.matrix);
+    this.colors[this.n * 3] = color.r * k;
+    this.colors[this.n * 3 + 1] = color.g * k;
+    this.colors[this.n * 3 + 2] = color.b * k;
+    this.n++;
+  }
+  end() {
+    this.mesh.count = this.n;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+  }
+}
+
+const _pa = new THREE.Vector3();
+const _pb = new THREE.Vector3();
+const _UP = new THREE.Vector3(0, 1, 0);
+/** Place a single ARROW_GEO mesh on a quadratic curve at t, pointing toward p2 (dir=+1) or p0 (dir=-1). */
+export function placeOnCurve(m: THREE.Object3D, p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, t: number, dir: 1 | -1, size: number) {
+  bezier(p0, p1, p2, t, _pa);
+  bezier(p0, p1, p2, Math.min(1, Math.max(0, t + 0.02 * dir)), _pb);
+  m.position.copy(_pa);
+  _pb.sub(_pa);
+  if (_pb.lengthSq() > 1e-8) m.quaternion.setFromUnitVectors(_UP, _pb.normalize());
+  m.scale.set(size * 0.4, size, size * 0.4);
+}

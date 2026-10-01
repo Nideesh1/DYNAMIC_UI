@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { waitSeconds, world, type McpCall, type McpResource, type McpServer, type ResourceKind } from "../shared/world";
-import { SPHERE_GEO, TUBE_GEO, additiveBasic, backendPos, bezier, bowControl, clamp01, easeInOut, easeOut, glowSpriteMaterial, satPos, somaPos, tubeMaterial } from "./fx";
+import { ARROW_GEO, ArrowPool, SPHERE_GEO, TUBE_GEO, additiveBasic, placeOnCurve, reduced, backendPos, bezier, bowControl, clamp01, easeInOut, easeOut, glowSpriteMaterial, satPos, somaPos, tubeMaterial } from "./fx";
 
 const AMBER = new THREE.Color("#fbbf24");
 const RED = new THREE.Color("#ff2d3d");
@@ -52,10 +52,12 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
     edge.uniforms.uP0.value.copy(sp);
     edge.uniforms.uP2.value.copy(pos);
     edge.uniforms.uP1.value.copy(sp).add(pos).multiplyScalar(0.5);
-    return { edge, fill: additiveBasic(col), line: new THREE.LineBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), halo: glowSpriteMaterial(col) };
+    return { edge, arrow: additiveBasic(col), fill: additiveBasic(col), line: new THREE.LineBasicMaterial({ color: col, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), halo: glowSpriteMaterial(col) };
   }, [srv.color, sp, pos, col]);
   const g = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
+  const arrow = useRef<THREE.Mesh>(null);
+  const srvCol = useMemo(() => new THREE.Color(srv.color), [srv.color]);
   const label = useRef<HTMLDivElement>(null);
   const lastText = useRef("");
   useFrame(({ clock }) => {
@@ -88,21 +90,51 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
       label.current.style.fontWeight = busy ? "700" : "500";
     }
     if (g.current) g.current.rotation.y = res.kind === "spark" || res.kind === "api" ? clock.elapsedTime * (busy ? 0.6 : 0.15) : Math.sin(clock.elapsedTime * 0.2) * 0.25;
-    // edge lights up while the backend is busy; pulse travels server → backend (call) / backend → server (result)
+    // data flow on the server → backend edge (curve runs server t=0 → backend t=1):
+    //   request/waiting: thin dim dashes flowing OUT to the backend, arrow at the backend
+    //   result: thicker, bright pulse flowing IN to the server, arrow at the server
     const u = m.edge.uniforms;
-    u.uOpacity.value = busy ? 1.4 : 0.15 + act * 0.5;
+    u.uTime.value = reduced ? 0 : clock.elapsedTime;
     let latest: McpCall | null = null;
     for (const c of world.mcpCalls) if (c.server === srv.name && c.resource === res.name && (!latest || c.start > latest.start)) latest = c;
-    if (latest && now - latest.start < latest.dur) {
-      const t = easeInOut((now - latest.start) / latest.dur);
-      u.uHead.value = latest.phase === "call" ? t : 1 - t;
-      u.uTail.value = 0.15;
-      u.uHeadColor.value.copy(col).multiplyScalar(2.2);
-    } else u.uHead.value = -1;
+    const resultAge = latest && latest.phase === "result" ? (now - latest.start) / latest.dur : 9;
+    const returning = resultAge < 1;
+    const a = arrow.current;
+    if (returning) {
+      const t = easeInOut(resultAge);
+      u.uRadius.value = 0.06;
+      u.uOpacity.value = 0.9 * (1 - resultAge * 0.6);
+      u.uFlow.value = 0;
+      u.uHead.value = 1 - t;
+      u.uTail.value = 0.2;
+      u.uHeadColor.value.copy(col).multiplyScalar(3);
+      if (a) {
+        a.visible = true;
+        placeOnCurve(a, u.uP0.value, u.uP1.value, u.uP2.value, 0.12, -1, 0.55);
+        m.arrow.color.copy(col).multiplyScalar(2 * (1 - resultAge * 0.7));
+      }
+    } else if (busy) {
+      u.uRadius.value = 0.03;
+      u.uOpacity.value = 0.45;
+      u.uFlow.value = 1;
+      u.uHead.value = -1;
+      if (a) {
+        a.visible = true;
+        placeOnCurve(a, u.uP0.value, u.uP1.value, u.uP2.value, 0.84, 1, 0.42);
+        m.arrow.color.copy(srvCol).multiplyScalar(1.1);
+      }
+    } else {
+      u.uRadius.value = 0.03;
+      u.uOpacity.value = 0.15 + act * 0.4;
+      u.uFlow.value = 0;
+      u.uHead.value = -1;
+      if (a) a.visible = false;
+    }
   });
   return (
     <>
       <mesh geometry={TUBE_GEO} material={m.edge} frustumCulled={false} />
+      <mesh ref={arrow} geometry={ARROW_GEO} material={m.arrow} visible={false} />
       <group position={pos}>
         <sprite ref={halo} material={m.halo} />
         <group ref={g}>
@@ -189,7 +221,8 @@ function Packet({ call }: { call: McpCall }) {
     s.a.copy(sp);
     satPos(srv.slot, s.b);
     bowControl(s.a, s.b, 1.0, s.c);
-    const t = clamp01((performance.now() - call.start) / call.dur);
+    // result pulse runs a bit quicker (same timing as the tether's inward pulse)
+    const t = clamp01((performance.now() - call.start) / (call.phase === "call" ? call.dur : call.dur * 0.75));
     const k = easeInOut(t);
     bezier(s.a, s.c, s.b, call.phase === "call" ? k : 1 - k, s.h);
     head.current.visible = t < 1;
@@ -214,16 +247,20 @@ function Tethers() {
     return g;
   }, []);
   const mat = useMemo(() => new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), []);
+  const arrows = useMemo(() => new ArrowPool(MAX_T), []);
   const tmp = useMemo(() => ({ a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), p: new THREE.Vector3(), col: new THREE.Color(), k: new THREE.Color() }), []);
 
   useFrame(({ clock }) => {
     const now = performance.now();
-    const time = clock.elapsedTime;
+    const time = reduced ? 0 : clock.elapsedTime;
     const P = geo.getAttribute("position") as THREE.BufferAttribute;
     const C = geo.getAttribute("color") as THREE.BufferAttribute;
     let n = 0;
+    arrows.begin();
+    // curve always runs agent (t=0) → server (t=1)
     const draw = (instance: string, server: string, mode: number, x: number) => {
-      // mode 0 = pending (x = wait seconds), mode 1 = resolved snap-back (x = age 0..1)
+      // mode 0 = request/waiting (x = wait seconds): thin dim dashes flowing OUT to the server, arrow at the server
+      // mode 1 = result (x = age 0..1): thicker, bright pulse flowing IN to the agent, arrow at the agent
       if (n >= MAX_T) return;
       const sp = somaPos.get(instance);
       const srv = world.mcpServers.get(server);
@@ -237,10 +274,15 @@ function Tethers() {
       if (mode === 0) {
         col.lerp(AMBER, clamp01(x / 1.2));
         if (x > 1.2) col.lerp(RED, clamp01((x - 1.2) / 1.0));
-        base = 0.3 + Math.min(1.0, x * 0.4) * easeOut(x / 0.3);
-      } else base = 1.2 * (1 - x);
+        base = (0.22 + Math.min(0.6, x * 0.25)) * easeOut(x / 0.3);
+      } else {
+        k.copy(col).lerp(WHITE, 0.35);
+        base = 1.3 * (x < 0.75 ? 1 : 1 - (x - 0.75) / 0.25);
+      }
+      const head = 1 - easeInOut(x / 0.75);
+      const spread = mode === 0 ? 0.025 : 0.07;
       for (let s = 0; s < STRANDS; s++) {
-        const off = (s - 1) * 0.04;
+        const off = (s - 1) * spread;
         for (let i = 0; i < SEG; i++) {
           for (let e = 0; e < 2; e++) {
             const t = (i + e) / SEG;
@@ -249,29 +291,33 @@ function Tethers() {
             P.setXYZ(vi, p.x + off, p.y - off, p.z + off * 0.5);
             let lum: number;
             if (mode === 0) {
-              // gentle dashes drifting toward the server
-              const dash = Math.pow(Math.max(0, Math.sin(t * 22 - time * 3.5)), 6);
-              lum = base * (0.4 + dash * 1.4) * (s === 1 ? 1 : 0.4);
+              const dash = Math.pow(Math.max(0, Math.sin(t * 20 - time * 2.2)), 8); // phase moves toward t=1 (server)
+              lum = base * (0.3 + dash * 1.5) * (s === 1 ? 1 : 0.25);
             } else {
-              // flash running back along the tether to the agent, then dissolve
-              const head = 1 - easeInOut(x / 0.55);
-              lum = base * (0.12 + Math.exp(-(((t - head) / 0.07) ** 2)) * 3) * (s === 1 ? 1 : 0.4);
-              k.copy(col).lerp(WHITE, 0.4);
+              lum = base * (0.3 + Math.exp(-(((t - head) / 0.07) ** 2)) * 3.2 * (x < 0.8 ? 1 : 0)) * (s === 1 ? 1 : 0.65);
             }
             const cc = mode === 0 ? col : k;
             C.setXYZ(vi, cc.r * lum, cc.g * lum, cc.b * lum);
           }
         }
       }
+      if (mode === 0) arrows.add(a, c, b, 0.92, 1, 0.48, col, 0.4 + base * 1.4);
+      else arrows.add(a, c, b, 0.08, -1, 0.66, k, base * 1.6);
       n++;
     };
     for (const p of world.mcpPending.values()) draw(p.instance, p.server, 0, waitSeconds(p, now));
-    for (const r of world.mcpResolved) draw(r.instance, r.server, 1, clamp01((now - r.resolvedAt) / 700));
+    for (const r of world.mcpCalls) if (r.phase === "result") draw(r.instance, r.server, 1, clamp01((now - r.start) / r.dur));
     geo.setDrawRange(0, n * STRANDS * SEG * 2);
     P.needsUpdate = true;
     C.needsUpdate = true;
+    arrows.end();
   });
-  return <lineSegments geometry={geo} material={mat} frustumCulled={false} />;
+  return (
+    <>
+      <lineSegments geometry={geo} material={mat} frustumCulled={false} />
+      <primitive object={arrows.mesh} />
+    </>
+  );
 }
 
 export function Senses() {
