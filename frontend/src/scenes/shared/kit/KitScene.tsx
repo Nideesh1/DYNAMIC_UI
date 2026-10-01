@@ -49,6 +49,8 @@ export type KitSceneProps = {
   fit?: Partial<FitProfile>;
   /** world radius of one agent at scale 1 (used to keep agents fully in view) */
   agentRadius?: number;
+  /** "xz" stages: world height of one agent at scale 1 above the ground (towers, trees): its top stays in view */
+  agentHeight?: number;
   /** side graph: `natural` = radius of your GraphResource in its own units; `radius` = world radius it gets */
   graph?: { natural: number; radius?: number };
   /** gap between the core (agents) and the periphery (MCP, graph), world units */
@@ -261,12 +263,13 @@ export function KitScene(p: KitSceneProps) {
   const extentsRef = useRef(p.extents);
   extentsRef.current = p.extents;
   const agentRadius = p.agentRadius ?? 1.1;
+  const agentHeight = p.agentHeight ?? 0;
   const points = useCallback(
     (visit: (q: THREE.Vector3, r: number) => void) => {
-      kitExtents(visit, agentRadius);
+      kitExtents(visit, agentRadius, agentHeight);
       extentsRef.current?.(visit);
     },
-    [agentRadius],
+    [agentRadius, agentHeight],
   );
 
   const target = p.target ?? [0, 0, 0];

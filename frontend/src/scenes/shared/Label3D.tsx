@@ -245,7 +245,7 @@ const dimHex = (h: string) => "#" + dimTmp.set(h).lerp(BG, 0.45).getHexString();
 /** Graph/memory caption ("FalkorDB · knowledge graph" when served) - only this re-renders on world changes. */
 export function GraphLabel3D({ prefix = "", suffix = "", ...props }: Omit<Label3DProps, "text"> & { prefix?: string; suffix?: string }) {
   const w = useWorld();
-  return <Label3D {...props} text={prefix + w.graphLabel + suffix} />;
+  return <Label3D declutter="resource" {...props} text={prefix + w.graphLabel + suffix} />;
 }
 
 /** In-scene label. Suspends (renders nothing) only until the bundled font is parsed, once per app. */
@@ -584,6 +584,14 @@ function Label3DInner(props: Label3DProps) {
         e.w1 = s.W1 * kpx;
         e.h1 = s.H1 * kpx;
         e.live = e.w > 1 && e.x + e.w / 2 > 0 && e.x - e.w / 2 < vp.width && e.y + e.h / 2 > 0 && e.y - e.h / 2 < vp.height;
+        e.ax = s.wp.x;
+        e.ay = s.wp.y;
+        e.az = s.wp.z;
+        e.ox0 = e.x - e.w / 2 - cx;
+        e.ox1 = e.x + e.w / 2 - cx;
+        e.oy0 = e.y - e.h / 2 - cy;
+        e.oy1 = e.y + e.h / 2 - cy;
+        if (e.w > 1) e.seen = performance.now();
       }
     }
     const a = s.cur * s.dc * (1 - q.depthFade * THREE.MathUtils.smoothstep(dist, q.fadeRange[0], q.fadeRange[1]));

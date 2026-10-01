@@ -308,8 +308,16 @@ function layoutRuns() {
   }
 }
 
+/**
+ * Periphery spacing along b (screen-up) is stretched by 1 / fit.foreshorten so stacked servers/backends keep
+ * their on-screen gap on a tilted ground plane; updated with hysteresis so orbiting doesn't keep re-laying out.
+ */
+let bStretch = 1;
+
 function layoutPeriphery() {
   const P = config.preset;
+  const want = Math.min(1.7, 1 / Math.max(0.35, fit.foreshorten));
+  if (Math.abs(want - bStretch) / bStretch > 0.1) bStretch = want;
   // core extents over agent + cluster targets (2D, symmetric around the stage centre)
   let hw = 0;
   let hh = 0;
@@ -404,7 +412,8 @@ const RIM_NO_GRAPH = [0, 180, 35, -145, -35, 145, 70, -110, -70, 110].map((d) =>
 /** Stack servers in a column on side d (+1 right, -1 left), centred; `hole` keeps the middle free (side graph). */
 function column(list: KitMcp[], d: number, x0: number, hole: number) {
   if (!list.length) return;
-  const H = (m: KitMcp) => Math.max(3, m.backends.size * 2.1 + 0.6);
+  const fb = bStretch;
+  const H = (m: KitMcp) => Math.max(3, m.backends.size * 2.1 + 0.6) * fb;
   const top = hole > 0 ? Math.ceil(list.length / 2) : list.length;
   let b = 0;
   if (hole > 0) {
@@ -423,7 +432,7 @@ function column(list: KitMcp[], d: number, x0: number, hole: number) {
     for (const be of m.backends.values()) {
       be.k = k;
       be.n = nb;
-      planePoint(d * (x0 + 1 + 3.6), cb + ((nb - 1) / 2 - k) * 2.1, be.target);
+      planePoint(d * (x0 + 1 + 3.6), cb + ((nb - 1) / 2 - k) * 2.1 * fb, be.target);
       k++;
     }
     b -= h;
@@ -520,8 +529,13 @@ export function kitTick(now = performance.now()) {
 }
 
 /** Visit every kit-placed thing that must stay in view (camera framing): stage targets + radii. */
-export function kitExtents(visit: (p: THREE.Vector3, r: number) => void, agentRadius: number) {
-  for (const a of kit.agents.values()) visit(a.target, agentRadius * a.scale);
+export function kitExtents(visit: (p: THREE.Vector3, r: number) => void, agentRadius: number, agentHeight = 0) {
+  const up = kit.plane === "xz" && agentHeight > 0;
+  for (const a of kit.agents.values()) {
+    visit(a.target, agentRadius * a.scale);
+    // tall agents on a ground plane (towers, trees, machines): their top must stay in view too
+    if (up) visit(_x.copy(a.target).setY(a.target.y + agentHeight * a.scale), agentRadius * a.scale * 0.6);
+  }
   for (const lane of activeLanes) visit(kit.clusterTarget[lane], 2.4);
   for (const r of kit.runs.values()) {
     if (!r.members) visit(r.target, r.hu);

@@ -6,8 +6,8 @@
  *   frame N+1  labelTick() sorts the visible labels by priority and greedily places them: a label that overlaps
  *              an already placed one first drops its secondary line, then hides (fades out). Hidden labels keep
  *              projecting, so they come back as soon as there is room.
- * Priority: selected agent > busiest top-level agents > run labels > MCP servers > cluster badges > backends /
- * graph node names > theme extras > subagent names. The kind comes from the slot a label is rendered in
+ * Priority: selected agent > busiest top-level agents > run labels > MCP servers > resource captions (the graph's
+ * name) > cluster badges > backends / graph node names > theme extras > subagent names. The kind comes from the slot a label is rendered in
  * (<KitScene> wraps each slot in a LabelScope); a label can override it with its `declutter` prop.
  * No per-frame allocations: entries are created once per label, the pass reuses scratch arrays.
  */
@@ -15,9 +15,9 @@ import { createContext } from "react";
 import { energy, world } from "../world";
 import type { KitAgent } from "./state";
 
-export type LabelKind = "agent" | "run" | "mcp" | "cluster" | "backend" | "graph" | "extra" | "sub";
+export type LabelKind = "agent" | "run" | "mcp" | "resource" | "cluster" | "backend" | "graph" | "extra" | "sub";
 
-const KIND_PRIO: Record<LabelKind, number> = { agent: 600, run: 400, mcp: 300, cluster: 250, backend: 150, graph: 140, extra: 120, sub: 100 };
+const KIND_PRIO: Record<LabelKind, number> = { agent: 600, run: 400, mcp: 300, resource: 290, cluster: 250, backend: 150, graph: 140, extra: 120, sub: 100 };
 
 /** Which slot a label is rendered in (set by <KitScene>); `agent` lets the pass rank agent labels by activity. */
 export type LabelScopeValue = { kind: LabelKind; agent?: KitAgent };
@@ -39,6 +39,16 @@ export type LabelEntry = {
   y1: number;
   w1: number;
   h1: number;
+  /** world anchor + full plate rect relative to the anchor's projection (css px, y down) for camera framing,
+   *  and when it was last projected while visible (performance.now) */
+  ax: number;
+  ay: number;
+  az: number;
+  ox0: number;
+  ox1: number;
+  oy0: number;
+  oy1: number;
+  seen: number;
   /** written by the pass: target visibility and whether to drop the secondary line */
   show: number;
   subOff: boolean;
@@ -61,7 +71,7 @@ export const labels = {
 };
 
 export function newLabelEntry(kind: LabelKind, agent: KitAgent | undefined, size: number): LabelEntry {
-  return { kind, agent, size, live: false, x: 0, y: 0, w: 0, h: 0, x1: 0, y1: 0, w1: 0, h1: 0, show: labels.active ? 0 : 1, subOff: false, placed: false, score: 0 };
+  return { kind, agent, size, live: false, x: 0, y: 0, w: 0, h: 0, x1: 0, y1: 0, w1: 0, h1: 0, ax: 0, ay: 0, az: 0, ox0: 0, ox1: 0, oy0: 0, oy1: 0, seen: -1e9, show: labels.active ? 0 : 1, subOff: false, placed: false, score: 0 };
 }
 export function registerLabel(e: LabelEntry) {
   labels.entries.push(e);
@@ -161,6 +171,17 @@ export function labelTick(now: number, w: number, h: number) {
     labels.last = now;
     labels.due = true;
   }
+}
+
+/** label kinds the camera framing keeps on screen (agent names hug their agents; graph-node names come and go) */
+const FRAMED: Record<LabelKind, boolean> = { agent: false, sub: false, run: true, mcp: true, resource: true, backend: true, cluster: true, graph: false, extra: false };
+
+/**
+ * Visit the world anchors of recently visible framed labels with their plate rect around the anchor in css px
+ * (FitCamera converts px to view angles: a px-clamped label keeps its screen size at any camera distance).
+ */
+export function visitLabelRects(now: number, visit: (e: LabelEntry) => void) {
+  for (const e of labels.entries) if (FRAMED[e.kind] && now - e.seen < 600) visit(e);
 }
 
 /** Overlapping pairs among the labels drawn right now (verification; allocates, call rarely). */

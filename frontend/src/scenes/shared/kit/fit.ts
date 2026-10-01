@@ -15,8 +15,10 @@
  * spawns/exits don't pump the view.
  */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { visitLabelRects, type LabelEntry } from "./labels";
+import { kit } from "./state";
 
 export type FitProfile = {
   /** weighted visible agent count at which scale = 1 (parents count 1, subagents 0.5, clusters 1.5) */
@@ -47,8 +49,15 @@ export const fit = {
   insets: { top: 0, right: 0, bottom: 0, left: 0 },
   /** free-area aspect (w/h after insets): presets use it to stretch layouts to the visible shape */
   aspect: 16 / 9,
-  /** last framing numbers (debug / verification): wanted camera distance, current distance, user zoom factor */
+  /**
+   * camera framing: `dist` = current camera distance to the orbit target (read it for fog / LOD instead of
+   * camera.position), `want` = fitted distance before the user's zoom factor `user`; `points` = framed points
+   */
   cam: { want: 0, dist: 0, user: 1, points: 0 },
+  /** how much of the free area the content's screen bounds fill [x, y] (debug / verification) */
+  fill: [0, 0] as [number, number],
+  /** screen shrink of a stage "up" (b) step: 1 for xy stages, |sin(elevation)| for a tilted xz ground plane */
+  foreshorten: 1,
 };
 
 export function setFitProfile(p: Partial<FitProfile>) {
@@ -162,26 +171,61 @@ const _c = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const _q = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+/** floats per framed point (see FitCamera's buffer) */
+const S = 8;
 
 /**
  * Frames the camera on the kit content. Mounted by <KitScene>.
  *   points(): stage-space points + radii that must be visible (agents, clusters, MCP, side graph, theme extras)
  *   origin:   stage group offset in world space
  * Only the camera DISTANCE to the orbit target changes (rotation/target stay the user's). The projection centre is
- * shifted into the centre of the free area (setViewOffset), so the orbit target sits in the middle of what's visible.
+ * shifted (setViewOffset) so the content's screen bounds sit in the middle of the free area: the camera distance
+ * is the smallest one at which the content's bounding box (not a box symmetric around the target) fits, so
+ * lopsided content (tall buildings, a graph on one side) still fills the free area.
  */
 export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector3, r: number) => void) => void; origin: THREE.Vector3 }) {
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
   const controls = useThree((s) => s.controls) as unknown as Controls | null;
   const gl = useThree((s) => s.gl);
   const size = useThree((s) => s.size);
-  const st = useRef({ base: 0, user: 1, userActive: false, desired: 0, want: 0, lastMeasure: -1e9, dir: new THREE.Vector3(), lastFit: -1e9, aspect: 1.6, mx: 0, my: 0 });
+  const st = useRef({ base: 0, user: 1, userActive: false, desired: 0, want: 0, lastMeasure: -1e9, dir: new THREE.Vector3(), lastFit: -1e9, aspect: 1.6, sx: 0, sy: 0, fresh: true });
+  // camera-space points of this frame (x, y, z, r, then a screen-fixed rect around the point in view-angle units
+  // [x0, x1, y0, y1] for px-clamped labels), grown on demand; the visitors are created once
+  const buf = useRef({ a: new Float64Array(512 * S), n: 0, tgt: new THREE.Vector3(), tpp: 0 });
+  const { visit, visitLabel } = useMemo(() => {
+    const B = buf.current;
+    const push = (x: number, y: number, z: number, r: number, x0: number, x1: number, y0: number, y1: number) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
+      if ((B.n + 1) * S > B.a.length) {
+        const a = new Float64Array(B.a.length * 2);
+        a.set(B.a);
+        B.a = a;
+      }
+      _q.set(x - B.tgt.x, y - B.tgt.y, z - B.tgt.z).applyMatrix4(_m);
+      const k = B.n * S;
+      B.a[k] = _q.x;
+      B.a[k + 1] = _q.y;
+      B.a[k + 2] = _q.z;
+      B.a[k + 3] = r;
+      B.a[k + 4] = x0;
+      B.a[k + 5] = x1;
+      B.a[k + 6] = y0;
+      B.a[k + 7] = y1;
+      B.n++;
+    };
+    return {
+      visit: (p: THREE.Vector3, r: number) => push(p.x + origin.x, p.y + origin.y, p.z + origin.z, r, 0, 0, 0, 0),
+      // label anchors are world positions; css px (y down) -> view-angle units (y up)
+      visitLabel: (e: LabelEntry) => push(e.ax, e.ay, e.az, 0, e.ox0 * B.tpp, e.ox1 * B.tpp, -e.oy1 * B.tpp, -e.oy0 * B.tpp),
+    };
+  }, [origin]);
 
   useEffect(() => {
     fit.w = size.width;
     fit.h = size.height;
     st.current.lastMeasure = -1e9; // re-measure HUD on resize
     st.current.want = 0; // re-fit immediately (no hysteresis)
+    st.current.fresh = true;
   }, [size.width, size.height]);
 
   useEffect(() => () => camera.clearViewOffset(), [camera]);
@@ -207,6 +251,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
 
   useFrame((_, dtRaw) => {
     const s = st.current;
+    const B = buf.current;
     const dt = Math.min(0.1, dtRaw);
     const now = performance.now();
     const W = Math.max(1, size.width);
@@ -219,13 +264,6 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     const freeW = Math.max(W * 0.3, W - ins.left - ins.right);
     const freeH = Math.max(H * 0.3, H - ins.top - ins.bottom);
     fit.aspect = freeW / freeH;
-    // projection centre -> centre of the free area
-    const cx = ins.left + freeW / 2;
-    const cy = ins.top + freeH / 2;
-    const ox = W / 2 - cx;
-    const oy = H / 2 - cy;
-    const v = camera.view;
-    if (!v || !v.enabled || v.fullWidth !== W || v.fullHeight !== H || Math.abs(v.offsetX - ox) > 0.5 || Math.abs(v.offsetY - oy) > 0.5) camera.setViewOffset(W, H, ox, oy, W, H);
 
     const tgt = controls?.target ?? _c.set(0, 0, 0);
     if (!s.base) s.base = camera.position.distanceTo(tgt) || 20;
@@ -234,33 +272,35 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     const cur = s.dir.length() || 1;
     s.dir.divideScalar(cur);
     _m.extractRotation(camera.matrixWorld).invert();
+    // ground-plane foreshortening: how much a stage "up" (b) step shrinks on screen (xz stages seen at an angle)
+    fit.foreshorten = THREE.MathUtils.clamp(kit.plane === "xz" ? Math.abs(s.dir.y) : Math.sqrt(1 - s.dir.y * s.dir.y), 0.35, 1);
     const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
     const hx = (freeW / W) * tanH * camera.aspect; // free half-extent per unit depth (x)
     const hy = (freeH / H) * tanH;
-    let need = 0;
-    let n = 0;
-    s.mx = s.my = 0;
-    points((p, r) => {
-      if (!Number.isFinite(p.x)) return;
-      _q.set(p.x + origin.x - tgt.x, p.y + origin.y - tgt.y, p.z + origin.z - tgt.z).applyMatrix4(_m);
-      // content shape on screen (for choosing how HUD panels cut the free area)
-      const depth = Math.max(1, cur - _q.z);
-      s.mx = Math.max(s.mx, (Math.abs(_q.x) + r) / depth);
-      s.my = Math.max(s.my, (Math.abs(_q.y) + r) / depth);
-      // camera at distance d looks down -z: depth = d - q.z; need |q.x|+r <= depth*hx (same for y)
-      const dx = _q.z + (Math.abs(_q.x) + r) / hx + r;
-      const dy = _q.z + (Math.abs(_q.y) + r) / hy + r;
-      need = Math.max(need, dx, dy);
-      n++;
-    });
-    if (n && s.my > 1e-4) s.aspect += (THREE.MathUtils.clamp(s.mx / s.my, 0.5, 4) - s.aspect) * 0.1;
+    B.n = 0;
+    B.tgt.copy(tgt);
+    B.tpp = (2 * tanH) / H;
+    points(visit);
+    visitLabelRects(now, visitLabel);
+    const n = B.n;
     const P = fit.profile;
+    const minD = P.minRadius / Math.min(hx, hy);
+    const maxD = P.maxRadius / Math.min(hx, hy);
     let desired: number;
     if (!n) desired = s.base;
     else {
-      const minD = P.minRadius / Math.min(hx, hy);
-      const maxD = P.maxRadius / Math.min(hx, hy);
-      desired = THREE.MathUtils.clamp(need * P.margin, minD, maxD);
+      // smallest distance at which the content's screen bounding box fits the free area (with margin)
+      const m = P.margin;
+      if (spans(B.a, n, maxD, m, hx, hy)) {
+        let lo = Math.max(0.5, Math.min(minD, maxD) * 0.25);
+        let hi = maxD;
+        for (let it = 0; it < 22; it++) {
+          const mid = (lo + hi) / 2;
+          if (spans(B.a, n, mid, m, hx, hy)) hi = mid;
+          else lo = mid;
+        }
+        desired = THREE.MathUtils.clamp(hi, minD, maxD);
+      } else desired = maxD;
     }
     // hysteresis on the fit so single spawns/exits don't pump the camera
     if (!s.want || Math.abs(desired - s.want) / s.want > 0.07 || now - s.lastFit > 4000) {
@@ -272,6 +312,31 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     fit.cam.dist = cur;
     fit.cam.user = s.user;
     fit.cam.points = n;
+
+    // centre the content's bounds (at the current distance) in the free area: shift in tangent units, clamped
+    // so the orbit target never leaves the free area
+    let shx = 0;
+    let shy = 0;
+    if (n) {
+      bounds(B.a, n, cur);
+      shx = THREE.MathUtils.clamp((BX[0] + BX[1]) / 2, -hx * 0.55, hx * 0.55);
+      shy = THREE.MathUtils.clamp((BX[2] + BX[3]) / 2, -hy * 0.55, hy * 0.55);
+      s.aspect += (THREE.MathUtils.clamp((BX[1] - BX[0]) / Math.max(1e-4, BX[3] - BX[2]), 0.5, 4) - s.aspect) * 0.1;
+      fit.fill[0] = (BX[1] - BX[0]) / (2 * hx);
+      fit.fill[1] = (BX[3] - BX[2]) / (2 * hy);
+    }
+    const ks = s.fresh ? 1 : 1 - Math.exp(-dt / 0.3);
+    s.fresh = false;
+    s.sx += (shx - s.sx) * ks;
+    s.sy += (shy - s.sy) * ks;
+    // projection centre -> centre of the free area, plus the content shift
+    const cx = ins.left + freeW / 2;
+    const cy = ins.top + freeH / 2;
+    const ox = W / 2 - cx + (s.sx / (tanH * camera.aspect)) * (W / 2);
+    const oy = H / 2 - cy - (s.sy / tanH) * (H / 2);
+    const v = camera.view;
+    if (!v || !v.enabled || v.fullWidth !== W || v.fullHeight !== H || Math.abs(v.offsetX - ox) > 0.25 || Math.abs(v.offsetY - oy) > 0.25) camera.setViewOffset(W, H, ox, oy, W, H);
+
     if (s.userActive) return;
     let want = s.want * s.user;
     if (controls?.minDistance !== undefined) want = Math.max(want, controls.minDistance);
@@ -282,6 +347,35 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     controls?.update?.();
   });
   return null;
+}
+
+/** screen bounds in tangent units [minX, maxX, minY, maxY] of camera-space points seen from distance d */
+const BX = new Float64Array(4);
+function bounds(a: Float64Array, n: number, d: number) {
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const k = i * S;
+    const r = a[k + 3];
+    const depth = Math.max(0.05, d - a[k + 2] - r);
+    const x = a[k], y = a[k + 1];
+    x0 = Math.min(x0, (x - r) / depth + a[k + 4]);
+    x1 = Math.max(x1, (x + r) / depth + a[k + 5]);
+    y0 = Math.min(y0, (y - r) / depth + a[k + 6]);
+    y1 = Math.max(y1, (y + r) / depth + a[k + 7]);
+  }
+  BX[0] = x0;
+  BX[1] = x1;
+  BX[2] = y0;
+  BX[3] = y1;
+}
+/** does the content fit the free area (half extents hx/hy per unit depth, margin m) from distance d, once centred? */
+function spans(a: Float64Array, n: number, d: number, m: number, hx: number, hy: number) {
+  for (let i = 0; i < n; i++) if (d - a[i * S + 2] - a[i * S + 3] <= 0.05) return false; // a point behind the camera
+  bounds(a, n, d);
+  // the centring shift is clamped (bounds(...) centre within 0.55 of the half extent): account for the remainder
+  const cx = (BX[0] + BX[1]) / 2, cy = (BX[2] + BX[3]) / 2;
+  const ex = Math.max(0, Math.abs(cx) - hx * 0.55), ey = Math.max(0, Math.abs(cy) - hy * 0.55);
+  return ((BX[1] - BX[0]) / 2 + ex) * m <= hx && ((BX[3] - BX[2]) / 2 + ey) * m <= hy;
 }
 
 if (typeof window !== "undefined") (window as unknown as { __agentglowFit?: typeof fit }).__agentglowFit = fit;
