@@ -18,13 +18,16 @@
  *              fit seen in it; zoom IN only when the gain is > IN_BAND and content has been stable IN_STABLE_MS,
  *              slowly (IN_MS). Between the bands nothing moves (hysteresis: no oscillation). Exiting agents keep
  *              counting until faded, so an exit never zooms in right away.
+ *   clipped    content (or a framed label) that ends up under a HUD panel / off the canvas at the current framing
+ *              (it grew or moved within the bands) counts as "needs zoom-out": same batch window, one move that
+ *              also re-centres the projection shift.
  *   user       orbit / zoom / pan suspends auto-refit for USER_HOLD_MS (the user's zoom factor is kept).
  *   resize     re-fits quickly (RESIZE_MS); reduced motion snaps.
  */
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { visitLabelRects, type LabelEntry } from "./labels";
+import { labels, visitLabelRects, type LabelEntry } from "./labels";
 import { world } from "../world";
 import { kit, reduced } from "./state";
 
@@ -226,6 +229,8 @@ const IN_MS = 2000;
 const USER_HOLD_MS = 10000;
 const RESIZE_MS = 450;
 const STEADY_MS = 300;
+/** content beyond this fraction of the free half extent counts as clipped (under a HUD panel / off canvas) */
+const CLIP_K = 0.985;
 
 /**
  * Frames the camera on the kit content. Mounted by <KitScene>.
@@ -331,6 +336,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     const s = st.current;
     const B = buf.current;
     lastBuf = B;
+    dbg = { camera, points, origin, canvas: gl.domElement };
     const dt = Math.min(0.1, dtRaw);
     const now = performance.now();
     const W = Math.max(1, size.width);
@@ -388,8 +394,13 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
         desired = THREE.MathUtils.clamp(hi, minD, maxD);
       } else desired = maxD;
     }
+    // content (or a label) outside the free area as framed now: under a HUD panel or off the canvas. Counts as
+    // "needs zoom-out" (batched like any zoom-out), and the move re-centres the projection shift.
+    let clipped = false;
     if (n) {
       bounds(B.a, n, cur);
+      const kx = hx * CLIP_K, ky = hy * CLIP_K;
+      clipped = BX[0] < s.sx - kx || BX[1] > s.sx + kx || BX[2] < s.sy - ky || BX[3] > s.sy + ky;
       s.aspect += (THREE.MathUtils.clamp((BX[1] - BX[0]) / Math.max(1e-4, BX[3] - BX[2]), 0.5, 4) - s.aspect) * 0.1;
       fit.fill[0] = (BX[1] - BX[0]) / (2 * hx);
       fit.fill[1] = (BX[3] - BX[2]) / (2 * hy);
@@ -423,14 +434,17 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     } else if (!following) {
       const r = desired / s.want;
       const quiet = now - Math.max(fitClock.activityAt, world.spawnHintAt);
-      if (r > OUT_BAND) {
+      // a move in flight already re-centres: only a settled framing can be "clipped"
+      // (the user's own zoom-in may crop on purpose)
+      const clip = clipped && s.user >= 0.99 && (s.dur <= 0 || now - s.t0 >= s.dur);
+      if (r > OUT_BAND || clip) {
         s.inSince = 0;
         if (!s.outSince) {
           s.outSince = now;
           s.outMax = desired;
         } else s.outMax = Math.max(s.outMax, desired);
         if ((quiet >= BATCH_QUIET_MS && steady >= STEADY_MS) || now - s.outSince >= BATCH_MAX_MS) {
-          goTo = Math.max(s.outMax, desired);
+          goTo = Math.max(s.outMax, desired, clip ? s.want : 0);
           goMs = OUT_MS;
           goDecide = true;
         }
@@ -546,6 +560,51 @@ function spans(a: Float64Array, n: number, d: number, m: number, hx: number, hy:
 }
 
 let lastBuf: { a: Float64Array; n: number } | null = null;
+let dbg: { camera: THREE.PerspectiveCamera; points: (visit: (p: THREE.Vector3, r: number) => void) => void; origin: THREE.Vector3; canvas: HTMLCanvasElement } | null = null;
+
+/**
+ * debug / verification: screen rects (canvas css px) of every framed point (agents, clusters, MCP, backends, side
+ * graph, run-label headroom) and every drawn label, and which of them intersect a HUD panel or leave the canvas.
+ */
+function clipReport() {
+  if (!dbg) return null;
+  const { camera, points, origin, canvas } = dbg;
+  const c = canvas.getBoundingClientRect();
+  const W = c.width, H = c.height;
+  const root = canvas.closest(".scene-root") ?? document;
+  const huds: { sel: string; l: number; t: number; r: number; b: number }[] = [];
+  for (const sel of PANELS) {
+    const el = root.querySelector(sel) as HTMLElement | null;
+    if (!el || el.offsetParent === null) continue;
+    const b = el.getBoundingClientRect();
+    if (b.width < 2 || b.height < 2) continue;
+    huds.push({ sel, l: b.left - c.left, t: b.top - c.top, r: b.right - c.left, b: b.bottom - c.top });
+  }
+  const tanH = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+  const items: { kind: string; name: string; l: number; t: number; r: number; b: number; hits: string[] }[] = [];
+  const add = (kind: string, name: string, l: number, t: number, r: number, b: number) => {
+    const hits = huds.filter((h) => l < h.r && r > h.l && t < h.b && b > h.t).map((h) => h.sel);
+    if (l < 0 || t < 0 || r > W || b > H) hits.push("edge");
+    items.push({ kind, name, l: Math.round(l), t: Math.round(t), r: Math.round(r), b: Math.round(b), hits });
+  };
+  const v = new THREE.Vector3();
+  points((p, r) => {
+    v.set(p.x + origin.x, p.y + origin.y, p.z + origin.z);
+    const depth = v.clone().applyMatrix4(camera.matrixWorldInverse).z * -1;
+    v.project(camera);
+    const x = ((v.x + 1) / 2) * W, y = ((1 - v.y) / 2) * H;
+    const rp = (r / Math.max(0.05, depth)) * (H / 2) / tanH;
+    add("point", `${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}`, x - rp, y - rp, x + rp, y + rp);
+  });
+  const now = performance.now();
+  for (const e of labels.entries)
+    if (e.drawn && now - e.seen < 600) {
+      const w = e.subOff ? e.w1 : e.w, h = e.subOff ? e.h1 : e.h, x = e.subOff ? e.x1 : e.x, y = e.subOff ? e.y1 : e.y;
+      add(`label:${e.kind}`, "", x - w / 2, y - h / 2, x + w / 2, y + h / 2);
+    }
+  const clipped = items.filter((i) => i.hits.length);
+  return { W, H, huds, insets: fit.insets, total: items.length, clipped: clipped.length, items: clipped };
+}
 /** debug: the points framed last frame, as [screen x, screen y] in view-angle units at the current distance */
 function framedPoints() {
   const B = lastBuf;
@@ -559,4 +618,4 @@ function framedPoints() {
   return out;
 }
 
-if (typeof window !== "undefined") (window as unknown as { __agentglowFit?: typeof fit & { framedPoints: typeof framedPoints } }).__agentglowFit = Object.assign(fit, { framedPoints });
+if (typeof window !== "undefined") (window as unknown as { __agentglowFit?: typeof fit & { framedPoints: typeof framedPoints; clipReport: typeof clipReport } }).__agentglowFit = Object.assign(fit, { framedPoints, clipReport });

@@ -108,6 +108,8 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const topRef = useRef<HTMLDivElement>(null);
   const sideRef = useRef<HTMLElement>(null);
   const seen = useRef<WorldEvent | null>(null); // newest event when Events was last open (rail badge)
+  // the replay / catch-up burst on load counts as seen: the badge only counts events that arrive after it
+  const burst = useRef({ t0: performance.now(), head: null as WorldEvent | null, at: performance.now(), done: false });
   useEffect(() => {
     const t = window.setInterval(() => tick((x) => x + 1), 500);
     return () => clearInterval(t);
@@ -154,6 +156,18 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
     };
   }, []);
 
+  const bs = burst.current;
+  if (!bs.done) {
+    const now = performance.now();
+    const head = w.ticker[0] ?? null;
+    if (head !== bs.head) {
+      bs.head = head;
+      bs.at = now;
+    }
+    // the burst ends once events have been quiet ~1s (or 4s after mount at the latest)
+    if ((head && now - bs.at > 1000) || now - bs.t0 > 4000) bs.done = true;
+    else seen.current = head;
+  }
   if (side.tab === "events" && !side.collapsed) seen.current = w.ticker[0] ?? null;
   const seenAt = seen.current ? w.ticker.indexOf(seen.current) : -1;
   const unseen = side.tab === "events" && !side.collapsed ? 0 : seenAt >= 0 ? seenAt : w.ticker.length;
