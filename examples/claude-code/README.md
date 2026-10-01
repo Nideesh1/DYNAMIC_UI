@@ -5,10 +5,45 @@ your custom agents), every tool call, MCP calls and the final answer. No code, j
 [HTTP hooks](https://code.claude.com/docs/en/hooks) posting to AgentGlow's `POST /v1/claude-code`.
 
 ```bash
+npx agentglow claude
+```
+That's it: it starts the AgentGlow server (or reuses one already on the port), opens
+**http://localhost:8100/neural** and runs `claude` with the hooks + traces of [settings.json](settings.json). Only
+Node 18+ is needed; see [CLI](#cli) below.
+
+Without the CLI (from the repo root):
+```bash
 uvx agentglow serve                                          # terminal 1 → http://localhost:8100
-claude --settings examples/claude-code/settings.json         # terminal 2 (from the repo root)
+claude --settings examples/claude-code/settings.json         # terminal 2
 ```
 Open **http://localhost:8100/neural** and give Claude a task.
+
+## CLI
+
+| Command | What it does |
+|---|---|
+| `npx agentglow claude [--port 8100] [--no-open] [-- <claude args>]` | start/reuse the server, open `/neural`, run `claude --settings <temp file> <claude args>`; exits with Claude's exit code and leaves the server running |
+| `npx agentglow claude --install [--port 8100]` | merge the hooks + traces env into `~/.claude/settings.json` (backup `settings.json.agentglow-backup-<time>` first; running it twice changes nothing) |
+| `npx agentglow claude --uninstall` | remove exactly the AgentGlow hooks (URL contains `/v1/claude-code`) and env keys it added; everything else stays |
+| `npx agentglow serve [--port 8100]` | run the server in the foreground |
+| `npx agentglow stop [--port 8100]` | stop a server the CLI started in the background |
+| `npx agentglow open [--port 8100]` | open the 3D view |
+
+Examples: `npx agentglow claude -- -p "Launch 2 Explore subagents in parallel..." --model sonnet`,
+`npx agentglow claude --port 8165 --no-open`.
+
+How the server starts: if something healthy answers `/live/health` on the port it is reused. Otherwise the CLI runs
+`agentglow serve` from PyPI (same version as the npm package) through `uvx`, `uv`, or, when neither is installed, a
+standalone uv it downloads once from the official GitHub release (checksum-verified) into its cache
+(`~/Library/Caches/agentglow` on macOS, `~/.cache/agentglow` on Linux, `%LOCALAPPDATA%\agentglow\Cache` on Windows;
+override with `AGENTGLOW_CACHE_DIR`). The first run downloads Python + dependencies (about 30-60s). Server logs and
+the pidfile live in the same folder.
+
+| Variable | Effect |
+|---|---|
+| `AGENTGLOW_URL` | use this server (e.g. a shared `https://agentglow.yourco.com`) instead of starting one; hooks + traces point at it |
+| `AGENTGLOW_API_KEY` | ingest key; the hooks send it as `x-api-key`, and `npx agentglow claude` also sets `OTEL_EXPORTER_OTLP_HEADERS` for the traces |
+| `AGENTGLOW_CACHE_DIR` | where uv, logs and pidfiles go |
 
 To make it permanent for a project, copy the `"hooks"` block of [settings.json](settings.json) into that project's
 `.claude/settings.json` (or `~/.claude/settings.json` for every project).

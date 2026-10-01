@@ -34,6 +34,7 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
+          npm test
           npm run build:app
           npm run build:lib
 
@@ -51,6 +52,7 @@ jobs:
           name: npm-package
           path: |
             frontend/dist/
+            frontend/cli/
             frontend/package.json
             frontend/README.md
 

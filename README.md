@@ -31,6 +31,13 @@ Open **http://localhost:8100/neural** and run your agents. No agents yet? **http
 Already sending traces to Langfuse / LangSmith / a collector? Nothing changes: `watch()` adds AgentGlow alongside.
 Any OTel exporter can also send OTLP/HTTP straight to `http://localhost:8100/v1/traces`.
 
+**Using Claude Code?** One command, only Node needed (uv and Python are fetched on first run):
+```bash
+npx agentglow claude                 # starts the server, opens /neural, runs claude with AgentGlow hooks + traces
+npx agentglow claude --install       # or: report every `claude` session (merges into ~/.claude/settings.json)
+```
+Pass Claude flags after `--` (`npx agentglow claude -- --model sonnet`). See [examples/claude-code](examples/claude-code).
+
 **Hand-written agent loop, no framework?** Trace it yourself (sync `with` or `async with`):
 ```python
 async with agentglow.run(topic="Inbound call", scope=clinic_id):
@@ -133,6 +140,17 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |
 
 Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
+
+### Claude Code skill
+
+Let Claude set AgentGlow up for you: install the [agentglow skill](skills/agentglow) once, then ask
+"set up agentglow" or "show my agents in 3D" (or type `/agentglow`).
+
+```bash
+mkdir -p ~/.claude/skills/agentglow
+curl -fsSL https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/SKILL.md \
+  -o ~/.claude/skills/agentglow/SKILL.md
+```
 
 ### The full stack in one command
 
