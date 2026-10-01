@@ -8,5 +8,6 @@ curl -fsSL https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agen
   -o ~/.claude/skills/agentglow/SKILL.md
 ```
 
-Then ask Claude "set up agentglow" or "show my agents in 3D" (or type `/agentglow`). If `~/.claude/skills` did not
-exist when Claude Code started, run `/reload-skills` first. Remove it with `rm -r ~/.claude/skills/agentglow`.
+Then ask Claude "set up agentglow" or "show my agents in 3D" (or type `/agentglow`). It runs `npx agentglow setup`
+(with your approval) so every `claude` session shows up, or points you at `npx agentglow claude` to just try it.
+If `~/.claude/skills` did not exist when Claude Code started, run `/reload-skills` first. Remove it with `rm -r ~/.claude/skills/agentglow`.

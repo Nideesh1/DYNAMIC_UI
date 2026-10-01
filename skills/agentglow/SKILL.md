@@ -1,7 +1,7 @@
 ---
 name: agentglow
-description: Set up AgentGlow to watch Claude Code, its subagents and tool calls live in 3D in the browser. Use when the user says things like "show my agents in 3D", "set up agentglow", "visualize claude code subagents", "watch my agents", or wants to install, uninstall or troubleshoot AgentGlow hooks.
-allowed-tools: Bash(node --version) Bash(npx agentglow serve *) Bash(npx agentglow stop *) Bash(npx agentglow open *) Bash(curl -s http://localhost:*)
+description: Set up AgentGlow to watch Claude Code, its subagents and tool calls live in 3D in the browser. Use when the user says things like "show my agents in 3D", "set up agentglow", "visualize claude code subagents", "watch my agents", or wants to install, uninstall, check or troubleshoot AgentGlow.
+allowed-tools: Bash(node --version) Bash(npx agentglow status *) Bash(npx agentglow open *) Bash(npx agentglow start *) Bash(npx agentglow stop *) Bash(curl -s http://localhost:*)
 ---
 
 # Set up AgentGlow for Claude Code
@@ -12,31 +12,35 @@ AgentGlow draws Claude Code (main agent, subagents, tool and MCP calls) as a liv
 ## Steps
 
 1. Check Node: run `node --version`. Need Node 18+. If missing, tell the user to install it (nodejs.org) and stop.
-2. Explain the two modes and ask which one they want:
-   - **This session only**: nothing is written to settings. Launches a fresh Claude Code with hooks attached.
-   - **Always on**: hooks are added to `~/.claude/settings.json` (a backup is saved first), so every session shows up.
-3. **This session only**: Claude cannot relaunch itself. Tell the user to open a new terminal and run
-   `npx agentglow claude` (starts the server, opens the browser, launches Claude). Options: `--port 8100`,
-   `--no-open`, and `-- <claude args>` to pass flags through, e.g. `npx agentglow claude -- --model haiku`.
-4. **Always on**: with the user's explicit approval, run `npx agentglow claude --install`. Then start the server
-   in the background with `npx agentglow serve` and run `npx agentglow open`. Tell the user hooks load at session
-   start, so they must **restart Claude Code** before agents appear. The server must be running for events to show.
+2. Ask which mode they want:
+   - **Always on (recommended)**: set up once, then every `claude` session shows up. Hooks are added to
+     `~/.claude/settings.json` (a backup is saved first) and the AgentGlow server auto-starts with each session.
+   - **Just try it**: nothing is installed. One Claude Code session runs with temporary settings.
+3. **Always on**: with the user's explicit approval, run `npx agentglow setup` (add `--port N` only if asked). It
+   installs the hooks, starts the server and opens the 3D view. Then tell the user to **restart Claude Code once**
+   (hooks load at session start). After that they just use `claude` as usual; nothing else to run.
+4. **Just try it**: Claude cannot relaunch itself. Tell the user to open a new terminal and run
+   `npx agentglow claude` (starts the server, opens the browser, launches Claude). Pass Claude flags after `--`,
+   e.g. `npx agentglow claude -- --model haiku`.
 5. Suggest a first prompt that fans out, e.g. "Launch 3 Explore subagents in parallel to summarize this repo".
 
 ## Uninstall
 
-Run `npx agentglow claude --uninstall` (removes only AgentGlow hooks, keeps a backup), then `npx agentglow stop`.
-Restart Claude Code afterwards.
+With the user's approval, run `npx agentglow remove`. It removes everything `setup` added (hooks, traces env,
+auto-start hook) and keeps a backup. Restart Claude Code afterwards.
 
-## Troubleshooting
+## Status and troubleshooting
 
-- **Port busy**: `npx agentglow stop`, or pick another port with `--port 8200` (use the same port everywhere).
-- **Server not healthy**: check `curl -s http://localhost:8100/live/health`. If it fails, run `npx agentglow serve`
-  in the foreground in a separate terminal to see its logs.
-- **Nothing appears**: Claude Code was not restarted after `--install`, or the viewer was opened after the run
-  ended (open the page first, then give Claude a task).
+Start with `npx agentglow status` (shows whether it is installed and the server is up).
+
+- **Page closed**: `npx agentglow open`.
+- **Server down**: `npx agentglow start --background`, or check `curl -s http://localhost:8100/live/health`.
+  To see logs, have the user run `npx agentglow start` in the foreground in a separate terminal.
+- **Port busy**: `npx agentglow stop`, or rerun setup with another port (`--port 8200`).
+- **Nothing appears**: Claude Code was not restarted after setup, or the viewer was opened after the run ended
+  (open the page first, then give Claude a task).
 - **Remote server**: set `AGENTGLOW_URL` (e.g. `https://glow.example.com`) and, if the server uses an ingest key,
-  `AGENTGLOW_API_KEY` in the shell before `npx agentglow claude` or `--install`. Never write the key into files.
+  `AGENTGLOW_API_KEY` in the shell before `npx agentglow setup` or `npx agentglow claude`. Never write the key into files.
 
 ## Privacy
 

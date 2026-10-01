@@ -11,16 +11,20 @@ Python server, so it works with LangGraph, deepagents, LangChain and anything el
 ## Watch Claude Code (CLI)
 
 ```bash
-npx agentglow claude
+npx agentglow setup        # once
+claude                     # then just use Claude Code as usual
 ```
-Starts the AgentGlow server (fetching uv + Python on first run, so only Node 18+ is needed), opens the 3D view
-and runs `claude` with AgentGlow hooks + traces. Your agents and subagents appear live as Claude works.
+`setup` adds AgentGlow hooks + traces to `~/.claude/settings.json` (backup first) plus a hook that auto-starts the
+AgentGlow server with every `claude` session, then opens the 3D view. Only Node 18+ is needed (uv + Python are fetched
+on first run). Your agents and subagents appear live at http://localhost:8100/neural as Claude works.
 
 | Command | What it does |
 |---|---|
-| `npx agentglow claude [--port 8100] [--no-open] [-- <claude args>]` | start/reuse the server, open `/neural`, run Claude Code with AgentGlow attached |
-| `npx agentglow claude --install` / `--uninstall` | add/remove the AgentGlow hooks + env in `~/.claude/settings.json` (backup first) |
-| `npx agentglow serve` / `stop` / `open` `[--port 8100]` | run the server in the foreground / stop a background one / open the view |
+| `npx agentglow setup [--port 8100]` | install once (backup first), start the server, open `/neural` |
+| `npx agentglow status` / `open` / `stop` | check install + server / open the view / stop the background server |
+| `npx agentglow remove` | uninstall everything `setup` added |
+| `npx agentglow start [--background]` | run the server yourself (`serve` is an alias) |
+| `npx agentglow claude [-- <claude args>]` | try it without installing: one session with temporary settings |
 
 `AGENTGLOW_URL` points everything at a remote server, `AGENTGLOW_API_KEY` sends an ingest key. Details:
 [examples/claude-code](https://github.com/Nideesh1/agentglow/tree/main/examples/claude-code#cli).
