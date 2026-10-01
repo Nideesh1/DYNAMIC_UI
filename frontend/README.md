@@ -115,6 +115,12 @@ A cross-origin `source` requires the server to send CORS headers for `/live/*`.
 | ![city](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/city.jpg) **city** | ![ocean](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/ocean.jpg) **ocean** | ![subway](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/subway.jpg) **subway** |
 | ![circuit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/circuit.jpg) **circuit** | ![tunnel](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/tunnel.jpg) **tunnel** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** |
 
+## Layout
+
+Agents are always the center of the scene; the knowledge graph and MCP servers appear at the side only when used. Stats
+sit in a slim top bar and agents/events/selection in a collapsible right sidebar (a thin rail in small embeds). The
+camera fits the free area and batches spawns into one smooth zoom.
+
 ## Many agents
 
 Above 12 live agents, older runs auto-group into clickable glowing clusters and the newest ~10 stay in full

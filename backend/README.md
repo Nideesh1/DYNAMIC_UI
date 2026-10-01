@@ -46,7 +46,7 @@ LangChain instrumentation and Hatchet instrumentation when those packages are in
 | LLM span (OpenInference `LLM`, `gen_ai.operation.name=chat`) | "thinking" + a pulse sized by tokens |
 | Tool span | a tool event on the owning agent |
 | `mcp.server.name` / `agentglow.mcp.server` (+ `agentglow.mcp.resource`, `agentglow.mcp.resource_kind`) | an MCP satellite with a live tether while the call is pending |
-| `db.system` (+ `agentglow.graph.nodes`, `agentglow.db.op`) | graph read/write flares |
+| `db.system` (+ `agentglow.graph.nodes`, `agentglow.db.op`) | graph read/write flares on a side knowledge graph, shown only once used |
 | Hatchet step run (`hatchet.workflow_run_id`, `hatchet.step_name`) or `agentglow.step` | run lanes and steps |
 
 Optional attributes you can set on your own spans: `agentglow.agent` (mark a span as an agent, value = name),
@@ -74,6 +74,9 @@ agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/
 Embed in your own React app: `npm i agentglow` → `<AgentScene theme="neural" source="http://localhost:8100" />`.
 
 ## Scale
+
+Agents are always centered; graph and MCP servers are side resources that appear only when used. The camera batches
+spawns into one smooth zoom.
 
 Above 12 live agents the scenes auto-group older runs into clickable clusters and keep the newest ~10 in full
 detail (~60 fps with 500 live agents).

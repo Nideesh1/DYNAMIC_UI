@@ -73,10 +73,14 @@ Works in Next.js App Router out of the box (the package is `"use client"`). See 
 |---|---|
 | agents / subagents | shapes that spawn, think, wait and exit - subagents smaller, linked to their parent with directional edges |
 | LLM calls | pulses sized by tokens |
-| tool & MCP calls | MCP server + its backends (Postgres, Snowflake, Spark…) light up, with data-flow arrows |
-| DB / graph queries (`db.system`) | knowledge-graph nodes light up on reads and writes (live from FalkorDB if configured) |
+| tool & MCP calls | MCP server + its backends (Postgres, Snowflake, Spark…) appear at the side when first called, with data-flow arrows; idle ones fade away |
+| DB / graph queries (`db.system`) | a knowledge graph appears at the side once agents read or write it (real nodes from FalkorDB if configured) |
 | handoffs | agents chained with a message along the edge |
 | Hatchet workflow runs | runs and their step-by-step progress |
+
+**Agents are always the center.** Graphs, databases and MCP servers are side resources that only show up when used, and the camera
+frames everything calmly: one smooth zoom per burst of spawns, never a jittery in-and-out. Stats sit in a slim top bar;
+agents, events and the selected agent live in a collapsible right sidebar.
 
 **Hundreds of agents?** Above 12 live agents, AgentGlow auto-groups older runs into glowing clusters
 ("35 runs · 84 agents") and keeps the newest ~10 in full detail - click a cluster to expand it. Stays at ~60 fps with 500 live agents.
