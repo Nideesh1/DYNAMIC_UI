@@ -1,5 +1,10 @@
 """AgentGlow: live 3D views of agent systems, driven only by OpenTelemetry spans."""
-__version__ = "0.1.0"
+try:  # single source of truth: the installed package metadata (the release workflow sets it from the git tag)
+    from importlib.metadata import version as _version
+
+    __version__ = _version("agentglow")
+except Exception:  # running from a source tree without metadata
+    __version__ = "0.0.0+local"
 
 from .auth import make_token, verify_token  # noqa: E402
 from .otel import LiveSpanProcessor  # noqa: E402
