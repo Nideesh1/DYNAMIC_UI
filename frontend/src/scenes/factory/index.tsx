@@ -75,6 +75,7 @@ export default function Scene() {
       gl={{ antialias: true }}
       fit={{ nRef: 4, min: 0.62, max: 1.45, minRadius: 6.5 }}
       agentRadius={1.6}
+      agentHeight={3.1}
       graph={{ natural: RACK_NATURAL, radius: GRAPH_R }}
       peripheryGap={5}
       Background={Background}

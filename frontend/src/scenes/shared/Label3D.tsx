@@ -546,6 +546,7 @@ function Label3DInner(props: Label3DProps) {
       if (off !== s.subOff && s.hasSub) (s.subOff = off), api.layout();
       e.live = false;
     }
+    if (e) e.drawn = false;
     if (s.cur <= 0.004 || !o.visible) {
       b.visible = false;
       return;
@@ -584,6 +585,7 @@ function Label3DInner(props: Label3DProps) {
         e.w1 = s.W1 * kpx;
         e.h1 = s.H1 * kpx;
         e.live = e.w > 1 && e.x + e.w / 2 > 0 && e.x - e.w / 2 < vp.width && e.y + e.h / 2 > 0 && e.y - e.h / 2 < vp.height;
+        e.clip = e.x - e.w / 2 < -2 || e.x + e.w / 2 > vp.width + 2 || e.y - e.h / 2 < -2 || e.y + e.h / 2 > vp.height + 2;
         e.ax = s.wp.x;
         e.ay = s.wp.y;
         e.az = s.wp.z;
@@ -600,6 +602,7 @@ function Label3DInner(props: Label3DProps) {
       return;
     }
     b.visible = true;
+    if (e) e.drawn = a > 0.05 && visibleChain(o.parent);
     b.quaternion.copy(s.q.invert()).multiply(camera.quaternion);
     b.scale.setScalar(sc / (o.matrixWorld.getMaxScaleOnAxis() || 1));
     mats.plate.uniforms.uOpacity.value = a;

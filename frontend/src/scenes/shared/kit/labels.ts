@@ -28,8 +28,9 @@ export type LabelEntry = {
   agent: KitAgent | undefined;
   /** world font size (tie-break: bigger labels win among equals) */
   size: number;
-  /** written by the label when `labels.due`: visible on screen this pass */
+  /** written by the label when `labels.due`: visible on screen this pass / cut by the canvas edge */
   live: boolean;
+  clip: boolean;
   /** full plate rect (css px, centre + size) and the main-line-only rect (w1 = 0: no secondary line) */
   x: number;
   y: number;
@@ -49,6 +50,8 @@ export type LabelEntry = {
   oy0: number;
   oy1: number;
   seen: number;
+  /** drawn this frame with a visible alpha (debug / verification) */
+  drawn: boolean;
   /** written by the pass: target visibility and whether to drop the secondary line */
   show: number;
   subOff: boolean;
@@ -71,7 +74,7 @@ export const labels = {
 };
 
 export function newLabelEntry(kind: LabelKind, agent: KitAgent | undefined, size: number): LabelEntry {
-  return { kind, agent, size, live: false, x: 0, y: 0, w: 0, h: 0, x1: 0, y1: 0, w1: 0, h1: 0, ax: 0, ay: 0, az: 0, ox0: 0, ox1: 0, oy0: 0, oy1: 0, seen: -1e9, show: labels.active ? 0 : 1, subOff: false, placed: false, score: 0 };
+  return { kind, agent, size, live: false, clip: false, x: 0, y: 0, w: 0, h: 0, x1: 0, y1: 0, w1: 0, h1: 0, ax: 0, ay: 0, az: 0, ox0: 0, ox1: 0, oy0: 0, oy1: 0, seen: -1e9, drawn: false, show: labels.active ? 0 : 1, subOff: false, placed: false, score: 0 };
 }
 export function registerLabel(e: LabelEntry) {
   labels.entries.push(e);
@@ -85,6 +88,8 @@ export function unregisterLabel(e: LabelEntry) {
 }
 
 const PASS_MS = 100;
+/** minor kinds that hide when the canvas edge cuts them (the framed / important ones stay) */
+const CLIP_HIDES: Record<LabelKind, boolean> = { agent: false, run: false, mcp: false, resource: false, cluster: false, backend: true, graph: true, extra: true, sub: true };
 const PAD = 3;
 const order: LabelEntry[] = [];
 let rects = new Float64Array(256 * 4);
@@ -135,7 +140,12 @@ function pass(now: number) {
   let hidden = 0;
   let dropped = 0;
   for (const e of order) {
-    if (free(e.x, e.y, e.w, e.h, n)) {
+    if (e.clip && CLIP_HIDES[e.kind]) {
+      // a minor label cut by the canvas edge reads as clutter: hide it
+      e.show = 0;
+      e.placed = false;
+      hidden++;
+    } else if (free(e.x, e.y, e.w, e.h, n)) {
       put(e.x, e.y, e.w, e.h, n++);
       e.show = 1;
       e.subOff = false;
@@ -186,7 +196,7 @@ export function visitLabelRects(now: number, visit: (e: LabelEntry) => void) {
 
 /** Overlapping pairs among the labels drawn right now (verification; allocates, call rarely). */
 function overlaps() {
-  const vis = labels.entries.filter((e) => e.placed);
+  const vis = labels.entries.filter((e) => e.drawn && performance.now() - e.seen < 300);
   let k = 0;
   for (let i = 0; i < vis.length; i++)
     for (let j = i + 1; j < vis.length; j++) {
