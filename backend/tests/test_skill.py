@@ -1,4 +1,6 @@
 """`skill` world events: Claude Code Skill tool (hooks + traces), the generic `agentglow.skill` hint, the manual API."""
+import json
+
 import agentglow
 from agentglow.claude_code import ClaudeCodeAdapter
 from agentglow.mapper import Mapper
@@ -100,3 +102,146 @@ def test_scrub_weird_names():
     assert skill_name("sk-ant-api03-abcdefghijklmnop") == "redacted"
     assert skill_name("  ") == "" and skill_name(None) == "" and skill_name({"a": 1}) == ""
     assert scrub_attrs({"agentglow.skill": "héllo wörld"}) == {"agentglow.skill": "h-llo-w-rld"}
+
+
+# ---- deepagents (OpenInference: attributes arrive at span end) and OpenAI Agents SDK `load_skill`
+class Spans:
+    def __init__(self):
+        self.m, self.evs, self.n, self.t = Mapper(), [], 0, 100
+
+    def start(self, name, parent=None, trace="T1", attrs=None):
+        self.n, self.t = self.n + 1, self.t + 1
+        sp = {"trace_id": trace, "span_id": f"s{self.n}", "parent_span_id": parent, "name": name, "start_time_ms": self.t,
+              "attributes": attrs or {}}
+        self.evs += self.m.feed("start", sp)
+        return sp
+
+    def end(self, sp, **attrs):
+        self.t += 1
+        self.evs += self.m.feed("end", {**sp, "end_time_ms": self.t, "status": "ok", "attributes": attrs})
+
+    def tool(self, parent, name, args, trace="T1"):
+        sp = self.start(name, parent, trace)
+        self.end(sp, **{"openinference.span.kind": "TOOL", "tool.name": name, "input.value": json.dumps(args)})
+
+
+def meta(agent=None, thread="th-1"):
+    return json.dumps({"lc_agent_name": agent, "thread_id": thread, "langgraph_node": "tools"})
+
+
+def deep_run(metadata_paths=None):
+    x = Spans()
+    root = x.start("researcher")
+    if metadata_paths is not None:
+        mw = x.start("SkillsMiddleware.before_agent", root["span_id"])
+        x.end(mw, **{"openinference.span.kind": "AGENT", "output.value": json.dumps(
+            {"skills_metadata": [{"name": p.split("/")[-2], "path": p} for p in metadata_paths]})})
+    tools = x.start("tools", root["span_id"])
+    x.tool(tools["span_id"], "read_file", {"file_path": "/skills/main/haiku/SKILL.md"})
+    x.tool(tools["span_id"], "read_file", {"file_path": "/skills/main/haiku/SKILL.md", "offset": 100, "limit": 100})
+    x.tool(tools["span_id"], "read_file", {"file_path": "/other/rogue/SKILL.md"})
+    x.tool(tools["span_id"], "ls", {"path": "/skills/main/haiku"})
+    task = x.start("task", tools["span_id"], attrs={"openinference.span.kind": "TOOL", "tool.name": "task"})
+    poet = x.start("poet", task["span_id"])
+    ptools = x.start("tools", poet["span_id"])
+    x.tool(ptools["span_id"], "read_file", {"file_path": "/skills/sub/limerick/SKILL.md"})
+    x.tool(ptools["span_id"], "write_file", {"file_path": "/skills/sub/limerick/SKILL.md", "content": "x"})
+    x.tool(ptools["span_id"], "edit_file", {"file_path": "/skills/sub/limerick/SKILL.md"})
+    for sp in (ptools, poet, task, tools, root):
+        x.end(sp)
+    ids = {e["agent"]: e["id"] for e in x.evs if e["type"] == "spawn"}
+    return x.evs, ids
+
+
+def test_deepagents_read_skill_md_on_main_and_subagent_with_metadata():
+    evs, ids = deep_run(["/skills/main/haiku/SKILL.md", "/skills/sub/limerick/SKILL.md"])
+    assert skills(evs) == [(ids["researcher"], "haiku", "start"), (ids["researcher"], "haiku", "end"),
+                           (ids["poet"], "limerick", "start"), (ids["poet"], "limerick", "end")]
+    assert sum(1 for e in evs if e["type"] == "tool" and e["tool"] == "read_file") == 4  # tool events unchanged
+
+
+def test_deepagents_without_metadata_falls_back_to_path_regex():
+    evs, ids = deep_run(None)  # no SkillsMiddleware output: every */SKILL.md read counts (once per agent+path)
+    assert [(i, n) for i, n, st in skills(evs) if st == "start"] == [
+        (ids["researcher"], "haiku"), (ids["researcher"], "rogue"), (ids["poet"], "limerick")]
+
+
+def test_deepagents_metadata_cached_for_later_turns_of_the_thread():
+    x = Spans()
+    r1 = x.start("researcher", trace="A")
+    mw = x.start("SkillsMiddleware.before_agent", r1["span_id"], trace="A")
+    x.end(mw, metadata=meta(), **{"openinference.span.kind": "AGENT", "output.value": json.dumps(
+        {"skills_metadata": [{"path": "/skills/main/haiku/SKILL.md"}]})})
+    x.end(r1)
+    r2 = x.start("researcher", trace="B")  # second turn, new trace, same thread: no metadata span this time
+    tools = x.start("tools", r2["span_id"], trace="B")
+    for path in ("/skills/main/haiku/SKILL.md", "/other/rogue/SKILL.md"):
+        sp = x.start("read_file", tools["span_id"], trace="B")
+        x.end(sp, metadata=meta(), **{"openinference.span.kind": "TOOL", "tool.name": "read_file",
+                                      "input.value": json.dumps({"file_path": path})})
+    assert [n for _, n, st in skills(x.evs) if st == "start"] == ["haiku"]
+
+
+def test_openai_agents_load_skill():
+    x = Spans()
+    ag = x.start("Writer", attrs={"openinference.span.kind": "AGENT"})
+    fn = x.start("load_skill", ag["span_id"], attrs={"openinference.span.kind": "TOOL", "tool.name": "load_skill"})
+    x.end(fn, **{"openinference.span.kind": "TOOL", "tool.name": "load_skill",
+                 "input.value": json.dumps({"skill_name": "pdf tools"})})
+    x.end(ag)
+    wid = next(e["id"] for e in x.evs if e["type"] == "spawn")
+    assert skills(x.evs) == [(wid, "pdf-tools", "start"), (wid, "pdf-tools", "end")]
+
+
+def oa_agent():
+    x = Spans()
+    ag = x.start("Writer", attrs={"openinference.span.kind": "AGENT"})
+    return x, ag
+
+
+def oa_tool(x, ag, name, args):
+    fn = x.start(name, ag["span_id"], attrs={"openinference.span.kind": "TOOL", "tool.name": name})
+    x.end(fn, **{"openinference.span.kind": "TOOL", "tool.name": name, "input.value": json.dumps(args)})
+
+
+def starts(x):
+    return [n for _, n, st in skills(x.evs) if st == "start"]
+
+
+def test_openai_hosted_shell_call_strips_hash_and_ignores_echoed_input():
+    x, ag = oa_agent()
+    call = {"type": "shell_call", "call_id": "call_1",
+            "action": {"commands": ["ls /home/oai/skills", "cat /home/oai/skills/pdf-tools-0123456789abcdef0123456789abcdef/SKILL.md"]}}
+    llm1 = x.start("response", ag["span_id"], attrs={"openinference.span.kind": "LLM"})
+    x.end(llm1, **{"openinference.span.kind": "LLM", "output.value": json.dumps({"output": [call]})})
+    # next model call echoes the shell_call in its input; its own output repeats the id: neither counts again
+    llm2 = x.start("response", ag["span_id"], attrs={"openinference.span.kind": "LLM"})
+    x.end(llm2, **{"openinference.span.kind": "LLM", "input.value": json.dumps({"input": [call]}),
+                   "output.value": json.dumps({"output": [{"type": "message", "content": "done"}]})})
+    x.end(ag)
+    wid = next(e["id"] for e in x.evs if e["type"] == "spawn")
+    assert skills(x.evs) == [(wid, "pdf-tools", "start"), (wid, "pdf-tools", "end")]
+
+
+def test_openai_local_shell_commands_and_exec_command_cmd():
+    x, ag = oa_agent()
+    oa_tool(x, ag, "shell", {"commands": ["head -50 ./skills/csv-clean/SKILL.md"]})
+    oa_tool(x, ag, "exec_command", {"cmd": "sed -n 1,80p /mnt/skills/report-writer/SKILL.md"})
+    oa_tool(x, ag, "exec_command", {"cmd": "cat ./skills/csv-clean/SKILL.md"})  # same agent+skill: deduped
+    assert starts(x) == ["csv-clean", "report-writer"]
+
+
+def test_shell_non_reads_are_not_skill_uses():
+    x, ag = oa_agent()
+    oa_tool(x, ag, "shell", {"commands": ["grep -r SKILL.md ./skills", "ls ./skills/a/SKILL.md"]})
+    oa_tool(x, ag, "exec_command", {"cmd": "cat notes.txt > ./skills/b/SKILL.md"})
+    oa_tool(x, ag, "exec_command", {"cmd": "sed -i s/x/y/ ./skills/c/SKILL.md"})
+    oa_tool(x, ag, "local_shell", {"cmd": ["echo", "hi"]})
+    assert starts(x) == []
+
+
+def test_load_skill_deduped_per_agent():
+    x, ag = oa_agent()
+    oa_tool(x, ag, "load_skill", {"skill_name": "haiku"})
+    oa_tool(x, ag, "load_skill", {"skill_name": "haiku"})
+    assert starts(x) == ["haiku"]

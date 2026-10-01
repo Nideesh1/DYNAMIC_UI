@@ -53,6 +53,13 @@ LLM_PARENTS = {"model", "agent", "call_model"}
 RESOURCE_KINDS = {"db", "warehouse", "spark", "api", "storage", "queue"}
 WRITE_RE = re.compile(r"\b(CREATE|MERGE|SET|DELETE|INSERT|UPDATE|REMOVE|DROP)\b", re.I)
 TEXT_RE = re.compile(r'"(?:content|text)":\s*"((?:[^"\\]|\\.)+)"')
+SKILL_MD_RE = re.compile(r"^(.*/)?(?P<skill>[^/]+)/SKILL\.md$")  # deepagents: read_file of <skill dir>/SKILL.md
+FILE_PATH_RE = re.compile(r"""['"]file_path['"]\s*:\s*['"]([^'"]+)['"]""")
+MAX_SKILL_SETS = 1024
+SHELL_TOOLS = {"shell", "exec_command", "local_shell", "bash", "run_shell_command"}
+# a shell READ of a skill file (no redirect/pipe between the reader and the path); `sed -i` is a write, see _shell_skills
+SHELL_SKILL_RE = re.compile(r"\b(?:cat|sed|head|less|more|bat)\b[^\n>|;&]*?([A-Za-z0-9._-]+)/SKILL\.md\b")
+HASH_SUFFIX_RE = re.compile(r"-[0-9a-f]{32}$")  # OpenAI hosted skill mounts: /home/oai/skills/<name>-<32 hex>/SKILL.md
 log = logging.getLogger("agentglow")
 # Hatchet runs have idle gaps between steps (the next step sits in Hatchet's queue), so a quiet gap does NOT mean the
 # run is over. Complete quickly once the run has produced its final answer, otherwise only after a long quiet period.
@@ -155,6 +162,7 @@ class Agent:
     last_text: str = ""  # text of its last LLM output (exit message / final when spans carry no output)
     turn_text: str = ""  # text of its latest LLM output, empty if that output was only tool calls
     request: str = ""  # latest user message its LLM saw (langgraph-supervisor delegation text)
+    skill_paths: set = field(default_factory=set)  # deepagents SKILL.md paths already counted as a skill use
 
 
 @dataclass
@@ -180,6 +188,8 @@ class Mapper:
         self.mcp_known: set[tuple] = set()
         self.scopes: dict[str, str] = {}  # run_id -> scope (first `agentglow.scope` seen wins); insertion-ordered, bounded
         self.newly_scoped: list[str] = []  # runs whose scope became known since the Hub last looked
+        self.skill_sets: dict[str, set] = {}  # trace/thread -> known deepagents skills_metadata paths (bounded)
+        self.shell_calls: dict[str, None] = {}  # hosted shell_call ids already scanned (FIFO, bounded)
 
     def _note_scope(self, s: "Span") -> None:
         if s.run in self.scopes:
@@ -314,6 +324,8 @@ class Mapper:
         if not s.tool and not s.llm and not s.agent and self._is_tool(s):
             self._tool_start(s, out, s.start)
         self._mcp_call(s, out, s.start)
+        if "SkillsMiddleware" in s.name:
+            self._note_skills_metadata(s)
         self._skill_start(s, out, s.start)
 
         if s.llm:
@@ -327,6 +339,7 @@ class Mapper:
                     ev["tokens_cached"] = cached
                 out.append(ev)
             self._remember_tool_calls(owner, a)
+            self._hosted_shell_skills(s, owner, out, ts)
             ag = self.agents.get(owner)
             text = self._llm_text(a)
             if ag and text:
@@ -638,12 +651,130 @@ class Mapper:
     def _skill_start(self, s: Span, out: list, ts: int) -> None:
         """Span with `agentglow.skill` (Claude Code Skill tool, manual `agentglow.skill()`): skill start on the agent
         that owns it; the matching end is emitted when the span ends. Only the sanitized name is carried."""
-        if s.skill or SKILL_KEY not in s.attrs:
+        if s.skill:
             return
-        name = skill_name(s.attrs.get(SKILL_KEY))
+        name = skill_name(s.attrs.get(SKILL_KEY)) if SKILL_KEY in s.attrs else self._framework_skill(s, out)
         if name:
             s.skill = name
             out.append({"type": "skill", "run_id": s.run, "id": self._owner(s, out), "name": name, "status": "start", "ts": ts})
+
+    @staticmethod
+    def _skill_key(s: Span) -> str:
+        meta = _json(s.attrs.get("metadata"))
+        tid = meta.get("thread_id") if isinstance(meta, dict) else None
+        return f"thread:{tid}" if tid else f"trace:{s.trace}"
+
+    def _note_skills_metadata(self, s: Span) -> None:
+        """deepagents `SkillsMiddleware.before_agent` output: `{skills_metadata: [{name, path, ...}]}` (first turn only
+        with a checkpointer) → cache the known SKILL.md paths for this thread / trace."""
+        data = _json(s.attrs.get("output.value"))
+        if isinstance(data, dict) and isinstance(data.get("update"), dict):
+            data = data["update"]
+        items = data.get("skills_metadata") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return
+        paths = {str(i["path"]) for i in items if isinstance(i, dict) and i.get("path")}
+        key = self._skill_key(s)
+        self.skill_sets[key] = self.skill_sets.get(key, set()) | paths
+        while len(self.skill_sets) > MAX_SKILL_SETS:
+            self.skill_sets.pop(next(iter(self.skill_sets)))
+
+    def _framework_skill(self, s: Span, out: list) -> str:
+        """Skill use inferred from a framework tool call (only ever the name, never args):
+        - deepagents: `read_file` of `<dir>/<skill>/SKILL.md` (offset 0), in the cached skills_metadata set if known;
+          once per (agent, path), so paged re-reads don't count. write_file/edit_file/ls/glob/grep never count.
+        - OpenAI Agents SDK: a `load_skill` function tool with input `skill_name`."""
+        if not s.tool:
+            return ""
+        tool = str(s.attrs.get("tool.name") or s.attrs.get("gen_ai.tool.name") or s.tool_name)
+        raw = s.attrs.get("input.value")
+        args = _json(raw)
+        if tool == "load_skill":
+            v = args.get("skill_name") if isinstance(args, dict) else None
+            name = skill_name(v if v is not None else (raw if isinstance(raw, str) and args is None else None))
+            return name if name and self._first_use(s, out, "skill:" + name) else ""
+        if tool in SHELL_TOOLS:  # exact: Claude Code `Bash` is not one (it has the Skill tool)
+            names = [n for n in self._shell_skills(args if args is not None else raw) if self._first_use(s, out, "skill:" + n)]
+            return names[0] if names else ""
+        if tool != "read_file":
+            return ""
+        if isinstance(args, dict):
+            path = args.get("file_path") or args.get("path")
+            try:
+                if int(args.get("offset") or 0) > 0:
+                    return ""
+            except (TypeError, ValueError):
+                pass
+        else:
+            m = FILE_PATH_RE.search(raw) if isinstance(raw, str) else None
+            path = m[1] if m else None
+        m = SKILL_MD_RE.match(str(path or ""))
+        if not m:
+            return ""
+        known = self.skill_sets.get(self._skill_key(s))
+        if known and path not in known:
+            return ""
+        name = skill_name(m["skill"])
+        return name if name and self._first_use(s, out, path) and self._first_use(s, out, "skill:" + name) else ""
+
+    def _first_use(self, s: Span, out: list, key: str, owner: str | None = None) -> bool:
+        """Dedupe inferred skill uses per (agent, key): True the first time only."""
+        ag = self.agents.get(owner or self._owner(s, out))
+        if ag is None:
+            return True
+        if key in ag.skill_paths:
+            return False
+        ag.skill_paths.add(key)
+        return True
+
+    @staticmethod
+    def _shell_skills(v: Any) -> list[str]:
+        """Skill names read by shell commands (`cat .../<skill>/SKILL.md`), from a command string, a list of them or a
+        tool input dict (`commands`, `cmd`, ...). ls / grep / writes (redirects, `sed -i`) do not count."""
+        cmds: list[str] = []
+
+        def walk(x: Any) -> None:
+            if isinstance(x, str):
+                cmds.append(x)
+            elif isinstance(x, list):
+                for i in x:
+                    walk(i)
+            elif isinstance(x, dict):
+                for i in x.values():
+                    walk(i)
+        walk(v)
+        names: list[str] = []
+        for c in cmds:
+            for m in SHELL_SKILL_RE.finditer(c):
+                if m[0].startswith("sed") and re.search(r"\s-[a-zA-Z]*i", m[0]):
+                    continue
+                n = skill_name(HASH_SUFFIX_RE.sub("", m[1]))
+                if n and n not in names:
+                    names.append(n)
+        return names
+
+    def _hosted_shell_skills(self, s: Span, owner: str, out: list, ts: int) -> None:
+        """OpenAI hosted shell: no tool span, the model's `output.value` lists `shell_call` items. Only output.value is
+        scanned (input.value echoes earlier calls); each call_id once, each (agent, skill) once."""
+        data = _json(s.attrs.get("output.value"))
+        items = data.get("output") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return
+        for it in items:
+            if not isinstance(it, dict) or it.get("type") != "shell_call":
+                continue
+            cid = str(it.get("call_id") or it.get("id") or "")
+            if cid:
+                if cid in self.shell_calls:
+                    continue
+                self.shell_calls[cid] = None
+                while len(self.shell_calls) > 4096:
+                    self.shell_calls.pop(next(iter(self.shell_calls)))
+            action = it.get("action") if isinstance(it.get("action"), dict) else {}
+            for n in self._shell_skills(action.get("commands")):
+                if self._first_use(s, out, "skill:" + n, owner):
+                    out.append({"type": "skill", "run_id": s.run, "id": owner, "name": n, "status": "start", "ts": ts})
+                    out.append({"type": "skill", "run_id": s.run, "id": owner, "name": n, "status": "end", "ts": ts})
 
     def _graph(self, s: Span, out: list, ts: int) -> None:
         a = s.attrs
