@@ -21,7 +21,7 @@ def tool(event, name, tid, agent=None, **inp):
 EXP = ("agent-exp-1", "Explore")
 GEN = ("agent-gen-2", "general-purpose")
 PROMPT = "Count files in backend/ and frontend/src in parallel"
-LABEL = "Claude Code · repo"  # neutral run topic (cwd basename), never the prompt
+LABEL = "Claude Code · repo"  # neutral run topic prefix (cwd basename, then session id + time), never the prompt
 
 SEQUENCE = [
     hook("SessionStart", source="startup", model="claude-haiku-4-5"),
@@ -58,7 +58,8 @@ def replay(seq=SEQUENCE):
 def test_full_session_maps_to_spawns_tools_and_exits():
     evs, c = replay()
     run_id = f"{SID}:1"
-    assert evs[0] == {**evs[0], "type": "run", "status": "started", "topic": LABEL, "workflow": "claude-code", "run_id": run_id}
+    assert evs[0] == {**evs[0], "type": "run", "status": "started", "workflow": "claude-code", "run_id": run_id}
+    assert evs[0]["topic"].startswith(LABEL + " · ")
     assert evs[-1]["type"] == "run" and evs[-1]["status"] == "completed"
     assert all(e.get("run_id") in (run_id, None) for e in evs)
 
@@ -104,8 +105,9 @@ def test_each_prompt_is_its_own_run():
            hook("UserPromptSubmit", prompt="two"), hook("Stop")]
     evs, _ = replay(seq)
     runs = [(e["run_id"], e["status"], e["topic"]) for e in evs if e["type"] == "run"]
-    assert runs == [(f"{SID}:1", "started", LABEL), (f"{SID}:1", "completed", LABEL),
-                    (f"{SID}:2", "started", LABEL), (f"{SID}:2", "completed", LABEL)]
+    assert [(r, st) for r, st, _ in runs] == [(f"{SID}:1", "started"), (f"{SID}:1", "completed"),
+                                             (f"{SID}:2", "started"), (f"{SID}:2", "completed")]
+    assert all(topic.startswith(LABEL + " · ") for *_, topic in runs)
 
 
 def test_out_of_order_async_hooks_and_unknown_events():
@@ -163,7 +165,8 @@ def test_background_subagents_keep_the_run_and_main_agent_alive():
     ]
     evs, c = replay(seq)
     assert [e["agent"] for e in evs if e["type"] == "spawn"] == ["claude", "Explore"]
-    assert [(e["status"], e["topic"]) for e in evs if e["type"] == "run"] == [("started", LABEL), ("completed", LABEL)]
+    assert [e["status"] for e in evs if e["type"] == "run"] == ["started", "completed"]
+    assert all(e["topic"].startswith(LABEL + " · ") for e in evs if e["type"] == "run")
     assert [e["text"] for e in evs if e["type"] == "final"] == ["All done: 3"]
     ids = {e["agent"]: e["id"] for e in evs if e["type"] == "spawn"}
     assert [e["id"] for e in evs if e["type"] == "exit"] == [ids["Explore"], ids["claude"]]
@@ -211,3 +214,10 @@ def test_held_subagent_start_spawns_after_hold_without_agent_call():
     hub.ingest_live(cc.tick(10 + HOLD_MS))
     sp = [e for e in hub.buffer if e["type"] == "spawn"]
     assert [e["agent"] for e in sp] == ["claude", "Plan"] and sp[1]["subagent"] is True
+
+
+def test_run_label_distinguishes_sessions():
+    from agentglow.claude_code import run_label
+    a, b = run_label("/x/repo", "a3f2c9e1", 1_700_000_000_000), run_label("/x/repo", "b71d00aa", 1_700_000_000_000)
+    assert a.startswith("Claude Code · repo · a3f2 · ") and b.startswith("Claude Code · repo · b71d · ") and a != b
+    assert run_label("") == "Claude Code"

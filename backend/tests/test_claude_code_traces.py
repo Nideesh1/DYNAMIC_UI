@@ -23,8 +23,8 @@ def test_traces_only_replay():
         assert c.post("/v1/traces", json=req).status_code == 200
     evs = list(c.app.state.hub.buffer)
     runs = [e for e in evs if e["type"] == "run"]
-    assert [(r["status"], r["topic"], r["workflow"]) for r in runs] == [("started", "Claude Code", "claude-code"),
-                                                                        ("completed", "Claude Code", "claude-code")]
+    assert [(r["status"], r["workflow"]) for r in runs] == [("started", "claude-code"), ("completed", "claude-code")]
+    assert all(r["topic"].startswith("Claude Code · ") for r in runs)  # + session id + time, never the prompt
     spawns = [e for e in evs if e["type"] == "spawn"]
     assert [s["agent"] for s in spawns] == ["claude", "Explore", "Explore"]  # type from query_source_safe
     main = spawns[0]["id"]

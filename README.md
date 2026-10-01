@@ -22,11 +22,12 @@ Pick your path. Each one ends at **http://localhost:8100/neural** (no agents yet
 
 ### 1. Claude Code (only Node needed)
 ```bash
-npx agentglow claude                 # starts AgentGlow, opens the 3D view, runs claude with AgentGlow hooks + traces
-npx agentglow claude --install       # or make it always on (backs up and merges ~/.claude/settings.json)
-npx agentglow claude --uninstall     # undo
+npx agentglow setup                  # once: hooks + traces into ~/.claude/settings.json (backed up), opens the 3D view
+claude                               # then just use Claude Code as usual
 ```
-uv and Python are fetched automatically on first run. Pass Claude flags after `--` (`npx agentglow claude -- --model sonnet`).
+The server auto-starts with every `claude` session; watch at http://localhost:8100/neural. Undo with `npx agentglow remove`.
+uv and Python are fetched automatically on first run. Just trying it? `npx agentglow claude` runs one session with
+AgentGlow attached and installs nothing.
 Prefer asking Claude? Install the [agentglow skill](skills/agentglow) and say *"show my agents in 3D"*:
 ```bash
 mkdir -p ~/.claude/skills/agentglow && curl -fsSL \

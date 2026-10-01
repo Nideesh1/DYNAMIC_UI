@@ -5,32 +5,30 @@ your custom agents), every tool call, MCP calls and the final answer. No code, j
 [HTTP hooks](https://code.claude.com/docs/en/hooks) posting to AgentGlow's `POST /v1/claude-code`.
 
 ```bash
-npx agentglow claude
+npx agentglow setup        # once
+claude                     # then just use Claude Code as usual
 ```
-That's it: it starts the AgentGlow server (or reuses one already on the port), opens
-**http://localhost:8100/neural** and runs `claude` with the hooks + traces of [settings.json](settings.json). Only
-Node 18+ is needed; see [CLI](#cli) below.
+`setup` merges the hooks + traces of [settings.json](settings.json) into `~/.claude/settings.json` (backup first),
+adds a `SessionStart` hook that starts the AgentGlow server whenever `claude` starts, starts the server now and opens
+**http://localhost:8100/neural**. Only Node 18+ is needed. Hooks load at session start, so restart any Claude Code
+session that was already open. Undo everything with `npx agentglow remove`.
 
-Without the CLI (from the repo root):
-```bash
-uvx agentglow serve                                          # terminal 1 → http://localhost:8100
-claude --settings examples/claude-code/settings.json         # terminal 2
-```
-Open **http://localhost:8100/neural** and give Claude a task.
+Just trying it? `npx agentglow claude` runs one Claude Code session with temporary settings and installs nothing.
 
 ## CLI
 
 | Command | What it does |
 |---|---|
-| `npx agentglow claude [--port 8100] [--no-open] [-- <claude args>]` | start/reuse the server, open `/neural`, run `claude --settings <temp file> <claude args>`; exits with Claude's exit code and leaves the server running |
-| `npx agentglow claude --install [--port 8100]` | merge the hooks + traces env into `~/.claude/settings.json` (backup `settings.json.agentglow-backup-<time>` first; running it twice changes nothing) |
-| `npx agentglow claude --uninstall` | remove exactly the AgentGlow hooks (URL contains `/v1/claude-code`) and env keys it added; everything else stays |
-| `npx agentglow serve [--port 8100]` | run the server in the foreground |
-| `npx agentglow stop [--port 8100]` | stop a server the CLI started in the background |
+| `npx agentglow setup [--port 8100]` | install hooks + traces env + the auto-start `SessionStart` hook into `~/.claude/settings.json` (backup `settings.json.agentglow-backup-<time>` first; running it twice changes nothing), start the server, open `/neural` |
+| `npx agentglow status [--port 8100]` | is it installed, is the server up, where are the logs |
 | `npx agentglow open [--port 8100]` | open the 3D view |
+| `npx agentglow stop [--port 8100]` | stop a server the CLI started in the background |
+| `npx agentglow remove` | uninstall and stop the server: remove exactly what `setup` added (hooks whose URL contains `/v1/claude-code`, its env keys, the auto-start hook); everything else stays |
+| `npx agentglow start [--port 8100] [--background]` | run the server (foreground by default); `serve` is an alias |
+| `npx agentglow claude [--port 8100] [--no-open] [-- <claude args>]` | try mode: start/reuse the server, open `/neural`, run `claude --settings <temp file> <claude args>`; exits with Claude's exit code and leaves the server running |
 
-Examples: `npx agentglow claude -- -p "Launch 2 Explore subagents in parallel..." --model sonnet`,
-`npx agentglow claude --port 8165 --no-open`.
+Example: `npx agentglow claude -- -p "Launch 2 Explore subagents in parallel..." --model sonnet`.
+`npx agentglow claude --install` / `--uninstall` still work as deprecated aliases for `setup` / `remove`.
 
 How the server starts: if something healthy answers `/live/health` on the port it is reused. Otherwise the CLI runs
 `agentglow serve` from PyPI (same version as the npm package) through `uvx`, `uv`, or, when neither is installed, a
@@ -42,11 +40,19 @@ the pidfile live in the same folder.
 | Variable | Effect |
 |---|---|
 | `AGENTGLOW_URL` | use this server (e.g. a shared `https://agentglow.yourco.com`) instead of starting one; hooks + traces point at it |
-| `AGENTGLOW_API_KEY` | ingest key; the hooks send it as `x-api-key`, and `npx agentglow claude` also sets `OTEL_EXPORTER_OTLP_HEADERS` for the traces |
+| `AGENTGLOW_API_KEY` | ingest key; the hooks send it as `x-api-key`, and the CLI also sets `OTEL_EXPORTER_OTLP_HEADERS` for the traces |
 | `AGENTGLOW_CACHE_DIR` | where uv, logs and pidfiles go |
 
-To make it permanent for a project, copy the `"hooks"` block of [settings.json](settings.json) into that project's
-`.claude/settings.json` (or `~/.claude/settings.json` for every project).
+## Wiring the hooks by hand
+
+Prefer no CLI? From the repo root:
+```bash
+uvx agentglow serve                                          # terminal 1 → http://localhost:8100
+claude --settings examples/claude-code/settings.json         # terminal 2
+```
+To make it permanent, copy the `"hooks"` (and optionally `"env"`) block of [settings.json](settings.json) into
+`~/.claude/settings.json` (every project) or a project's `.claude/settings.json` (hooks only, see below). You then
+start the server yourself.
 
 ## What you see
 
@@ -90,12 +96,12 @@ Every hook in [settings.json](settings.json) already sends `"headers": {"x-api-k
 `"allowedEnvVars": ["AGENTGLOW_API_KEY"]`, so Claude Code fills the key from your shell (it only interpolates variables
 listed in `allowedEnvVars`). Unset, the header is empty and a server without a key ignores it. Never paste the key
 into the file. The OTel traces need the same key as an OTLP header; set both in your shell (the `"env"` block cannot
-read shell variables):
+read shell variables). After `npx agentglow setup`, put both in your shell profile so every `claude` picks them up:
 
 ```bash
 export AGENTGLOW_API_KEY=...                                   # same value as the server's AGENTGLOW_INGEST_KEY
 export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=$AGENTGLOW_API_KEY"
-claude --settings examples/claude-code/settings.json
+claude
 ```
 With a wrong or missing key AgentGlow answers 401; Claude Code treats that as a non-blocking hook error and carries on.
 
@@ -116,5 +122,5 @@ pairs each subagent with its exact `Agent` call via the `toolUseId` in the subag
   > Launch 4 Explore subagents in parallel in a single message, one each for backend/, frontend/src, examples/
   > and docs/. Each should summarize what lives there in 3 bullets. Then combine their answers into one overview.
 - Ask for **foreground** subagents in the prompt. Background ones work too, but the main agent just waits.
-- Start a fresh `agentglow serve` before recording. A viewer that connects later only replays runs still in progress.
+- Restart the server before recording (`npx agentglow stop`, then `npx agentglow start --background`). A viewer that connects later only replays runs still in progress.
 - Use `--model haiku` for fast, cheap takes. Use the real model for the final take.
