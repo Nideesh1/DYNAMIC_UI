@@ -1,0 +1,27 @@
+# One ignore file for every image: docker-compose builds them all with the repo root as context.
+**/.git
+**/.venv
+**/node_modules
+**/__pycache__
+**/dist
+**/*.log
+**/.ruff_cache
+**/.pytest_cache
+# secrets in any folder (only the example is safe to send)
+**/.env
+**/.env.*
+!.env.example
+# built inside the image (backend/Dockerfile ui stage)
+backend/agentglow/static
+# repo-only folders the images never use
+.github
+docs
+plugin
+.claude-plugin
+skills
+# local data some checkouts keep next to the code (not part of the repo)
+corpus
+graph
+blockparty
+cb6
+ref
