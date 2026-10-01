@@ -3,11 +3,10 @@
  * cylinder as glowing window-lights, with the graph's edges traced across the facade like circuitry.
  * Flares make nodes blaze (reads = agent colour, writes = white + a beam shooting into the sky) and briefly name them.
  */
-import { GraphLabel } from "../shared/GraphLabel";
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import type { Galaxy } from "../shared/useSceneSetup";
 import { nodeIndex } from "../shared/useSceneSetup";
 import { KIND_COLOR, TYPE_COLOR, world } from "../shared/world";
@@ -90,7 +89,7 @@ export function DataTower({ galaxy }: { galaxy: Galaxy }) {
   const crown = useRef<THREE.Mesh>(null);
   const core = useRef<THREE.Mesh>(null);
   const labelGroups = useRef<(THREE.Group | null)[]>([]);
-  const labelEls = useRef<(HTMLDivElement | null)[]>([]);
+  const labelEls = useRef<(Label3DHandle | null)[]>([]);
   const labelState = useRef<{ node: string; key: string }[]>(Array.from({ length: LABELS }, () => ({ node: "", key: "" })));
   const readAmt = useMemo(() => new Float32Array(n), [n]);
   const writeAmt = useMemo(() => new Float32Array(n), [n]);
@@ -253,19 +252,18 @@ export function DataTower({ galaxy }: { galaxy: Galaxy }) {
         const key = `${f.node}|${f.op}`;
         if (ls[slot].key !== key) {
           const inst = world.instances.get(f.instance);
-          el.textContent = f.op === "write" ? `wrote · ${f.node}` : f.node;
-          el.style.setProperty("--c", f.op === "write" ? "#ffffff" : inst ? TYPE_COLOR[inst.type] : "#c7d2fe");
+          el.setText(f.op === "write" ? `wrote · ${f.node}` : f.node);
+          el.setColor(f.op === "write" ? "#ffffff" : inst ? TYPE_COLOR[inst.type] : "#c7d2fe");
           ls[slot].key = key;
         }
-        el.style.opacity = String(1 - clamp01((now - f.start - 1100) / 500));
-        el.style.display = "";
+        el.setOpacity(1 - clamp01((now - f.start - 1100) / 500));
       }
       ls[slot].node = f.node;
       slot++;
     }
     for (let s = slot; s < LABELS; s++) {
       const el = labelEls.current[s];
-      if (el && el.style.display !== "none") el.style.display = "none";
+      el?.setOpacity(0);
       ls[s].node = "";
       ls[s].key = "";
     }
@@ -325,16 +323,10 @@ export function DataTower({ galaxy }: { galaxy: Galaxy }) {
       </instancedMesh>
       {Array.from({ length: LABELS }, (_, k) => (
         <group key={k} ref={(g) => void (labelGroups.current[k] = g)}>
-          <Html center style={{ pointerEvents: "none" }} zIndexRange={[6, 0]}>
-            <div ref={(el) => void (labelEls.current[k] = el)} className="scene-label city-node-label" style={{ display: "none" }} />
-          </Html>
+          <Label3D ref={(el) => void (labelEls.current[k] = el)} text="" size={0.3} opacity={0} pxRange={[8, 12]} renderOrder={22} />
         </group>
       ))}
-      <Html center position={[0, H + 8, 0]} style={{ pointerEvents: "none" }} zIndexRange={[7, 0]}>
-        <div className="scene-label city-tower-label" style={{ ["--c" as string]: "#8b7dff" }}>
-          <GraphLabel />
-        </div>
-      </Html>
+      <GraphLabel3D position={[0, H + 8, 0]} color="#8b7dff" letterSpacing={0.06} glow={1.1} size={0.6} pxRange={[11, 16]} />
     </group>
   );
 }

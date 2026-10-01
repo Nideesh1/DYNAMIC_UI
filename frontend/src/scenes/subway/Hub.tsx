@@ -1,9 +1,9 @@
 /** Graph Central — the FalkorDB interchange in the middle of the map, plus flares / transfer beams to trains. */
-import { GraphLabel } from "../shared/GraphLabel";
-import { Html, Sparkles } from "@react-three/drei";
+import { Sparkles } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
 import { KIND_COLOR, TYPE_COLOR, world } from "../shared/world";
 import { hdr, hub, HUB_Y, nodeWorld, R, reduced, trainPos } from "./layout";
@@ -137,11 +137,7 @@ export function GraphCentral({ galaxy }: { galaxy: Galaxy }) {
         <meshBasicMaterial color={hdr("#e0e7ff", 3)} toneMapped={false} />
       </mesh>
       <Sparkles count={reduced ? 20 : 60} scale={[7, 1.4, 7]} size={1.8} speed={0.25} color="#a5b4fc" opacity={0.55} />
-      <Html center position={[0, 2.1, 0]} distanceFactor={34} style={{ pointerEvents: "none" }} zIndexRange={[5, 0]}>
-        <div className="scene-label" style={{ ["--c" as string]: "#a5b4fc" }}>
-          <GraphLabel suffix=" · Graph Central" />
-        </div>
-      </Html>
+      <GraphLabel3D position={[0, 2.1, 0]} suffix=" · Graph Central" color="#a5b4fc" size={0.36} pxRange={[9.5, 14]} />
     </group>
   );
 }
@@ -257,7 +253,7 @@ export function Transfers({ galaxy }: { galaxy: Galaxy }) {
 
 function FlareLabel({ galaxy, op }: { galaxy: Galaxy; op: "read" | "write" }) {
   const g = useRef<THREE.Group>(null);
-  const div = useRef<HTMLDivElement>(null);
+  const div = useRef<Label3DHandle>(null);
   const last = useRef(0);
   useFrame(() => {
     const now = performance.now();
@@ -266,21 +262,19 @@ function FlareLabel({ galaxy, op }: { galaxy: Galaxy; op: "read" | "write" }) {
     const age = f ? now - f.start : 1e9;
     if (!g.current || !div.current) return;
     if (!f || age > 1700) {
-      div.current.style.opacity = "0";
+      div.current.setOpacity(0);
       return;
     }
     if (f.id !== last.current) {
       last.current = f.id;
-      div.current.textContent = (op === "write" ? "wrote · " : "") + f.node;
+      div.current.setText((op === "write" ? "wrote · " : "") + f.node);
       nodeWorld(sampleIndex(galaxy, f.node), g.current.position);
     }
-    div.current.style.opacity = String(Math.min(1, (1700 - age) / 400));
+    div.current.setOpacity(Math.min(1, (1700 - age) / 400));
   });
   return (
     <group ref={g}>
-      <Html center position={[0, op === "write" ? 1.1 : 0.7, 0]} distanceFactor={30} style={{ pointerEvents: "none" }} zIndexRange={[5, 0]}>
-        <div ref={div} className="scene-label subway-flare" style={{ ["--c" as string]: op === "write" ? "#ffffff" : "#a5b4fc", opacity: 0 }} />
-      </Html>
+      <Label3D ref={div} position={[0, op === "write" ? 1.1 : 0.7, 0]} text="" color={op === "write" ? "#ffffff" : "#a5b4fc"} size={0.28} opacity={0} fadeMs={200} pxRange={[8, 12]} />
     </group>
   );
 }

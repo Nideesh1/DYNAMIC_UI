@@ -4,6 +4,7 @@
  *  - heads: bright packet heads
  */
 import { useFrame } from "@react-three/fiber";
+import { isRunExpanded } from "../shared/lod";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { TYPE_COLOR, presence, waitSeconds, world } from "../shared/world";
@@ -12,7 +13,7 @@ import { DECOR } from "./Board";
 import { FLARE_TRAVEL, cellOf } from "./Bank";
 import { laneAlpha } from "./Lanes";
 import {
-  BANK_SPINE_X, BUS_X0, GATE_X, IO_SPINE_X, IO_X, Path, bankCell, clamp01, easeInOut, easeOut, isScout, laneZ, livePos, portZ, reduced, rgb,
+  BANK_SPINE_X, BUS_X0, GATE_X, IO_SPINE_X, IO_X, Path, bankCell, clamp01, easeInOut, easeOut, isScout, livePos, runZ, portZ, reduced, rgb,
 } from "./layout";
 
 const MAX_WALLS = 1800;
@@ -103,7 +104,8 @@ export function Fx({ galaxy }: { galaxy: Galaxy }) {
 
     // ---------------- Hatchet: handoff streaks + bus clock packets
     for (const r of world.runs.values()) {
-      const z = laneZ(r.slot);
+      if (!isRunExpanded(r.id)) continue; // collapsed runs live in their lane's cluster
+      const z = runZ(r.id, r.slot);
       const a = laneAlpha(r, now);
       const rc = rgb(r.color);
       // run start: streak from the bus origin to the plan gate
@@ -141,7 +143,7 @@ export function Fx({ galaxy }: { galaxy: Galaxy }) {
       if (!isScout(i)) {
         // stub from the chip down to its gate on the bus
         if (run) {
-          const z = laneZ(run.slot);
+          const z = runZ(run.id, run.slot);
           wall(cp.x, cp.z - 0.75, cp.x, z + 0.55, 0.02, 0.09, 0.03, rgb(run.color), 1.4 * pres);
         }
       }

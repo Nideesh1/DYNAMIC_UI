@@ -1,9 +1,8 @@
 /** FalkorDB = a constellation of graph nodes lining the outer tunnel shell. Flares ignite nodes; a laser ties the ship to the node (writes = white starburst). */
-import { GraphLabel } from "../shared/GraphLabel";
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, world } from "../shared/world";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
 import { SHELL_R, ships, starTexture } from "./lanes";
@@ -120,7 +119,8 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
   const d = useMemo(() => new THREE.Vector3(), []);
   const star = useMemo(() => starTexture(), []);
   const labelGroups = useRef<(THREE.Group | null)[]>([]);
-  const labelEls = useRef<(HTMLDivElement | null)[]>([]);
+  const labelEls = useRef<(Label3DHandle | null)[]>([]);
+  const labelOp = useRef<string[]>([]);
   const labelNode = useRef<number[]>([-1, -1, -1]);
 
   useFrame(({ clock }) => {
@@ -199,13 +199,12 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
       if (g2 && el) {
         g2.position.set(layout[k * 3] * 1.0, layout[k * 3 + 1] * 1.0, layout[k * 3 + 2]);
         g2.position.multiplyScalar(1);
-        if (labelNode.current[nl2] !== k || el.dataset.op !== f.op) {
-          el.textContent = (f.op === "write" ? "✦ wrote " : "") + f.node;
-          el.dataset.op = f.op;
-          el.style.setProperty("--c", f.op === "write" ? "#ffffff" : (KIND_COLOR[galaxy.nodes[k]?.kind] ?? "#a5b4fc"));
+        if (labelNode.current[nl2] !== k || labelOp.current[nl2] !== f.op) {
+          el.setText((f.op === "write" ? "wrote · " : "") + f.node);
+          labelOp.current[nl2] = f.op;
+          el.setColor(f.op === "write" ? "#ffffff" : (KIND_COLOR[galaxy.nodes[k]?.kind] ?? "#a5b4fc"));
         }
-        el.style.opacity = String(Math.min(1, (1.6 - age) * 2.5));
-        el.style.display = "";
+        el.setOpacity(Math.min(1, (1.6 - age) * 2.5));
         labelNode.current[nl2] = k;
       }
       nl2++;
@@ -213,7 +212,7 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
     for (let z = nl2; z < NAME_LABELS; z++) {
       labelNode.current[z] = -1;
       const el = labelEls.current[z];
-      if (el) el.style.display = "none";
+      el?.setOpacity(0);
     }
 
     for (const m of [rings.current, bursts.current, lasers.current]) {
@@ -264,17 +263,11 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
         <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
       </instancedMesh>
       <group position={[0, SHELL_R + 2.2, -30]}>
-        <Html center style={{ pointerEvents: "none" }} zIndexRange={[4, 0]}>
-          <div className="scene-label" style={{ ["--c" as string]: "#a5b4fc", fontSize: 13, letterSpacing: "0.04em" }}>
-            <GraphLabel />
-          </div>
-        </Html>
+        <GraphLabel3D color="#a5b4fc" letterSpacing={0.04} size={0.5} pxRange={[10, 14]} />
       </group>
       {Array.from({ length: NAME_LABELS }, (_, z) => (
         <group key={z} ref={(g) => void (labelGroups.current[z] = g)}>
-          <Html center position={[0, 0.7, 0]} style={{ pointerEvents: "none" }} zIndexRange={[4, 0]}>
-            <div ref={(d) => void (labelEls.current[z] = d)} className="scene-label" style={{ display: "none", fontSize: 11 }} />
-          </Html>
+          <Label3D ref={(d) => void (labelEls.current[z] = d)} position={[0, 0.7, 0]} text="" size={0.3} opacity={0} pxRange={[8, 12]} />
         </group>
       ))}
     </>

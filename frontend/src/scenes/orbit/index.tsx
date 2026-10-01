@@ -9,6 +9,8 @@ import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocess
 import { useState } from "react";
 import { Hud } from "../shared/Hud";
 import { tick } from "../shared/world";
+import { lodTick } from "../shared/lod";
+import { OrbitClusters } from "./Clusters";
 import { useSceneSetup } from "../shared/useSceneSetup";
 import { Agents } from "./Agents";
 import { GalaxyCore } from "./Galaxy";
@@ -17,7 +19,10 @@ import { Beams, Comets, McpPackets, Satellites } from "./Links";
 import { RunRings } from "./Runs";
 
 function Ticker() {
-  useFrame(() => tick());
+  useFrame(() => {
+    tick();
+    lodTick();
+  });
   return null;
 }
 
@@ -38,6 +43,7 @@ export default function Scene() {
         <Comets />
         <McpPackets />
         <Satellites />
+        <OrbitClusters />
         <OrbitControls makeDefault enableDamping dampingFactor={0.06} autoRotate={false} minDistance={8} maxDistance={70} />
         <EffectComposer multisampling={0}>
           <Bloom mipmapBlur intensity={1.3} luminanceThreshold={0.2} luminanceSmoothing={0.25} radius={0.78} />

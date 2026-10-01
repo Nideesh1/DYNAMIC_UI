@@ -1,6 +1,7 @@
 /** Shared geometry + mutable registries for the /tunnel scene (read/written inside useFrame, never React state). */
 import * as THREE from "three";
 import type { AgentType, StepName } from "../shared/world";
+import { jit } from "../shared/spread";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 /** global motion multiplier (prefers-reduced-motion → much calmer) */
@@ -26,6 +27,8 @@ export const FORK = { start: STEP_LOCAL.research + 2, out: STEP_LOCAL.research -
 
 const SLOT_DEG = [212, 328, 90, 270, 32, 148];
 export const laneAngle = (slot: number) => (SLOT_DEG[slot % SLOT_DEG.length] * Math.PI) / 180 + Math.floor(slot / SLOT_DEG.length) * 0.22;
+/** a run's lane angle: its slot angle swung by a seeded ±~11° so runs don't ride the exact same rail every time */
+export const runLaneAngle = (runId: string, slot: number) => laneAngle(slot) + jit(runId, 61) * 0.4;
 
 /** forward flight speed multiplier (eased toward 0 while paused) */
 export const flight = { speed: 1, paused: false };

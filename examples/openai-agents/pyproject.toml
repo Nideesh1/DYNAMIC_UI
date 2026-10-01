@@ -1,0 +1,15 @@
+[project]
+name = "agentglow-example-openai-agents"
+version = "0.1.0"
+description = "OpenAI Agents SDK support desk (handoffs + agent-as-tool), watched live in 3D by AgentGlow"
+requires-python = ">=3.10"
+dependencies = [
+  "agentglow[openai-agents]",
+  "openai-agents",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agentglow = { workspace = true }  # in this repo; outside it, the published `agentglow` from PyPI is used

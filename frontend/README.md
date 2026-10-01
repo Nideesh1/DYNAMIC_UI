@@ -1,12 +1,12 @@
 # agentglow
 
 **Live 3D views of agent systems, as a React component.** Every agent your system spawns appears as a
-living shape (a neuron, a train, a skyscraper, a jellyfish…): it's born when its span starts, thinks while it
+living shape (a neuron, a bee, a star, a tree, a flight…): it's born when its span starts, thinks while it
 calls the LLM, waits on MCP servers, passes messages to other agents, and fades out when its span ends.
 It is driven only by OpenTelemetry, via the [`agentglow`](https://github.com/Nideesh1/agentglow#quickstart)
 Python server, so it works with LangGraph, deepagents, LangChain and anything else that emits OTel spans.
 
-![neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-neural.png)
+![neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.gif)
 
 ## Install
 
@@ -55,7 +55,8 @@ reached, the scene falls back to the simulator on its own and shows a "simulated
 
 ### Next.js
 
-The scene uses WebGL, so render it on the client only:
+The package is marked `"use client"`, so you can import it straight into an App Router page. To skip server
+rendering of the WebGL canvas entirely, load it with `dynamic`:
 
 ```tsx
 "use client";
@@ -98,12 +99,26 @@ A cross-origin `source` requires the server to send CORS headers for `/live/*`.
 | `circuit` | Agent chips sit on run buses, wired to a memory bank and MCP I/O ports. |
 | `tunnel`  | A time warp. Runs are lanes and gates, and agents are ships. |
 | `flow`    | A murmuration. Agents condense as eddies out of the current. |
+| `hive`    | A glowing honeycomb. Agents are bees; subagents fly out as workers. |
+| `forest`  | A moonlit forest. Agents grow as trees, subagents as saplings, LLM calls as fireflies. |
+| `constellation` | A night sky. Delegation draws constellation lines between agent stars. |
+| `factory` | A neon factory floor. Agents are machines; work rides conveyor belts. |
+| `airport` | A radar scope. Agents are flights; handoffs are flight paths. |
+| `mycelium`| A glowing fungal network. Agents bloom as mushrooms on spreading threads. |
+| `atom`    | An atom. Agents are electrons; subagents orbit their parent. |
 
-| | |
-|---|---|
-| ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-orbit.png) | ![subway](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-subway.png) |
-| ![city](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-city.png) | ![ocean](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-ocean.png) |
-| ![circuit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-circuit.png) | ![tunnel](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-tunnel.png) |
+| | | |
+|:-:|:-:|:-:|
+| ![neural](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/neural.jpg) **neural** | ![hive](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hive.jpg) **hive** | ![constellation](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/constellation.jpg) **constellation** |
+| ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/orbit.jpg) **orbit** | ![forest](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/forest.jpg) **forest** | ![mycelium](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/mycelium.jpg) **mycelium** |
+| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![airport](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/airport.jpg) **airport** | ![factory](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/factory.jpg) **factory** |
+| ![city](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/city.jpg) **city** | ![ocean](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/ocean.jpg) **ocean** | ![subway](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/subway.jpg) **subway** |
+| ![circuit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/circuit.jpg) **circuit** | ![tunnel](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/tunnel.jpg) **tunnel** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** |
+
+## Many agents
+
+Above 12 live agents, older runs auto-group into clickable glowing clusters and the newest ~10 stay in full
+detail, so a scene stays readable (and ~60 fps) with hundreds of agents.
 
 ## One scene per page
 

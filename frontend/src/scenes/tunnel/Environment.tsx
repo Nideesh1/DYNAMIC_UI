@@ -3,6 +3,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { tick, world } from "../shared/world";
+import { lodTick } from "../shared/lod";
 import { ACTIVE_Z, CAM_Z, GATE_GAP, MOTION, TUBE_R, flight, glowTexture, reduced, runZ } from "./lanes";
 
 const FAR = -215;
@@ -15,6 +16,7 @@ export function LaneDriver() {
     const dt = Math.min(rawDt, 0.5);
     const now = performance.now();
     tick(now);
+    lodTick(now);
     flight.speed += ((flight.paused ? 0 : 1) - flight.speed) * Math.min(1, dt * 2.5);
     for (const r of world.runs.values()) {
       let z = runZ.get(r.id);

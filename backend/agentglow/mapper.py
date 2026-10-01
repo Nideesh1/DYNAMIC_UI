@@ -13,6 +13,27 @@ Agent detection, verified against real deepagents + OpenInference spans (tests/f
   node) → `subagent: true`. Delegation text = the parent LLM's `task` tool call args (subagent_type, description).
 - LLM: kind LLM / gen_ai chat ops, or (at start) child of a `model` node. Tool: kind TOOL / execute_tool, or
   (at start) child of the `tools` node.
+
+OpenAI Agents SDK via openinference-instrumentation-openai-agents (tests/fixtures/openai_agents_spans.json):
+
+- Kinds ARE set at start. The SDK trace itself becomes an AGENT span named after the workflow ("Agent workflow"),
+  parent of a CHAIN task span, parent of one AGENT span per agent (name = agent name) → `turn` → `response` (LLM)
+  / function (TOOL) / `handoff` (TOOL, renamed `handoff to X` at end). So an AGENT-kind span with no agent above it
+  is only a *candidate*: if an agent span starts below it, it's a workflow container (never spawned); if an
+  LLM/tool starts below it first, it's an agent. Unresolved at end → agent.
+- Handoffs: agent spans are siblings under the container → the run's previous top-level agent becomes the parent
+  (`handoff → X` message). The `handoff` tool event is named after the model's `transfer_to_*` call.
+- `agent.as_tool`: the nested run's agent span sits under the function TOOL span → `subagent: true`, delegation
+  text = that tool call's input. Agent spans carry no output: exit text / run final = the agent's last LLM text.
+
+langgraph-supervisor (tests/fixtures/langgraph_supervisor_spans.json): the compiled team graph R has one node span
+per agent. The supervisor is a subgraph node (`supervisor` node → `supervisor` graph → `agent`/`tools`), re-entered
+every turn; workers are `<name>` node → `call_agent` → `<name>` graph. Once the supervisor's first `transfer_to_*`
+tool starts, R becomes a *team*: the first supervisor graph is THE supervisor instance (exit deferred to R's end),
+later same-name supervisor graphs under R are aliases of it, and any agent graph under R is its subagent (delegation
+text = the supervisor's text that turn, else the latest user request). Handoff tools emit no `tool` event; the
+supervisor is `waiting` while a worker runs. Prebuilt react agents' `agent` node has CHAIN children (RunnableSequence,
+call_model, should_continue): only spans whose kind is LLM (or unknown) produce `llm` events.
 """
 from __future__ import annotations
 
@@ -106,6 +127,12 @@ class Span:
     tool_name: str = ""
     mcp: tuple | None = None  # (server, tool, resource, kind) once the call was emitted
     step: str | None = None
+    candidate: str | None = None  # AGENT-kind span awaiting proof it is an agent, not a workflow container
+    container: bool = False  # workflow container (OpenAI Agents trace span): not an agent itself
+    preview: str = ""  # tool call args preview (delegation text for an agent-as-tool subagent)
+    alias: str | None = None  # later turn of an agent already on screen (langgraph-supervisor): owner = that agent
+    team: str | None = None  # langgraph-supervisor team graph: id of its supervisor agent
+    persist: bool = False  # supervisor agent: exits when its team graph ends, not when its first turn ends
 
 
 @dataclass
@@ -115,6 +142,9 @@ class Agent:
     thinking: bool = False
     pending: list = field(default_factory=list)  # [(tool_name, args)] from its last LLM output
     tasks: dict = field(default_factory=dict)  # subagent_type -> description (deepagents task calls)
+    last_text: str = ""  # text of its last LLM output (exit message / final when spans carry no output)
+    turn_text: str = ""  # text of its latest LLM output, empty if that output was only tool calls
+    request: str = ""  # latest user message its LLM saw (langgraph-supervisor delegation text)
 
 
 @dataclass
@@ -128,6 +158,7 @@ class Run:
     last_top: str | None = None
     final: bool = False
     synthetic: str | None = None
+    last_text: str = ""  # last top-level agent's output: final fallback at completion
 
 
 class Mapper:
@@ -207,12 +238,20 @@ class Mapper:
             out.append({"type": "step", "run_id": run_id, "step": s.step, "status": "running", "ts": ts})
 
         name = self._agent_name(s)
-        if name:
+        cand = self._candidate_above(s)
+        if cand is not None and not cand.container:
+            if name:  # an agent inside an AGENT-kind span → that span is a workflow container
+                cand.container, cand.candidate = True, None
+            elif self._is_llm(s) or self._is_tool(s):  # an LLM/tool directly in it → it is the agent
+                self._spawn(cand, cand.candidate or cand.name, out, cand.start)
+        if name and cand is None and a.get("openinference.span.kind") == "AGENT" and not self._ancestor_agent(s)[0]:
+            s.candidate = name  # OpenInference kind known at start (OpenAI Agents): wait for its first child
+        elif name:
             self._spawn(s, name, out, ts)
         elif parent and is_lg_node(s.name) and not parent.agent and not is_lg_node(parent.name) and not (parent.llm or parent.tool):
             self._spawn(parent, parent.name, out, parent.start)  # parent is a LangGraph agent graph
 
-        if self._is_llm(s) or (parent and parent.name in LLM_PARENTS) or s.name.startswith("Chat"):
+        if self._is_llm(s) or (not self._not_llm(s) and ((parent and parent.name in LLM_PARENTS) or s.name.startswith("Chat"))):
             s.llm = True
             self._thinking(self._owner(s, out), s.run, out, ts)
         elif self._is_tool(s) or (parent and parent.name == "tools"):
@@ -238,12 +277,14 @@ class Mapper:
         failed = s.status == "error"
 
         # late classification: attributes that only exist at end (OpenInference)
-        if not s.agent:
+        if not s.agent and not s.container and not s.alias and not s.team:
             name = self._agent_name(s)
             if name:
                 self._spawn(s, name, out, s.start)
         if not s.llm and self._is_llm(s):
             s.llm = True
+        elif s.llm and self._not_llm(s):  # guessed from its parent (`agent` node) but it's a chain, not a model call
+            s.llm = False
         if not s.tool and not s.llm and not s.agent and self._is_tool(s):
             self._tool_start(s, out, s.start)
         self._mcp_call(s, out, s.start)
@@ -254,6 +295,12 @@ class Mapper:
             tout = int(a.get("gen_ai.usage.output_tokens") or a.get("llm.token_count.completion") or a.get("gen_ai.usage.completion_tokens") or 0)
             out.append({"type": "llm", "run_id": s.run, "id": owner, "tokens_in": tin, "tokens_out": tout, "latency_ms": max(0, s.end - s.start), "ts": ts})
             self._remember_tool_calls(owner, a)
+            ag = self.agents.get(owner)
+            text = self._llm_text(a)
+            if ag and text:
+                ag.last_text = text
+            if ag:
+                ag.turn_text, ag.request = text, self._user_text(a) or ag.request
         if s.tool and s.tool_name == "task":
             owner = self._owner(s, out)
             self._thinking(owner, s.run, out, ts, force=True)
@@ -267,12 +314,22 @@ class Mapper:
             self._graph(s, out, ts)
         if "agentglow.final" in a:
             self._final(s.run, a["agentglow.final"], out, ts)
-        if s.agent:
+        if s.team:  # langgraph-supervisor team graph ended → its supervisor exits
+            ag = self.agents.get(s.team)
+            result = a.get("agentglow.output_text") or text_of(a.get("output.value"), 2000) or (ag.last_text if ag else "")
+            out.append({"type": "exit", "run_id": s.run, "id": s.team, "status": "failed" if failed else "done", "ts": ts})
+            if run and result:
+                run.last_text = result
+        if s.agent and not s.persist:
+            ag = self.agents.get(s.id)
+            result = a.get("agentglow.output_text") or text_of(a.get("output.value"), 2000) or (ag.last_text if ag else "")
             if s.parent_agent:
-                out.append({"type": "message", "run_id": s.run, "from_id": s.id, "to_id": s.parent_agent, "text": text_of(a.get("output.value")) or "done", "ts": ts})
+                out.append({"type": "message", "run_id": s.run, "from_id": s.id, "to_id": s.parent_agent, "text": result[:160] or "done", "ts": ts})
             out.append({"type": "exit", "run_id": s.run, "id": s.id, "status": "failed" if failed else "done", "ts": ts})
             if run and run.root == s.id:
-                self._final(s.run, text_of(a.get("output.value"), 2000), out, ts)
+                self._final(s.run, result, out, ts)
+            elif run and not s.subagent and result:
+                run.last_text = result
         if s.step:
             out.append({"type": "step", "run_id": s.run, "step": s.step, "status": "failed" if failed else "done", "ts": ts})
 
@@ -287,6 +344,7 @@ class Mapper:
                     self._complete(run, ts, out)
 
     def _complete(self, run: Run, ts: int, out: list) -> None:
+        self._final(run.id, run.last_text, out, ts)
         if run.synthetic:
             out.append({"type": "exit", "run_id": run.id, "id": run.synthetic, "status": "failed" if run.failed else "done", "ts": ts})
         root = self.spans.get(run.root or "")
@@ -315,27 +373,44 @@ class Mapper:
             return s.name
         return None
 
+    def _candidate_above(self, s: Span) -> Span | None:
+        """Nearest ancestor that is an agent candidate or workflow container, with no agent in between."""
+        cur, hops = self.spans.get(s.parent or ""), 0
+        while cur is not None and hops < 500 and not cur.agent:
+            if cur.candidate or cur.container:
+                return cur
+            cur, hops = self.spans.get(cur.parent or ""), hops + 1
+        return None
+
     def _ancestor_agent(self, s: Span) -> tuple[str | None, bool]:
         """(nearest ancestor agent span id, whether a tool span sits in between)."""
         via_tool, cur, hops = False, self.spans.get(s.parent or ""), 0
         while cur is not None and hops < 500:
             if cur.agent:
                 return cur.id, via_tool
+            if cur.alias:
+                return cur.alias, via_tool
+            if cur.team:  # an agent graph inside a langgraph-supervisor team is the supervisor's subagent
+                return cur.team, True
             via_tool = via_tool or cur.tool or cur.name == "task"
             cur, hops = self.spans.get(cur.parent or ""), hops + 1
         return None, via_tool
 
     def _spawn(self, s: Span, name: str, out: list, ts: int) -> None:
-        if s.agent:
+        if s.agent or s.alias:
             return
-        s.agent = name
+        host = self._team_host(s)
+        if host is not None and host.team and (self.agents.get(host.team) or Agent("", "")).name == name:
+            s.alias = host.team  # the supervisor's next turn: same agent instance, no new spawn
+            return
+        s.agent, s.candidate = name, None
         parent, via_tool = self._ancestor_agent(s)
         run = self.runs.get(s.run)
         s.subagent = bool(parent and via_tool)
         text = ""
         if parent:
             pa = self.agents.get(parent)
-            text = (pa.tasks.pop(name, "") if pa else "") or text_of(s.attrs.get("input.value")) or f"delegate → {name}"
+            text = (pa.tasks.pop(name, "") if pa else "") or text_of(s.attrs.get("input.value")) or self._tool_preview_above(s) or f"delegate → {name}"
         elif run:
             if run.last_top and run.last_top != s.id:  # handoff between top-level agents of one run (e.g. workflow steps)
                 parent = run.last_top
@@ -347,6 +422,14 @@ class Mapper:
         if parent:
             out.append({"type": "message", "run_id": s.run, "from_id": parent, "to_id": s.id, "text": text[:160], "ts": ts})
 
+    def _tool_preview_above(self, s: Span) -> str:
+        cur, hops = self.spans.get(s.parent or ""), 0
+        while cur is not None and hops < 500 and not cur.agent:
+            if cur.tool:
+                return cur.preview
+            cur, hops = self.spans.get(cur.parent or ""), hops + 1
+        return ""
+
     def _owner(self, s: Span, out: list) -> str:
         """Owning agent = nearest ancestor agent span; if none, promote the step/root ancestor to an implicit agent."""
         if s.agent and not (s.llm or s.tool):
@@ -354,6 +437,8 @@ class Mapper:
         found, _ = self._ancestor_agent(s)
         if found:
             return found
+        if s.alias:
+            return s.alias
         chain, cur = [], self.spans.get(s.parent or "")
         while cur is not None and len(chain) < 500:
             chain.append(cur)
@@ -371,6 +456,41 @@ class Mapper:
             out.append({"type": "spawn", "run_id": s.run, "id": run.synthetic, "agent": "agent", "parent_id": None, "subagent": False, "ts": s.start})
         return run.synthetic
 
+    def _team_host(self, s: Span) -> Span | None:
+        """langgraph-supervisor shape: agent graph `s` → same-name node span → team graph (not an agent)."""
+        node = self.spans.get(s.parent or "")
+        host = self.spans.get(node.parent or "") if node is not None and node.name == s.name else None
+        return host if host is not None and not host.agent and not host.alias else None
+
+    def _in_team(self, s: Span) -> bool:
+        cur, hops = self.spans.get(s.parent or ""), 0
+        while cur is not None and hops < 500:
+            if cur.team:
+                return True
+            cur, hops = self.spans.get(cur.parent or ""), hops + 1
+        return False
+
+    def _handoff(self, s: Span, owner: str, out: list, ts: int) -> bool:
+        """langgraph-supervisor `transfer_to_<worker>` / `transfer_back_to_*`: mark the team, queue the delegation
+        text, show the supervisor waiting. True → don't emit a tool event."""
+        name = s.tool_name
+        if not (name.startswith("transfer_to_") or name.startswith("transfer_back_to_")):
+            return False
+        sup = self.spans.get(owner)
+        if name.startswith("transfer_to_") and sup is not None and sup.agent:
+            host = self._team_host(sup)
+            if host is not None and not host.team:
+                host.team, sup.persist = sup.id, True
+        if not self._in_team(s):
+            return False
+        ag = self.agents.get(owner)
+        if name.startswith("transfer_to_") and ag:
+            worker = name.removeprefix("transfer_to_")
+            ag.tasks[worker] = ag.turn_text or ag.request or f"delegate → {worker}"
+            ag.thinking = False
+            out.append({"type": "agent", "run_id": s.run, "id": owner, "status": "waiting", "ts": ts})
+        return True
+
     def _thinking(self, owner: str, run: str, out: list, ts: int, force: bool = False) -> None:
         ag = self.agents.get(owner)
         if ag and (force or not ag.thinking):
@@ -383,8 +503,32 @@ class Mapper:
         return s.attrs.get("openinference.span.kind") == "LLM" or s.attrs.get("gen_ai.operation.name") in LLM_OPS
 
     @staticmethod
+    def _not_llm(s: Span) -> bool:
+        """Kind is known and is not a model call (e.g. a CHAIN child of a prebuilt react agent's `agent` node)."""
+        kind = s.attrs.get("openinference.span.kind")
+        return bool(kind) and kind != "LLM" and s.attrs.get("gen_ai.operation.name") not in LLM_OPS
+
+    @staticmethod
+    def _user_text(a: dict) -> str:
+        """Latest user message an LLM span saw (OpenInference flattened input messages)."""
+        best, text = -1, ""
+        for k, v in a.items():
+            m = re.match(r"llm\.input_messages\.(\d+)\.message\.role$", k)
+            if m and v == "user" and int(m[1]) > best:
+                c = a.get(f"llm.input_messages.{m[1]}.message.content")
+                if isinstance(c, str) and c.strip():
+                    best, text = int(m[1]), c
+        return " ".join(text.split())
+
+    @staticmethod
     def _is_tool(s: Span) -> bool:
         return s.attrs.get("openinference.span.kind") == "TOOL" or s.attrs.get("gen_ai.operation.name") == "execute_tool"
+
+    @staticmethod
+    def _llm_text(a: dict) -> str:
+        """Assistant text of an LLM span (OpenInference flattened output messages)."""
+        texts = [(k, v) for k, v in a.items() if re.match(r"llm\.output_messages\.\d+\.message\.content$", k) and isinstance(v, str) and v.strip()]
+        return texts[-1][1].strip() if texts else ""
 
     def _remember_tool_calls(self, owner: str, a: dict) -> None:
         ag = self.agents.get(owner)
@@ -411,6 +555,9 @@ class Mapper:
         owner = self._owner(s, out)
         ag = self.agents.get(owner)
         args: Any = None
+        if ag and (s.tool_name == "handoff" or s.tool_name.startswith("handoff to ")):
+            # OpenAI Agents handoff span: name it after the model's transfer_to_* call
+            s.tool_name = next((str(n) for n, _ in ag.pending if str(n).startswith("transfer_to_")), s.tool_name)
         if ag:
             for i, (n, ar) in enumerate(ag.pending):
                 if n == s.tool_name:
@@ -420,8 +567,13 @@ class Mapper:
             args = _json(a.get("input.value")) or a.get("input.value") or a.get("gen_ai.tool.call.arguments") or ""
         if s.tool_name == "task" and isinstance(args, dict):
             preview = f"{args.get('subagent_type', 'subagent')}: {args.get('description', '')}"
+        elif isinstance(args, dict) and set(args) == {"input"}:  # OpenAI Agents agent.as_tool call
+            preview = str(args["input"])
         else:
             preview = args if isinstance(args, str) else json.dumps(args, default=str)
+        s.preview = " ".join(preview.split())[:160]
+        if self._handoff(s, owner, out, ts):
+            return
         out.append({"type": "tool", "run_id": s.run, "id": owner, "tool": s.tool_name, "args_preview": " ".join(preview.split())[:120], "ts": ts})
         if s.tool_name == "task" and ag:
             ag.thinking = False

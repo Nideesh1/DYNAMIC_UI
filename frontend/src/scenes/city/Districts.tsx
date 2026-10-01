@@ -1,10 +1,11 @@
 /** Hatchet runs = city districts. Each has an avenue with 3 gated intersections (plan / research / write) and a light-trail car on handoff. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { RUN_LINGER_MS, STEPS, world, type Run, type StepName } from "../shared/world";
-import { AVENUE_Z, clamp01, districtFrame, easeInOut, GATE_X, reduced, STEP_COLOR } from "./layout";
+import { AVENUE_Z, clamp01, districtFrame, easeInOut, GATE_X, reduced, STEP_COLOR, displaySlot } from "./layout";
+import { isRunExpanded, lod } from "../shared/lod";
 
 const PLATE_W = 16;
 const PLATE_D = 9.6;
@@ -59,7 +60,8 @@ function Gate({ run, step }: { run: Run; step: StepName }) {
 }
 
 function District({ run }: { run: Run }) {
-  const f = useMemo(() => districtFrame(run.slot), [run.slot]);
+  const slot = displaySlot(run.id, run.slot); // re-evaluated on each list refresh (lod.version)
+  const f = useMemo(() => districtFrame(slot), [slot]);
   const runCol = useMemo(() => new THREE.Color(run.color), [run.color]);
   const plateMat = useMemo(() => new THREE.MeshBasicMaterial({ color: runCol, transparent: true, opacity: 0.05, depthWrite: false, toneMapped: false }), [runCol]);
   const lineMat = useMemo(() => new THREE.LineBasicMaterial({ color: runCol.clone().multiplyScalar(1.6), transparent: true, toneMapped: false }), [runCol]);
@@ -78,8 +80,7 @@ function District({ run }: { run: Run }) {
   const segMats = useMemo(() => [0, 1].map(() => new THREE.MeshBasicMaterial({ toneMapped: false })), []);
   const car = useRef<THREE.Group>(null);
   const streak = useRef<THREE.Mesh>(null);
-  const chips = useRef<(HTMLSpanElement | null)[]>([]);
-  const count = useRef<HTMLSpanElement>(null);
+  const label = useRef<Label3DHandle>(null);
   const lastKey = useRef("");
   const c = useMemo(() => new THREE.Color(), []);
 
@@ -117,7 +118,7 @@ function District({ run }: { run: Run }) {
         }
       }
     }
-    // DOM chips (only touch DOM when something changed)
+    // label text (only re-typeset when something changed)
     let alive = 0;
     let scouts = 0;
     world.instances.forEach((i) => {
@@ -129,16 +130,12 @@ function District({ run }: { run: Run }) {
     const key = `${run.steps.plan}${run.steps.research}${run.steps.write}${alive}${scouts}${run.status}${Math.round(vis * 10)}`;
     if (key !== lastKey.current) {
       lastKey.current = key;
-      STEPS.forEach((s, k) => {
-        const el = chips.current[k];
-        if (!el) return;
-        const st = run.steps[s];
-        el.dataset.st = st;
-        el.style.setProperty("--sc", STEP_COLOR[st]);
-      });
-      if (count.current) count.current.textContent = `${alive} agents${scouts ? ` · fan-out ×${scouts}` : ""}${run.status !== "started" ? ` · ${run.status}` : ""}`;
-      const root = count.current?.parentElement?.parentElement;
-      if (root) root.style.opacity = String(vis);
+      const count = `${alive} agents${scouts ? ` · fan-out ×${scouts}` : ""}${run.status !== "started" ? ` · ${run.status}` : ""}`;
+      label.current?.setText(
+        [{ text: run.topic, color: "#f8fafc" }, { text: `   ${count}`, color: "#a5b4fc" }],
+        STEPS.map((s, k) => ({ text: `${k ? "  ·  " : ""}${s.toUpperCase()}`, color: run.steps[s] === "queued" ? "#64748b" : STEP_COLOR[run.steps[s]] })),
+      );
+      label.current?.setOpacity(vis);
     }
   });
 
@@ -175,34 +172,37 @@ function District({ run }: { run: Run }) {
           <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
         </mesh>
       </group>
-      <Html center position={[0, 0.3, PLATE_Z + PLATE_D / 2 + 0.9]} style={{ pointerEvents: "none" }} zIndexRange={[5, 0]}>
-        <div className="scene-label city-district" style={{ ["--c" as string]: run.color }}>
-          <div className="city-district-top">
-            <b>{run.topic}</b>
-            <span ref={count} className="city-count" />
-          </div>
-          <div className="city-steps">
-            {STEPS.map((s, k) => (
-              <span key={s} ref={(el) => void (chips.current[k] = el)} className="city-chip">
-                {s}
-              </span>
-            ))}
-          </div>
-        </div>
-      </Html>
+      <Label3D
+        ref={label}
+        position={[0, 0.3, PLATE_Z + PLATE_D / 2 + 0.9]}
+        text={run.topic}
+        secondary=""
+        plate="box"
+        textAlign="left"
+        color={run.color}
+        letterSpacing={0.02}
+        size={0.42}
+        secondarySize={0.3}
+        maxWidth={16}
+        opacity={0}
+        fadeMs={300}
+        pxRange={[10, 14]}
+      />
     </group>
   );
 }
 
 export function Districts() {
   const [list, setList] = useState<Run[]>([]);
-  const key = useRef("");
+  const known = useRef({ ids: new Set<string>(), version: -1 });
   useFrame(() => {
-    let k = "";
-    world.runs.forEach((_, id) => (k += id + "|"));
-    if (k !== key.current) {
-      key.current = k;
-      setList([...world.runs.values()]);
+    const kn = known.current;
+    let changed = kn.version !== lod.version || kn.ids.size !== world.runs.size;
+    if (!changed) for (const id of world.runs.keys()) if (!kn.ids.has(id)) { changed = true; break; }
+    if (changed) {
+      kn.version = lod.version;
+      kn.ids = new Set(world.runs.keys());
+      setList([...world.runs.values()].filter((r) => isRunExpanded(r.id)));
     }
   });
   return (

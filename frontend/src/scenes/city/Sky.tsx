@@ -1,10 +1,12 @@
 /** Things in the air: message light-trails between rooftops, MCP blimps, drone packets and pending-call tethers. */
-import { Html, Trail } from "@react-three/drei";
+import { Trail } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Label3D } from "../shared/Label3D";
 import { TYPE_COLOR, waitSeconds, world, type Comet, type McpCall, type McpServer } from "../shared/world";
 import { clamp01, easeInOut, reduced, roofs } from "./layout";
+import { isExpanded, lod } from "../shared/lod";
 
 const _mid = new THREE.Vector3();
 function arc(from: THREE.Vector3, to: THREE.Vector3, t: number, lift: number, out: THREE.Vector3) {
@@ -19,15 +21,17 @@ function arc(from: THREE.Vector3, to: THREE.Vector3, t: number, lift: number, ou
 }
 
 /** keyed list of short-lived items, refreshed only when membership changes */
-function useLive<T extends { id: number }>(get: () => T[]) {
+function useLive<T extends { id: number }>(get: () => T[], keep: (x: T) => boolean = () => true) {
   const [list, setList] = useState<T[]>([]);
   const key = useRef("");
   useFrame(() => {
+    // while grouped, only items between drawn (expanded) agents get a trail — keeps the Trail count bounded
+    const all = !lod.grouped;
     let k = "";
-    for (const c of get()) k += c.id + ",";
+    for (const c of get()) if (all || keep(c)) k += c.id + ",";
     if (k !== key.current) {
       key.current = k;
-      setList(get().slice());
+      setList(all ? get().slice() : get().filter(keep));
     }
   });
   return list;
@@ -63,7 +67,7 @@ function CometTrail({ comet }: { comet: Comet }) {
 }
 
 export function Comets() {
-  const list = useLive(() => world.comets);
+  const list = useLive(() => world.comets, (c) => isExpanded(c.from) && isExpanded(c.to));
   return (
     <group>
       {list.map((c) => (
@@ -192,11 +196,7 @@ function Blimp({ server }: { server: McpServer }) {
         <sphereGeometry args={[1, 24, 16]} />
         <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
       </mesh>
-      <Html center position={[0, 1.7, 0]} style={{ pointerEvents: "none" }} zIndexRange={[4, 0]}>
-        <div className="scene-label city-mcp-label" style={{ ["--c" as string]: server.color }}>
-          mcp · {server.name}
-        </div>
-      </Html>
+      <Label3D position={[0, 1.7, 0]} text={`mcp · ${server.name}`} font="mono" color={server.color} size={0.34} pxRange={[9, 13]} />
     </group>
   );
 }
@@ -255,7 +255,7 @@ function Drone({ call }: { call: McpCall }) {
 }
 
 export function Drones() {
-  const list = useLive(() => world.mcpCalls);
+  const list = useLive(() => world.mcpCalls, (c) => isExpanded(c.instance));
   return (
     <group>
       {list.map((c) => (

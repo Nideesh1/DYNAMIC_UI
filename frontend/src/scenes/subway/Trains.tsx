@@ -3,8 +3,9 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { energy, FADE_MS, presence, TYPE_COLOR, world } from "../shared/world";
-import { hdr, homeR, isScout, laneOffset, linePoint, R, reduced, scoutCount, scoutLane, slotAngle, spurShape, trainPos, TRAIN_Y } from "./layout";
+import { energy, lingerMs, presence, TYPE_COLOR, world } from "../shared/world";
+import { lodScale } from "../shared/lod";
+import { displaySlot, hdr, homeROf, isScout, laneOffset, lineAngle, linePoint, R, reduced, scoutCount, scoutLane, spurShape, trainPos, TRAIN_Y } from "./layout";
 
 // shared geometries
 const G = {
@@ -28,6 +29,8 @@ export function Train({ id, selected, onSelect }: { id: string; selected: boolea
   const inst0 = world.instances.get(id)!;
   const color = TYPE_COLOR[inst0.type];
   const scout = isScout(inst0.type);
+  const lane = useMemo(() => (scout ? scoutLane(inst0) : 0), [inst0, scout]);
+  const home = useMemo(() => homeROf(inst0), [inst0]);
   const group = useRef<THREE.Group>(null);
   const car = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Mesh>(null);
@@ -68,15 +71,13 @@ export function Train({ id, selected, onSelect }: { id: string; selected: boolea
     const run = world.runs.get(inst.run);
     const st = s.current;
     if (run) st.slot = run.slot;
-    const angle = slotAngle(st.slot);
+    const angle = lineAngle(inst.run, displaySlot(inst.run, st.slot));
     const dt = Math.min(0.05, dtRaw);
     const now = performance.now();
     const p = presence(inst, now);
     const e = energy(inst, now);
-    const lane = scout ? scoutLane(id) : 0;
     const n = scoutCount.get(inst.run) ?? lane + 1;
     const off = scout ? laneOffset(lane, n) : 0;
-    const home = homeR(inst.type);
     let pending = false;
     for (const pd of world.mcpPending.values()) if (pd.instance === id) pending = true;
 
@@ -120,11 +121,11 @@ export function Train({ id, selected, onSelect }: { id: string; selected: boolea
     const t = clock.elapsedTime;
     const waiting = inst.status === "waiting" || pending;
     const breathe = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * (pending ? 2.2 : 1.4) + st.phase);
-    const exitAge = inst.exitAt ? (now - inst.exitAt) / FADE_MS : 0;
+    const exitAge = inst.exitAt ? Math.min(1, (now - inst.exitAt) / lingerMs(inst)) : 0;
 
     // car: grow in, then stretch & thin into the portal
     if (car.current) {
-      const sc = scout ? 1.1 : 1.35;
+      const sc = (scout ? 1.1 : 1.35) * lodScale();
       if (inst.exitAt) car.current.scale.set(sc * (1 + exitAge * 1.8), sc * Math.max(0.05, 1 - exitAge), sc * Math.max(0.05, 1 - exitAge));
       else car.current.scale.setScalar(sc * Math.max(0.001, p) * (1 + e * 0.06) * (pending ? 1 + breathe * 0.06 : 1));
       car.current.scale.x *= st.dir;

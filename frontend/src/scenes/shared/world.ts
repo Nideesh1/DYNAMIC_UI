@@ -133,6 +133,10 @@ export type Flare = { id: number; run: string; instance: string; node: string; o
 /** How long finished instances/runs stay visible while fading out (ms). */
 export const FADE_MS = 2500;
 export const RUN_LINGER_MS = 6000;
+/** Exit-fade length hook: lod.ts shortens it when the scene is crowded. Use `lingerMs(i)` instead of FADE_MS. */
+export const linger = { fadeMs: (_i: Instance): number => FADE_MS };
+/** How long this exited instance stays visible while fading out (ms). */
+export const lingerMs = (i: Instance) => linger.fadeMs(i);
 
 export const world = {
   runs: new Map<string, Run>(),
@@ -176,9 +180,18 @@ export function useWorld() {
   return world;
 }
 
+/** Stable pseudo-random 0..1 from a string (same id → same value, different ids → different values). */
+export const hash01 = (id: string, salt = 0) => {
+  let h = 2166136261 ^ salt;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  return ((h >>> 0) % 10007) / 10007;
+};
+
 function freeSlot(): number {
   const used = new Set([...world.runs.values()].map((r) => r.slot));
-  let s = 0;
+  const free = [0, 1, 2, 3, 4, 5].filter((s) => !used.has(s)); // random free lane so runs don't always land in the same place
+  if (free.length) return free[Math.floor(Math.random() * free.length)];
+  let s = 6;
   while (used.has(s)) s++;
   return s;
 }
@@ -370,10 +383,13 @@ export function apply(ev: WorldEvent) {
 }
 
 /** Remove faded instances, finished runs, old comets/flares. Call once per frame (cheap). */
+const runsWithInstances = new Set<string>();
 export function tick(now = performance.now()) {
   let changed = false;
+  runsWithInstances.clear();
   for (const [id, i] of world.instances) {
-    if (i.exitAt && now - i.exitAt > FADE_MS) {
+    runsWithInstances.add(i.run);
+    if (i.exitAt && now - i.exitAt > linger.fadeMs(i)) {
       world.instances.delete(id);
       world.archive.set(id, i);
       if (world.archive.size > ARCHIVE_MAX) world.archive.delete(world.archive.keys().next().value!);
@@ -381,7 +397,7 @@ export function tick(now = performance.now()) {
     }
   }
   for (const [id, r] of world.runs) {
-    if (r.endedAt && now - r.endedAt > RUN_LINGER_MS && ![...world.instances.values()].some((i) => i.run === id)) {
+    if (r.endedAt && now - r.endedAt > RUN_LINGER_MS && !runsWithInstances.has(id)) {
       world.runs.delete(id);
       changed = true;
     }
@@ -401,7 +417,7 @@ export function presence(i: Instance, now = performance.now()) {
   const born = Math.min(1, (now - i.bornAt) / 600);
   const grow = 1 - Math.pow(1 - born, 3);
   if (!i.exitAt) return grow;
-  return grow * Math.max(0, 1 - (now - i.exitAt) / FADE_MS);
+  return grow * Math.max(0, 1 - (now - i.exitAt) / linger.fadeMs(i));
 }
 
 /** Current pulse energy (decays after each LLM/tool event). */

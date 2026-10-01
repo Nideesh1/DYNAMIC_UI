@@ -2,16 +2,18 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import * as THREE from "three";
-import { energy, presence, TYPE_COLOR, world, type Instance } from "../shared/world";
+import { energy, lingerMs, presence, TYPE_COLOR, world, type Instance } from "../shared/world";
 import { makeBuildingMaterial } from "./buildingMaterial";
-import { bases, buildingSpec, clamp01, easeInOut, easeOut, homeOf, reduced, roofs } from "./layout";
+import { bases, buildingSpec, clamp01, displaySlot, easeInOut, easeOut, homeOf, reduced, roofs } from "./layout";
+import { isExpanded, lod, lodScale } from "../shared/lod";
 
 type SelectProps = { selectedRef: MutableRefObject<string | null>; onSelect: (id: string) => void };
 
 function Skyscraper({ inst, selectedRef, onSelect }: { inst: Instance } & SelectProps) {
   const run = world.runs.get(inst.run);
   const spec = useMemo(() => buildingSpec(inst), [inst]);
-  const home = useMemo(() => (run ? homeOf(inst, run, new THREE.Vector3()) : new THREE.Vector3()), [inst, run]);
+  const dslot = run ? displaySlot(run.id, run.slot) : 0; // layout slot (compact while grouped)
+  const home = useMemo(() => (run ? homeOf(inst, run, new THREE.Vector3()) : new THREE.Vector3()), [inst, run, dslot]);
   const color = TYPE_COLOR[inst.type];
   const { h, w, d } = spec;
 
@@ -69,11 +71,15 @@ function Skyscraper({ inst, selectedRef, onSelect }: { inst: Instance } & Select
     };
   }, [inst.id, home]);
 
+  const root = useRef<THREE.Group>(null);
   useFrame(({ clock }, dt) => {
     const now = performance.now();
     const t = clock.elapsedTime;
     const age = (now - inst.bornAt) / 1000;
-    const ex = inst.exitAt ? (now - inst.exitAt) / 1000 : -1;
+    const ls = lodScale();
+    if (root.current && root.current.scale.x !== ls) root.current.scale.setScalar(ls);
+    // exit timeline was authored for a 2.5s fade; compress it when lingerMs() is shorter (crowded)
+    const ex = inst.exitAt ? ((now - inst.exitAt) / 1000) * (2500 / lingerMs(inst)) : -1;
     const rise = easeOut(clamp01((age - 0.25) / 1.25));
     const sink = ex >= 0 ? easeInOut(clamp01((ex - 0.8) / 1.5)) : 0;
     const yOff = -h * (1 - rise) - (h + 0.4) * sink;
@@ -146,14 +152,14 @@ function Skyscraper({ inst, selectedRef, onSelect }: { inst: Instance } & Select
       if (sel.current.visible) sel.current.rotation.z += dt * 1.2;
     }
     const r = roofs.get(inst.id);
-    if (r) r.set(home.x, Math.max(0.3, roofY + 0.75), home.z);
+    if (r) r.set(home.x, Math.max(0.3, (roofY + 0.75) * ls), home.z);
   });
 
   if (!run) return null;
   const over = () => (document.body.style.cursor = "pointer");
   const out = () => (document.body.style.cursor = "");
   return (
-    <group position={home}>
+    <group position={home} ref={root}>
       <group ref={body}>
         <mesh geometry={geo} material={mat} onClick={(e) => (e.stopPropagation(), onSelect(inst.id))} onPointerOver={over} onPointerOut={out} />
         {/* mast */}
@@ -266,13 +272,15 @@ function Lineage() {
 
 export function Skyscrapers(props: SelectProps) {
   const [list, setList] = useState<Instance[]>([]);
-  const key = useRef("");
+  const known = useRef({ ids: new Set<string>(), version: -1 });
   useFrame(() => {
-    let k = "";
-    world.instances.forEach((_, id) => (k += id + "|"));
-    if (k !== key.current) {
-      key.current = k;
-      setList([...world.instances.values()].filter((i) => world.runs.has(i.run)));
+    const kn = known.current;
+    let changed = kn.version !== lod.version || kn.ids.size !== world.instances.size;
+    if (!changed) for (const id of world.instances.keys()) if (!kn.ids.has(id)) { changed = true; break; }
+    if (changed) {
+      kn.version = lod.version;
+      kn.ids = new Set(world.instances.keys());
+      setList([...world.instances.values()].filter((i) => world.runs.has(i.run) && isExpanded(i)));
     }
   });
   return (

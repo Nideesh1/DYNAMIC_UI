@@ -1,13 +1,13 @@
 /** Hatchet runs as BUS lanes: a wide glowing trace per run (placed by run.slot) with 3 raised GATES lit by step status. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { RUN_LINGER_MS, STEPS, world, type Run } from "../shared/world";
-import { BANK_SPINE_X, BUS_X0, GATE_X, clamp01, easeOut, laneZ, reduced, rgb } from "./layout";
+import { BANK_SPINE_X, BUS_X0, GATE_X, clamp01, easeOut, laneZ, reduced, rgb, runZ } from "./layout";
 
 const BUS_LEN = BANK_SPINE_X - BUS_X0;
-const STEP_GLYPH = { queued: "○", running: "●", done: "✓", failed: "✕" } as const;
+const STEP_TINT = { queued: "#64748b", running: "#fde68a", done: "#5eead4", failed: "#f87171" } as const;
 const QUEUED = new THREE.Color("#334155");
 const DONE = new THREE.Color("#5eead4");
 const FAILED = new THREE.Color("#ef4444");
@@ -29,14 +29,16 @@ function Lane({ run }: { run: Run }) {
   const gateMats = useRef<(THREE.MeshStandardMaterial | null)[]>([]);
   const edgeMats = useRef<(THREE.LineBasicMaterial | null)[]>([]);
   const beams = useRef<(THREE.Mesh | null)[]>([]);
-  const label = useRef<HTMLSpanElement>(null);
+  const label = useRef<Label3DHandle>(null);
   const lastLabel = useRef("");
   const runC = useMemo(() => rgb(run.color), [run.color]);
-  const z = laneZ(run.slot);
+  const lane = useRef<THREE.Group>(null);
 
   useFrame(({ clock }) => {
     const now = performance.now();
     const r = world.runs.get(run.id) ?? run;
+    // follows LOD regrouping (lane % 6, fan-out within a shared lane) without re-mounting
+    if (lane.current) lane.current.position.z += (runZ(r.id, r.slot) - lane.current.position.z) * 0.12;
     const a = laneAlpha(r, now);
     const t = clock.elapsedTime;
     if (draw.current) draw.current.scale.x = Math.max(0.001, easeOut(clamp01((now - r.startedAt) / 900)));
@@ -66,16 +68,19 @@ function Lane({ run }: { run: Run }) {
       }
     });
     if (label.current) {
-      const txt = STEPS.map((s) => `${s} ${STEP_GLYPH[r.steps[s]]}`).join("  ");
+      const txt = STEPS.map((s) => `${s}:${r.steps[s]}`).join(" ");
       if (txt !== lastLabel.current) {
         lastLabel.current = txt;
-        label.current.textContent = txt;
+        label.current.setText(
+          `${r.hasSteps ? "hatchet · " : ""}${r.topic}`,
+          STEPS.map((s, i) => ({ text: `${i ? "   " : ""}${s}${r.steps[s] === "done" ? " ·" : r.steps[s] === "failed" ? " ×" : ""}`, color: STEP_TINT[r.steps[s]] })),
+        );
       }
     }
   });
 
   return (
-    <group position={[0, 0, z]}>
+    <group ref={lane} position={[0, 0, runZ(run.id, run.slot)]}>
       {/* bus: draws in from the left when the run starts */}
       <group ref={draw} position={[BUS_X0, 0, 0]}>
         <mesh position={[BUS_LEN / 2, 0.015, 0]}>
@@ -110,13 +115,19 @@ function Lane({ run }: { run: Run }) {
           </mesh>
         </group>
       ))}
-      <Html position={[BUS_X0 + 0.2, 0.3, 0]} style={{ pointerEvents: "none", transform: "translate(-50%, -115%)" }}>
-        <div className="scene-label" style={{ ["--c" as string]: run.color, textAlign: "center", lineHeight: 1.35, borderRadius: 10 }}>
-          {run.hasSteps ? "hatchet · " : ""}{run.topic}
-          <br />
-          <span ref={label} style={{ fontWeight: 500, opacity: 0.8, fontSize: 11 }} />
-        </div>
-      </Html>
+      <Label3D
+        ref={label}
+        position={[BUS_X0 + 0.2, 0.3, 0]}
+        anchorY="bottom"
+        offset={[0, 0.15]}
+        plate="box"
+        text={`${run.hasSteps ? "hatchet · " : ""}${run.topic}`}
+        secondary=""
+        color={run.color}
+        size={0.36}
+        maxWidth={11}
+        pxRange={[10, 14]}
+      />
     </group>
   );
 }
@@ -136,11 +147,7 @@ export function GateHeaders() {
   return (
     <group>
       {STEPS.map((s) => (
-        <Html key={s} position={[GATE_X[s], 1.2, laneZ(3) - 2.6]} center style={{ pointerEvents: "none" }}>
-          <div className="scene-label" style={{ ["--c" as string]: "#5eead4", letterSpacing: "0.12em", textTransform: "uppercase", fontSize: 11 }}>
-            gate · {s}
-          </div>
-        </Html>
+        <Label3D key={s} position={[GATE_X[s], 1.2, laneZ(3) - 2.6]} text={`gate · ${s}`} color="#5eead4" uppercase letterSpacing={0.12} size={0.3} pxRange={[8.5, 12.5]} />
       ))}
     </group>
   );

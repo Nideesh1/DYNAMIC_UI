@@ -105,7 +105,7 @@ def test_sse_stream_replays_over_real_server():
 
 def test_graph_404_without_provider_and_health_and_spa():
     c = client()
-    assert c.get("/live/graph").status_code == 404
+    assert c.get("/live/graph").json() == {"nodes": [], "links": []}
     assert c.get("/live/health").json()["ok"] is True
     for path in ("/", "/neural", "/orbit"):
         r = c.get(path)

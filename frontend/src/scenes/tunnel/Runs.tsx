@@ -1,18 +1,23 @@
 /** Hatchet runs = glowing LANES along the tunnel wall; their steps = GATE RINGS lit by status; handoff = a bolt racing gate → gate. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { STEPS, world, type StepName } from "../shared/world";
-import { LANE_R, MOTION, STEP_LOCAL, ease3, laneAngle, runZ } from "./lanes";
+import { isRunExpanded, lod } from "../shared/lod";
+import { LANE_R, MOTION, STEP_LOCAL, ease3, runLaneAngle, runZ } from "./lanes";
 
-/** Re-render only when the key set of a Map changes (no per-frame allocation in the steady state). */
-export function useLiveKeys(get: () => Map<string, unknown>) {
+/**
+ * Re-render only when the key set of a Map changes (no per-frame allocation in the steady state).
+ * `keep` filters the keys (LOD: only expanded runs/agents); the filter re-runs when lod.version changes.
+ */
+export function useLiveKeys(get: () => Map<string, unknown>, keep?: (id: string) => boolean) {
   const [ids, setIds] = useState<string[]>([]);
   const cur = useRef(new Set<string>());
+  const seen = useRef(-1);
   useFrame(() => {
     const m = get();
-    let same = m.size === cur.current.size;
+    let same = m.size === cur.current.size && seen.current === lod.version;
     if (same)
       for (const k of m.keys())
         if (!cur.current.has(k)) {
@@ -21,7 +26,8 @@ export function useLiveKeys(get: () => Map<string, unknown>) {
         }
     if (!same) {
       cur.current = new Set(m.keys());
-      setIds([...m.keys()]);
+      seen.current = lod.version;
+      setIds(keep ? [...m.keys()].filter(keep) : [...m.keys()]);
     }
   });
   return ids;
@@ -37,7 +43,7 @@ const LANE_TO = -42;
 function RunLane({ id }: { id: string }) {
   const r0 = world.runs.get(id);
   const color = useMemo(() => new THREE.Color(r0?.color ?? "#818cf8"), [r0?.color]);
-  const angle = laneAngle(r0?.slot ?? 0);
+  const angle = runLaneAngle(id, r0?.slot ?? 0);
   const group = useRef<THREE.Group>(null);
   const gates = useRef<(THREE.Mesh | null)[]>([]);
   const arcs = useRef<(THREE.Mesh | null)[]>([]);
@@ -45,8 +51,7 @@ function RunLane({ id }: { id: string }) {
   const bolt = useRef<THREE.Mesh>(null);
   const dashes = useRef<THREE.InstancedMesh>(null);
   const anchor = useRef<THREE.Group>(null);
-  const l1 = useRef<HTMLSpanElement>(null);
-  const l2 = useRef<HTMLSpanElement>(null);
+  const lbl = useRef<Label3DHandle>(null);
   const labelKey = useRef("");
   const last = useRef<Record<StepName, string>>({ plan: "", research: "", write: "" });
   const popAt = useRef<Record<StepName, number>>({ plan: 0, research: 0, write: 0 });
@@ -124,10 +129,9 @@ function RunLane({ id }: { id: string }) {
     anchor.current?.position.set(LANE_R - 2.4, 0, labelZ.current);
     const st = r.steps[activeStep];
     const key = `${r.topic}|${activeStep}|${st}|${r.status}`;
-    if (key !== labelKey.current && l1.current && l2.current) {
+    if (key !== labelKey.current && lbl.current) {
       labelKey.current = key;
-      l1.current.textContent = r.topic;
-      l2.current.textContent = r.status === "completed" ? "run complete ✓" : r.hasSteps ? `hatchet · ${activeStep} ${st}` : "running…";
+      lbl.current.setText(r.topic, r.status === "completed" ? "run complete" : r.hasSteps ? `hatchet · ${activeStep} ${st}` : "running…");
     }
   });
 
@@ -165,20 +169,14 @@ function RunLane({ id }: { id: string }) {
         <meshBasicMaterial color={boltColor} toneMapped={false} />
       </mesh>
       <group ref={anchor}>
-        <Html center style={{ pointerEvents: "none" }} zIndexRange={[5, 0]}>
-          <div className="scene-label" style={{ ["--c" as string]: r0?.color ?? "#818cf8", textAlign: "center", lineHeight: 1.25 }}>
-            <span ref={l1} />
-            <br />
-            <span ref={l2} style={{ fontWeight: 500, fontSize: 10.5, opacity: 0.85, letterSpacing: "0.04em" }} />
-          </div>
-        </Html>
+        <Label3D ref={lbl} text="" secondary="" color={r0?.color ?? "#818cf8"} letterSpacing={0.02} size={0.42} maxWidth={14} pxRange={[10, 14.5]} />
       </group>
     </group>
   );
 }
 
 export function Runs() {
-  const ids = useLiveKeys(() => world.runs);
+  const ids = useLiveKeys(() => world.runs, isRunExpanded);
   return (
     <group>
       {ids.map((id) => (

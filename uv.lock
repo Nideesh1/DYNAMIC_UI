@@ -15,6 +15,9 @@ resolution-markers = [
 members = [
     "agentglow",
     "agentglow-example-deepagents-hatchet",
+    "agentglow-example-langgraph",
+    "agentglow-example-openai-agents",
+    "agentglow-example-quickstart",
 ]
 
 [manifest.dependency-groups]
@@ -43,6 +46,9 @@ hatchet = [
 langchain = [
     { name = "openinference-instrumentation-langchain" },
 ]
+openai-agents = [
+    { name = "openinference-instrumentation-openai-agents" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -60,12 +66,13 @@ requires-dist = [
     { name = "hatchet-sdk", extras = ["otel"], marker = "extra == 'hatchet'", specifier = ">=1.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "openinference-instrumentation-langchain", marker = "extra == 'langchain'", specifier = ">=0.1.30" },
+    { name = "openinference-instrumentation-openai-agents", marker = "extra == 'openai-agents'", specifier = ">=1.0" },
     { name = "opentelemetry-proto", specifier = ">=1.25" },
     { name = "opentelemetry-sdk", specifier = ">=1.25" },
     { name = "protobuf", specifier = ">=4.21" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27" },
 ]
-provides-extras = ["langchain", "hatchet", "falkordb"]
+provides-extras = ["langchain", "openai-agents", "hatchet", "falkordb"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -114,6 +121,71 @@ requires-dist = [
     { name = "openinference-instrumentation-mcp" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "python-dotenv" },
+]
+
+[[package]]
+name = "agentglow-example-langgraph"
+version = "0.1.0"
+source = { virtual = "examples/langgraph" }
+dependencies = [
+    { name = "agentglow", extra = ["langchain"] },
+    { name = "langchain" },
+    { name = "langchain-anthropic" },
+    { name = "langchain-google-genai" },
+    { name = "langchain-openai" },
+    { name = "langgraph" },
+    { name = "python-dotenv" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentglow", extras = ["langchain"], editable = "backend" },
+    { name = "langchain" },
+    { name = "langchain-anthropic" },
+    { name = "langchain-google-genai" },
+    { name = "langchain-openai" },
+    { name = "langgraph" },
+    { name = "python-dotenv" },
+]
+
+[[package]]
+name = "agentglow-example-openai-agents"
+version = "0.1.0"
+source = { virtual = "examples/openai-agents" }
+dependencies = [
+    { name = "agentglow", extra = ["openai-agents"] },
+    { name = "openai-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentglow", extras = ["openai-agents"], editable = "backend" },
+    { name = "openai-agents" },
+]
+
+[[package]]
+name = "agentglow-example-quickstart"
+version = "0.1.0"
+source = { virtual = "examples/quickstart" }
+dependencies = [
+    { name = "agentglow", extra = ["langchain"] },
+    { name = "deepagents" },
+    { name = "langchain" },
+    { name = "langchain-anthropic" },
+    { name = "langchain-google-genai" },
+    { name = "langchain-openai" },
+    { name = "python-dotenv" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentglow", extras = ["langchain"], editable = "backend" },
+    { name = "deepagents" },
+    { name = "langchain" },
+    { name = "langchain-anthropic" },
+    { name = "langchain-google-genai" },
+    { name = "langchain-openai" },
     { name = "python-dotenv" },
 ]
 
@@ -903,6 +975,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8d/2b/6ce81972d5c8cab9705fddce3153be63222d9e12fd96f8baba5038a744dd/googleapis_common_protos-1.75.5.tar.gz", hash = "sha256:c7a866fc34ed29a3b10af627a4b9b1dc2433313ca6e959f0ae4feb132047ed72", size = 156513, upload-time = "2026-09-29T19:26:14.863Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/65/b9/6b29500a1c581ff4d77fd83c6568d068bee06f1b139fb6eb0a4f2d4bce8a/googleapis_common_protos-1.75.5-py3-none-any.whl", hash = "sha256:d7285525c23039db98f2463e6d5a4f9b958b94d497f03a844ece3259c4e72d5d", size = 307737, upload-time = "2026-09-29T19:25:48.735Z" },
+]
+
+[[package]]
+name = "griffelib"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/af/018c10bc9edd42b6ef6db2e96b09542050d5253f9b195e74bc910b2d13ab/griffelib-2.3.0.tar.gz", hash = "sha256:7b0952caf5bca6afa4bb5ee8c6a2d183fe3f21b62efc5f6c7243cb2b26d2d115", size = 234534, upload-time = "2026-09-04T15:08:17.472Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/41/63/e876e789525063c840ccfa8857febdabd6523bcef9ce7eb979b9305ea895/griffelib-2.3.0-py3-none-any.whl", hash = "sha256:1b8f9cd525681c26b1d6d574faa1371651e8459ca51d209684f50b8096ae06e0", size = 169423, upload-time = "2026-09-04T15:08:12.956Z" },
 ]
 
 [[package]]
@@ -1763,6 +1844,29 @@ wheels = [
 ]
 
 [[package]]
+name = "openai-agents"
+version = "0.22.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "griffelib" },
+    { name = "httpx2" },
+    { name = "mcp" },
+    { name = "openai" },
+    { name = "pydantic" },
+    { name = "pyjwt" },
+    { name = "python-multipart" },
+    { name = "requests" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "urllib3" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/88/2a/78734078b2d6c2132fab1c4c0ca223b4085b3c983c135a5bd7171c5d57ff/openai_agents-0.22.3.tar.gz", hash = "sha256:33c79a5da0c9cf8ace0019bb09e268338d9162a18edbb6c2ce12bc139917109e", size = 6584491, upload-time = "2026-09-17T22:20:44.87Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/56/f5d32edb2e890a5dea9824cb76d179cef47c6a5ea8269d3559d092936106/openai_agents-0.22.3-py3-none-any.whl", hash = "sha256:41dec9e2e703db32a627bf0290f3721a6ca37405603a8cb654213356dbb8ee9d", size = 1149658, upload-time = "2026-09-17T22:20:42.768Z" },
+]
+
+[[package]]
 name = "openinference-instrumentation"
 version = "0.1.67"
 source = { registry = "https://pypi.org/simple" }
@@ -1807,6 +1911,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/69/27/54f55996a5c42c712bf3e6b0a945def59624e0a184f6820efb83343f5269/openinference_instrumentation_mcp-2.0.11.tar.gz", hash = "sha256:62f9071f98b1116e66757daf94fe9c487028f99d96a8f08a92ea0069c10df678", size = 8125, upload-time = "2026-10-01T02:33:17.834Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/af/a7/6a132cc9260295348aaa6a49212222719d80bbdb6ece47e2751851ebebf0/openinference_instrumentation_mcp-2.0.11-py3-none-any.whl", hash = "sha256:e454a1940ada424e2df8810ef74dfe0befa8ea5071c43865f72e77755ca15fb9", size = 9484, upload-time = "2026-10-01T02:33:16.745Z" },
+]
+
+[[package]]
+name = "openinference-instrumentation-openai-agents"
+version = "2.5.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "openinference-instrumentation" },
+    { name = "openinference-semantic-conventions" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "typing-extensions" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/47/ad/22ae96b3368966c7c3d7091d98cef172164aae5039e3b47cd1e61020c1b9/openinference_instrumentation_openai_agents-2.5.1.tar.gz", hash = "sha256:c000f6b3c995bd815755cdfe21015c8d17fe9f54065478a1dd0fe9377552ed33", size = 35752, upload-time = "2026-10-01T02:33:21.762Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/07/a66051588eed5ab0e5aa2e69d9e6a330fb5c232f9cb36e1d6efa6cdd98c5/openinference_instrumentation_openai_agents-2.5.1-py3-none-any.whl", hash = "sha256:4845686e8192e51c3aec8cdaa2714674295d1e8d74a1e10fc7409ddda6e730b8", size = 39183, upload-time = "2026-10-01T02:33:20.386Z" },
 ]
 
 [[package]]

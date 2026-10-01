@@ -1,23 +1,25 @@
 /** Hatchet runs as glowing ocean currents with three anemone-buoys (plan / research / write) and handoff pulses. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { RUN_LINGER_MS, STEPS, world, type Run } from "../shared/world";
-import { MOTION, STEP_X, dotTexture, X0, X1, bob, clamp01, laneY, laneZ, waveY, waveZ } from "./layout";
+import { isRunExpanded, lod } from "../shared/lod";
+import { MOTION, STEP_X, dotTexture, X0, X1, bob, clamp01, laneSlot, laneY, laneZ, runOffset, waveY, waveZ } from "./layout";
 import { makeCurrentMaterial } from "./materials";
 
 const uOf = (x: number) => (x - X0) / (X1 - X0);
 const STATUS_TINT: Record<string, string> = { queued: "#1e3a5f", running: "#ffffff", done: "#5eead4", failed: "#ef4444" };
 const _c = new THREE.Color();
 const _w = new THREE.Color("#ffffff");
+const _off = new THREE.Vector3();
 
 function Current({ run }: { run: Run }) {
-  const slot = run.slot;
+  const slot = laneSlot(run.slot);
   const group = useRef<THREE.Group>(null);
   const runner = useRef<THREE.Mesh>(null);
   const buoys = useRef<(THREE.Group | null)[]>([]);
-  const label = useRef<HTMLDivElement>(null);
+  const label = useRef<Label3DHandle>(null);
 
   const { tube, glow } = useMemo(() => {
     const pts: THREE.Vector3[] = [];
@@ -52,7 +54,7 @@ function Current({ run }: { run: Run }) {
     const now = performance.now();
     const t = clock.elapsedTime;
     const r = world.runs.get(run.id) ?? run;
-    if (group.current) group.current.position.set(0, laneY(slot) + bob(slot, t), laneZ(slot));
+    if (group.current) group.current.position.set(0, laneY(slot) + bob(slot, t), laneZ(slot)).add(runOffset(run.id, _off));
     const reveal = clamp01((now - r.startedAt) / 1600) * 1.1;
     const fade = r.endedAt ? Math.max(0, 1 - (now - r.endedAt) / RUN_LINGER_MS) : 1;
 
@@ -108,7 +110,7 @@ function Current({ run }: { run: Run }) {
       haloMats[k].color.copy(running ? runColor : _c);
       haloMats[k].opacity = fade * (running ? 0.45 + wob * 0.3 : st === "done" ? 0.18 : 0.05);
     });
-    if (label.current) label.current.style.opacity = String(fade * clamp01(reveal * 2));
+    label.current?.setOpacity(fade * clamp01(reveal * 2));
   });
 
   return (
@@ -140,11 +142,7 @@ function Current({ run }: { run: Run }) {
           </group>
         </group>
       ))}
-      <Html center position={[X0 - 0.4, waveY(X0, slot) + 0.55, 0]} distanceFactor={20} style={{ pointerEvents: "none" }}>
-        <div ref={label} className="scene-label" style={{ ["--c" as string]: run.color }}>
-          {run.topic}
-        </div>
-      </Html>
+      <Label3D ref={label} position={[X0 - 0.4, waveY(X0, slot) + 0.55, 0]} text={run.topic} color={run.color} size={0.3} maxWidth={10} opacity={0} pxRange={[9.5, 14]} />
     </group>
   );
 }
@@ -152,9 +150,10 @@ function Current({ run }: { run: Run }) {
 export function Currents() {
   const [list, setList] = useState<Run[]>([]);
   const prev = useRef<string[]>([]);
+  const seen = useRef(-1);
   useFrame(() => {
     const p = prev.current;
-    let same = p.length === world.runs.size;
+    let same = p.length === world.runs.size && seen.current === lod.version;
     if (same) {
       let n = 0;
       for (const id of world.runs.keys()) if (p[n++] !== id) {
@@ -164,7 +163,8 @@ export function Currents() {
     }
     if (!same) {
       prev.current = [...world.runs.keys()];
-      setList([...world.runs.values()]);
+      seen.current = lod.version;
+      setList([...world.runs.values()].filter((r) => isRunExpanded(r.id)));
     }
   });
   return (
@@ -174,11 +174,7 @@ export function Currents() {
       ))}
       {/* step columns: the three Hatchet steps every current passes through */}
       {STEPS.map((s) => (
-        <Html key={s} center position={[STEP_X[s], -4.9, 2.2]} distanceFactor={20} style={{ pointerEvents: "none" }}>
-          <div className="scene-label" style={{ ["--c" as string]: "#7dd3fc", opacity: 0.85 }}>
-            hatchet · {s}
-          </div>
-        </Html>
+        <Label3D key={s} position={[STEP_X[s], -4.9, 2.2]} text={`hatchet · ${s}`} color="#7dd3fc" size={0.26} opacity={0.85} pxRange={[8, 12]} />
       ))}
     </group>
   );

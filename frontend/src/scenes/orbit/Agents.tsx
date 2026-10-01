@@ -1,9 +1,11 @@
 /** Living agent instances: glowing orbs born from their parent, working on their run's ring, imploding on exit. */
-import { Html, Trail } from "@react-three/drei";
+import { Trail } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { energy, FADE_MS, presence, TYPE_COLOR, TYPE_LABEL, world } from "../shared/world";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
+import { energy, lingerMs, presence, TYPE_COLOR, TYPE_LABEL, world } from "../shared/world";
+import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
 import { instPos, isScout, reduced, refreshLayout } from "./layout";
 
 const RED = new THREE.Color("#ef4444");
@@ -26,8 +28,9 @@ function Orb({ id, selected, onSelect }: { id: string; selected: boolean; onSele
   const electrons = useRef<THREE.Group>(null);
   const shock = useRef<THREE.Mesh>(null);
   const sel = useRef<THREE.Mesh>(null);
-  const label = useRef<HTMLDivElement>(null);
+  const label = useRef<Label3DHandle>(null);
   const mode = useRef("");
+  const lk = useRef(1);
   const base = useMemo(() => new THREE.Color(color), [color]);
   const c = useMemo(() => new THREE.Color(), []);
 
@@ -46,7 +49,8 @@ function Orb({ id, selected, onSelect }: { id: string; selected: boolean; onSele
     const pres = presence(i, now);
     const e = energy(i, now);
     const age = (now - i.bornAt) / 1000;
-    const exitT = i.exitAt ? (now - i.exitAt) / FADE_MS : 0;
+    const exitT = i.exitAt ? (now - i.exitAt) / lingerMs(i) : 0;
+    const ls = lodScale();
     const thinking = !i.exitAt && i.status === "thinking";
     const waiting = !i.exitAt && i.status === "waiting";
     const toolWait = !i.exitAt && waitingOnTool(id);
@@ -67,7 +71,7 @@ function Orb({ id, selected, onSelect }: { id: string; selected: boolean; onSele
       glow = 2 + flash * 5;
     }
     if (core.current) {
-      core.current.scale.setScalar(Math.max(0.001, size * s));
+      core.current.scale.setScalar(Math.max(0.001, size * s * ls));
       const m = core.current.material as THREE.MeshBasicMaterial;
       c.copy(base);
       if (toolWait) c.lerp(AMBER, 0.25 + breathe * 0.25);
@@ -76,13 +80,13 @@ function Orb({ id, selected, onSelect }: { id: string; selected: boolean; onSele
       m.color.copy(c).multiplyScalar(glow);
     }
     if (halo.current) {
-      halo.current.scale.setScalar(Math.max(0.001, size * s * (1.45 + e * 0.6 + pulseT * 0.2 + birthFlash * 1.0)));
+      halo.current.scale.setScalar(Math.max(0.001, ls * size * s * (1.45 + e * 0.6 + pulseT * 0.2 + birthFlash * 1.0)));
       const hm = halo.current.material as THREE.MeshBasicMaterial;
       hm.opacity = (thinking ? 0.09 : waiting ? 0.04 : 0.06) + e * 0.06 + birthFlash * 0.15 + flash * 0.25;
     }
     if (electrons.current) {
       electrons.current.visible = thinking;
-      electrons.current.scale.setScalar(size * 2.2 * pres);
+      electrons.current.scale.setScalar(size * 2.2 * pres * ls);
       electrons.current.rotation.y += 0.07 * sp;
       electrons.current.rotation.x += 0.03 * sp;
     }
@@ -100,24 +104,26 @@ function Orb({ id, selected, onSelect }: { id: string; selected: boolean; onSele
       shock.current.visible = k >= 0;
       if (k >= 0) {
         shock.current.quaternion.copy(camera.quaternion);
-        shock.current.scale.setScalar(size * (1.2 + k * 2.6));
+        shock.current.scale.setScalar(ls * size * (1.2 + k * 2.6));
       }
     }
     if (sel.current) {
       sel.current.visible = selected;
       sel.current.quaternion.copy(camera.quaternion);
-      sel.current.scale.setScalar(size * 2.6 * Math.max(0.2, pres));
+      sel.current.scale.setScalar(ls * size * 2.6 * Math.max(0.2, pres));
     }
     // birth / exit announcement label
     if (label.current) {
       const m2 = i.exitAt ? (i.status === "failed" ? "failed" : "done") : age < 2.4 ? "born" : "";
       if (m2 !== mode.current) {
         mode.current = m2;
-        label.current.textContent = m2 === "born" ? `+ ${i.name}` : m2 === "done" ? `✓ ${i.name} done` : m2 === "failed" ? `✕ ${i.name}` : "";
+        label.current.setText(m2 === "born" ? `+ ${i.name}` : m2 === "done" ? `${i.name} done` : m2 === "failed" ? `× ${i.name}` : "");
       }
       const o = m2 === "born" ? Math.min(1, (2.4 - age) / 0.6) : m2 ? Math.max(0, 1 - exitT * 1.6) : selected ? 1 : 0;
-      if (!m2 && selected) label.current.textContent = i.name;
-      label.current.style.opacity = String(o);
+      if (!m2 && selected) label.current.setText(i.name);
+      // crowded: only the busiest few (+ selected) announce themselves
+      lk.current += ((showLabel(id) ? 1 : 0) - lk.current) * 0.12;
+      label.current.setOpacity(o * lk.current);
     }
   });
 
@@ -150,9 +156,7 @@ function Orb({ id, selected, onSelect }: { id: string; selected: boolean; onSele
         <ringGeometry args={[0.92, 1, 48]} />
         <meshBasicMaterial color={[3, 3, 3]} transparent opacity={0.8} depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
       </mesh>
-      <Html center position={[0, isScout(type) ? 0.75 : 1.05, 0]} distanceFactor={30} style={{ pointerEvents: "none" }}>
-        <div ref={label} className="scene-label" style={{ ["--c" as string]: color, opacity: 0, fontSize: 11 }} />
-      </Html>
+      <Label3D ref={label} position={[0, isScout(type) ? 0.75 : 1.05, 0]} text="" color={color} size={0.3} opacity={0} pxRange={[8.5, 12.5]} />
     </group>
   );
 }
@@ -161,12 +165,14 @@ export function Agents({ selected, onSelect }: { selected: string | null; onSele
   const [ids, setIds] = useState<string[]>([]);
   const key = useRef(-1);
   useFrame(() => {
-    let k = world.instances.size * 7919;
+    let k = world.instances.size * 7919 + lod.version * 104729;
     for (const i of world.instances.values()) k += i.bornAt;
     if (k !== key.current) {
       key.current = k;
       refreshLayout();
-      setIds([...world.instances.keys()]);
+      const out: string[] = [];
+      for (const i of world.instances.values()) if (isExpanded(i)) out.push(i.id);
+      setIds(out);
     }
   });
   return (

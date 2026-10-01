@@ -1,8 +1,8 @@
 /** MCP servers as external I/O PORTS on the board's left edge: glowing PCIe-style sockets with spinning holo-icons. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { Label3D } from "../shared/Label3D";
 import { world, type McpServer } from "../shared/world";
 import { IO_SPINE_X, IO_X, getGlowTexture, portZ, reduced, rgb } from "./layout";
 
@@ -78,11 +78,7 @@ function Port({ srv }: { srv: McpServer }) {
           <octahedronGeometry args={[0.2, 0]} />
         </mesh>
       </group>
-      <Html position={[-1.1, 0.6, 0]} style={{ pointerEvents: "none", transform: "translate(-100%, -50%)" }}>
-        <div className="scene-label" style={{ ["--c" as string]: srv.color }}>
-          mcp · {srv.name}
-        </div>
-      </Html>
+      <Label3D position={[-1.1, 0.6, 0]} anchorX="right" text={`mcp · ${srv.name}`} color={srv.color} size={0.3} pxRange={[9, 13]} />
     </group>
   );
 }

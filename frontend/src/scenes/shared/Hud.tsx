@@ -3,9 +3,11 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSceneConfig } from "./config";
 import "./hud.css";
 import { startLiveRun, useRunAvailable } from "./useSceneSetup";
-import { AGENT_TYPES, getInstance, selectInstance, STEPS, TYPE_COLOR, TYPE_LABEL, useWorld, waitSeconds, world, type AgentType, type Instance, type WorldEvent } from "./world";
+import { collapseLanes, setShowAll, useLod } from "./lod";
+import { THEMES } from "../../themes";
+import { getInstance, selectInstance, STEPS, TYPE_COLOR, useWorld, waitSeconds, world, type Instance, type WorldEvent } from "./world";
 
-export const SCENES = ["orbit", "neural", "subway", "city", "ocean", "circuit", "tunnel", "flow"] as const;
+export const SCENES = THEMES; // theme nav = every registered theme
 
 export function shortRun(run: string) {
   return run.replace("run-", "").slice(0, 6);
@@ -31,7 +33,7 @@ export function describe(e: WorldEvent): string {
     case "agent":
       return `${short(e.id)} ${e.status}`;
     case "llm":
-      return `${short(e.id)} · LLM ${e.tokens_in}→${e.tokens_out} tok`;
+      return e.tokens_in || e.tokens_out ? `${short(e.id)} · LLM ${e.tokens_in}→${e.tokens_out} tok` : `${short(e.id)} · thinking…`; // no usage (e.g. Claude Code hooks): no fake 0→0
     case "message":
       return `${short(e.from_id)} → ${short(e.to_id)}: ${e.text}`;
     case "tool":
@@ -130,6 +132,8 @@ function HudPanels({ title, subtitle, onClose, children }: { title: string; subt
         </div>
       </aside>
 
+      <LodHint />
+
       <AgentPanel onClose={close} />
 
       <aside className="hud hud-ticker">
@@ -146,13 +150,37 @@ function HudPanels({ title, subtitle, onClose, children }: { title: string; subt
   );
 }
 
+// ------------------------------------------------------------------ LOD: "grouped: N runs in K clusters · show all"
+
+function LodHint() {
+  const l = useLod();
+  if (!l.crowded) return null;
+  if (l.showAll)
+    return (
+      <div className="hud hud-lod">
+        <i />
+        showing all <b>{l.alive}</b> agents
+        <button onClick={() => setShowAll(false)}>group</button>
+      </div>
+    );
+  if (!l.activeClusters) return null;
+  return (
+    <div className="hud hud-lod">
+      <i />
+      grouped: <b>{l.collapsedRuns}</b> runs in <b>{l.activeClusters}</b> cluster{l.activeClusters === 1 ? "" : "s"}
+      {l.expandedLane >= 0 && <button onClick={collapseLanes}>collapse</button>}
+      <button onClick={() => setShowAll(true)}>show all</button>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ live: optional POST /live/run
 
 /** Demo topics sent to POST /live/run; rotated so each run differs. */
 const TOPICS = ["Why is churn rising for Acme Corp?", "Root cause of payment latency incidents", "Which region has the most incidents?", "Is Fraud Shield worth expanding to Globex?"];
 let topicIdx = 0;
 
-function RunButton() {
+export function RunButton() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const run = async () => {
@@ -193,7 +221,7 @@ function age(i: Instance) {
 function AgentPanel({ onClose }: { onClose: () => void }) {
   const w = useWorld();
   const [q, setQ] = useState("");
-  const [types, setTypes] = useState<Set<AgentType>>(new Set());
+  const [types, setTypes] = useState<Set<string>>(new Set()); // filter by real agent name
   const [status, setStatus] = useState<StatusFilter>("alive");
   const [run, setRun] = useState("");
   const [open, setOpen] = useState(true);
@@ -206,18 +234,28 @@ function AgentPanel({ onClose }: { onClose: () => void }) {
   }, [all]);
   const needle = q.trim().toLowerCase();
   const rows = all
-    .filter((i) => (types.size ? types.has(i.type) : true))
+    .filter((i) => (types.size ? types.has(i.name) : true))
     .filter((i) => matchesStatus(i, status))
     .filter((i) => (run ? i.run === run : true))
     .filter((i) => {
       if (!needle) return true;
       const topic = w.runs.get(i.run)?.topic ?? "";
-      return `${i.id} ${TYPE_LABEL[i.type]} ${topic} ${[...i.nodes].join(" ")}`.toLowerCase().includes(needle);
+      return `${i.id} ${i.name} ${topic} ${[...i.nodes].join(" ")}`.toLowerCase().includes(needle);
     })
     .sort((a, b) => Number(!!a.exitAt) - Number(!!b.exitAt) || Number(b.status === "thinking") - Number(a.status === "thinking") || b.bornAt - a.bornAt);
   const shown = rows.slice(0, 150);
   const sel = getInstance(w.selected);
-  const toggleType = (t: AgentType) =>
+  // legend = the agents actually present (by name), not fixed demo roles
+  const legend = useMemo(() => {
+    const m = new Map<string, { color: string; alive: number }>();
+    for (const i of all) {
+      const e = m.get(i.name) ?? { color: TYPE_COLOR[i.type], alive: 0 };
+      if (!i.exitAt) e.alive++;
+      m.set(i.name, e);
+    }
+    return [...m].slice(0, 12);
+  }, [all]);
+  const toggleType = (t: string) =>
     setTypes((prev) => {
       const n = new Set(prev);
       n.has(t) ? n.delete(t) : n.add(t);
@@ -242,11 +280,11 @@ function AgentPanel({ onClose }: { onClose: () => void }) {
         <>
           <input className="ap-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agent, run topic, graph node…" />
           <div className="ap-chips">
-            {AGENT_TYPES.map((a) => (
-              <button key={a.type} className={types.has(a.type) ? "on" : ""} style={{ ["--c" as string]: a.color }} onClick={() => toggleType(a.type)}>
+            {legend.map(([name, a]) => (
+              <button key={name} className={types.has(name) ? "on" : ""} style={{ ["--c" as string]: a.color }} onClick={() => toggleType(name)}>
                 <i />
-                {a.label}
-                <em>{all.filter((i) => i.type === a.type && !i.exitAt).length || ""}</em>
+                {name}
+                <em>{a.alive || ""}</em>
               </button>
             ))}
           </div>
@@ -302,7 +340,7 @@ function AgentDetail({ i }: { i: Instance }) {
   return (
     <div className="ap-detail" style={{ ["--c" as string]: TYPE_COLOR[i.type] }}>
       <h3>
-        <i /> {i.name} <small>{TYPE_LABEL[i.type]} · {shortRun(i.run)}</small>
+        <i /> {i.name} <small>{i.subagent ? "subagent" : "agent"} · {shortRun(i.run)}</small>
       </h3>
       <div className="ap-status" data-status={i.exitAt ? "done" : i.status}>
         {i.exitAt ? `finished (${i.status})` : i.status} · alive {age(i)}

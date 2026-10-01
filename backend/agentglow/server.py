@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from . import __version__
+from .claude_code import ClaudeCodeAdapter
 from .state import Hub
 
 STATIC = Path(__file__).parent / "static"
@@ -135,6 +136,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
             while True:
                 await asyncio.sleep(1)
                 hub.tick(now_ms())
+                hub.ingest_live(claude_code.tick(now_ms()))  # end idle Claude Code sessions' dangling spans
 
         task = asyncio.create_task(ticker())
         yield
@@ -142,6 +144,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
 
     app = FastAPI(title="agentglow", version=__version__, lifespan=lifespan)
     app.state.hub = hub
+    claude_code = app.state.claude_code = ClaudeCodeAdapter()
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
     async def body_of(request: Request) -> bytes:
@@ -152,6 +155,18 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
     async def live(request: Request):
         items = json.loads(await body_of(request) or b"[]")
         return {"ok": True, "n": hub.ingest_live(items if isinstance(items, list) else [items])}
+
+    @app.post("/v1/claude-code")
+    async def claude_code_hook(request: Request):
+        """Claude Code `"type": "http"` hook target (examples/claude-code/). Always 200 with `{}` (= no decision), so a
+        bad payload or an unknown event never affects the Claude Code session."""
+        try:
+            hub.ingest_live(claude_code.handle(json.loads(await body_of(request) or b"{}"), now_ms()))
+        except Exception:
+            import logging
+
+            logging.getLogger("agentglow").exception("agentglow: bad Claude Code hook payload")
+        return JSONResponse({})
 
     @app.post("/v1/traces")
     async def traces(request: Request):
@@ -198,8 +213,8 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
 
     @app.get("/live/graph")
     async def graph():
-        if not falkor_url:
-            raise HTTPException(404, "no graph provider (set AGENTGLOW_FALKOR_URL or --falkor)")
+        if not falkor_url:  # no graph DB configured: an empty graph, not an error (embeds would log a 404)
+            return {"nodes": [], "links": []}
         try:
             return await asyncio.to_thread(falkor_sample, falkor_url)
         except Exception as e:

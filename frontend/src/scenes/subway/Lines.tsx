@@ -1,10 +1,10 @@
 /** A Hatchet run = one neon transit LINE: stem from Graph Central → plan → research ⇉ scout spurs ⇉ write. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { Label3D, type LabelSeg } from "../shared/Label3D";
 import { RUN_LINGER_MS, STEPS, useWorld, world, type StepName } from "../shared/world";
-import { hdr, laneOffset, R, reduced, slotAngle, spurShape, STATION_R, TRACK_Y } from "./layout";
+import { hdr, laneOffset, lineAngle, R, reduced, spurShape, STATION_R, TRACK_Y } from "./layout";
 
 const STEP_COLOR: Record<string, string> = { queued: "#64748b", running: "#fbbf24", done: "#22c55e", failed: "#ef4444" };
 
@@ -22,7 +22,7 @@ function spur(off: number, radius: number) {
 }
 
 export function RunLine({ runId, slot, color, scouts }: { runId: string; slot: number; color: string; scouts: number }) {
-  const angle = slotAngle(slot);
+  const angle = lineAngle(runId, slot);
   const tracks = useRef<THREE.Group>(null);
   const stations = useRef<THREE.Group>(null);
   const rings = useRef<(THREE.Mesh | null)[]>([]);
@@ -142,11 +142,7 @@ export function RunLine({ runId, slot, color, scouts }: { runId: string; slot: n
               <cylinderGeometry args={[0.07, 0.3, 3.2, 12, 1, true]} />
               <meshBasicMaterial toneMapped={false} transparent blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
             </mesh>
-            <Html center position={[0, 0, -1.75]} distanceFactor={30} style={{ pointerEvents: "none" }} zIndexRange={[4, 0]}>
-              <div className="scene-label subway-station" style={{ ["--c" as string]: color }}>
-                {s}
-              </div>
-            </Html>
+            <Label3D position={[0, 0, -1.75]} text={s} color={color} textColor="#cbd5e1" uppercase letterSpacing={0.08} size={0.26} opacity={0.85} pxRange={[7.5, 11]} />
           </group>
         ))}
         <RunLabel runId={runId} color={color} />
@@ -163,24 +159,29 @@ export function RunLine({ runId, slot, color, scouts }: { runId: string; slot: n
   );
 }
 
+const SUBWAY_STEP: Record<string, string> = { running: "#fde68a", done: "#bbf7d0", failed: "#fecaca", queued: "#64748b" };
 function RunLabel({ runId, color }: { runId: string; color: string }) {
   const w = useWorld();
   const run = w.runs.get(runId);
   if (!run) return null;
+  const steps: LabelSeg[] = [];
+  STEPS.forEach((s, i) => steps.push({ text: `${i ? "  " : ""}${s.toUpperCase()}`, color: SUBWAY_STEP[run.steps[s]] ?? "#94a3b8" }));
   return (
-    <Html center position={[R.END + 1.9, 0.2, 0]} distanceFactor={34} style={{ pointerEvents: "none" }} zIndexRange={[4, 0]}>
-      <div className="scene-label subway-run" style={{ ["--c" as string]: color, opacity: run.status === "started" ? 1 : 0.55 }}>
-        <span>
-          {run.hasSteps ? "hatchet · " : ""}{run.topic}
-        </span>
-        <span className="subway-steps">
-          {STEPS.map((s) => (
-            <b key={s} data-st={run.steps[s]}>
-              {s}
-            </b>
-          ))}
-        </span>
-      </div>
-    </Html>
+    <Label3D
+      position={[R.END + 1.9, 0.2, 0]}
+      anchorX="left"
+      textAlign="left"
+      plate="box"
+      text={`${run.hasSteps ? "hatchet · " : ""}${run.topic}`}
+      secondary={steps}
+      letterSpacing={0.02}
+      color={color}
+      size={0.34}
+      secondarySize={0.24}
+      maxWidth={11}
+      opacity={run.status === "started" ? 1 : 0.55}
+      fadeMs={300}
+      pxRange={[9.5, 13.5]}
+    />
   );
 }

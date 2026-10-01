@@ -12,6 +12,8 @@ import { useCallback, useRef, useState } from "react";
 import { Hud } from "../shared/Hud";
 import { useSceneSetup, type Galaxy } from "../shared/useSceneSetup";
 import { tick } from "../shared/world";
+import { lodTick } from "../shared/lod";
+import { CityClusters } from "./Clusters";
 import { Ground, Skyline } from "./Ambient";
 import { FOG } from "./buildingMaterial";
 import "./city.css";
@@ -22,7 +24,10 @@ import { Blimps, Comets, Drones, Tethers } from "./Sky";
 import { Skyscrapers } from "./Skyscrapers";
 
 function Ticker() {
-  useFrame(() => tick());
+  useFrame(() => {
+    tick();
+    lodTick();
+  });
   return null;
 }
 
@@ -46,6 +51,7 @@ function City({ galaxy, selectedRef, onSelect }: { galaxy: Galaxy; selectedRef: 
       <DataTower galaxy={galaxy} />
       <Districts />
       <Skyscrapers selectedRef={selectedRef} onSelect={onSelect} />
+      <CityClusters />
       <Comets />
       <Blimps />
       <Drones />

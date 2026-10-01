@@ -17,6 +17,7 @@ import { CAM_Z, flight, reduced } from "./lanes";
 import { Bolts, Stations, Tethers } from "./Links";
 import { Runs } from "./Runs";
 import { Ships } from "./Ships";
+import { TunnelClusters } from "./Clusters";
 
 const CA_OFFSET = new THREE.Vector2(0.0009, 0.0006);
 
@@ -59,6 +60,7 @@ export default function Scene() {
         <Stations />
         <Runs />
         <Ships selected={selected} onSelect={setSelected} />
+        <TunnelClusters />
         <Bolts />
         <Tethers />
         <EffectComposer multisampling={0}>

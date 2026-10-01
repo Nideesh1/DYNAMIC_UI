@@ -1,6 +1,8 @@
 /** Neural scene: shaders, shared geometries, easing, and the spatial layout (runs, somas, MCP organs). */
 import * as THREE from "three";
-import { TYPE_COLOR, world, type AgentType, type Instance } from "../shared/world";
+import { TYPE_COLOR, hash01, world, type AgentType, type Instance } from "../shared/world";
+import { laneRank } from "../shared/lod";
+import { alt } from "../shared/spread";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -19,7 +21,7 @@ export const backOut = (x: number) => {
 };
 
 export const TYPE_C = Object.fromEntries(Object.entries(TYPE_COLOR).map(([k, v]) => [k, new THREE.Color(v)])) as Record<AgentType, THREE.Color>;
-export const isScout = (t: AgentType) => t === "graph_scout" || t === "records_scout";
+export const isScout = (t: AgentType) => t === "graph_scout" || t === "records_scout" || t === "data_scout"; // every subagent role fans out from its parent
 
 // ------------------------------------------------------------------ textures / geometries
 let glow: THREE.Texture | null = null;
@@ -245,21 +247,38 @@ export function anchorPos(slot: number, type: AgentType, out: THREE.Vector3) {
 }
 
 /** Target soma position for an instance (scouts fan out from the researcher across screen + depth). */
+const JIT = new THREE.Vector3();
+/** Offset along the lane tangent for the k-th expanded run sharing a lane (LOD; 0 when not grouped). */
+export const RANK_GAP = 3.8;
+export function rankOffset(runId: string) {
+  return alt(laneRank(runId)) * RANK_GAP;
+}
 export function somaTarget(inst: Instance, out: THREE.Vector3) {
   const run = world.runs.get(inst.run);
   const slot = run ? run.slot : 0;
-  anchorPos(slot, inst.type, out);
-  if (!isScout(inst.type)) return out;
   const S = slotOf(slot);
-  let n = 0;
-  let k = 0;
-  for (const o of world.instances.values()) {
-    if (o.run !== inst.run || !isScout(o.type)) continue;
-    n++;
-    if (o.index < inst.index) k++;
+  anchorPos(slot, inst.type, out);
+  const ro = rankOffset(inst.run);
+  if (ro) out.addScaledVector(S.tan, ro);
+  if (isScout(inst.type)) {
+    let n = 0;
+    let k = 0;
+    for (const o of world.instances.values()) {
+      if (o.run !== inst.run || !isScout(o.type)) continue;
+      n++;
+      if (o.index < inst.index) k++;
+    }
+    const tilt = (hash01(inst.run, 1) - 0.5) * 0.9; // each run fans out at its own angle
+    const th = (n <= 1 ? 0 : (-1 + (2 * k) / (n - 1)) * 1.1) + tilt;
+    const len = S.fanLen * (0.85 + 0.35 * hash01(inst.id, 2));
+    out.addScaledVector(S.dir, Math.cos(th) * len + 0.4).addScaledVector(S.fan, Math.sin(th) * len);
+  } else {
+    let dup = 0; // same-role agents in one run would otherwise stack on the same anchor
+    for (const o of world.instances.values()) if (o.run === inst.run && o.type === inst.type && o.index < inst.index) dup++;
+    if (dup) out.addScaledVector(S.fan, (dup % 2 ? 1 : -1) * Math.ceil(dup / 2) * 1.6);
   }
-  const th = n <= 1 ? 0 : (-1 + (2 * k) / (n - 1)) * 1.1;
-  return out.addScaledVector(S.dir, Math.cos(th) * S.fanLen + 0.4).addScaledVector(S.fan, Math.sin(th) * S.fanLen);
+  // small per-agent jitter so nothing lands on the exact same coordinates twice
+  return out.add(JIT.set(hash01(inst.id, 3) - 0.5, hash01(inst.id, 4) - 0.5, hash01(inst.id, 5) - 0.5).multiplyScalar(0.9));
 }
 
 /** Live soma positions by instance id (stage space), written by each Soma every frame. */

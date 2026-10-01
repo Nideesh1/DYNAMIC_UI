@@ -31,4 +31,7 @@ jobs:
           uv sync --all-packages --frozen
           uv run --package agentglow pytest backend/tests -q
           uv run --package agentglow-example-deepagents-hatchet --directory examples/deepagents-hatchet python -c "import app.tools, app.demo_graph"
+          uv run --package agentglow-example-quickstart python -c "import deepagents, langchain_openai, langchain_anthropic"
+          uv run --package agentglow-example-langgraph python -c "import langgraph, langchain_openai, langchain_anthropic"
+          uv run --package agentglow-example-openai-agents python -c "import agents, openinference.instrumentation.openai_agents"
           uv build --package agentglow --out-dir dist

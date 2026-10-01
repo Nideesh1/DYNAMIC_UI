@@ -3,7 +3,8 @@
  * instance positions (shared by orbs, comets, beams and tethers), and galaxy node lookup.
  */
 import * as THREE from "three";
-import { world, type AgentType, type StepName } from "../shared/world";
+import { hash01, world, type AgentType, type StepName } from "../shared/world";
+import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -17,7 +18,9 @@ const TYPE_ANGLE: Record<AgentType, number> = {
   data_scout: STEP_ANGLE.research,
   writer: STEP_ANGLE.write,
 };
-export const isScout = (t: AgentType) => t === "graph_scout" || t === "records_scout";
+export const isScout = isSubRole;
+/** Per-run rotation of the step stations around the ring, so every run's agents sit somewhere new. */
+export const runSpin = (runId: string) => (hash01(runId, 11) - 0.5) * 2.4;
 
 // ------------------------------------------------------------------ run rings (one tilted plane per slot)
 const FRAMES: [number, number, number, number][] = [
@@ -37,7 +40,7 @@ export function ringLocal(r: number, angle: number, out: THREE.Vector3) {
 }
 
 // ------------------------------------------------------------------ instance motion (lazy, cached per frame)
-type Motion = { phase: number; stamp: number; last: number; seed: number; pos: THREE.Vector3; target: THREE.Vector3 };
+type Motion = { phase: number; stamp: number; last: number; seed: number; off: number; rr: number; tilt: number; pos: THREE.Vector3; target: THREE.Vector3 };
 const motion = new Map<string, Motion>();
 const moons = new Map<string, { k: number; n: number }>();
 
@@ -67,7 +70,19 @@ export function instPos(id: string, t: number, now: number): THREE.Vector3 | nul
   let m = motion.get(id);
   if (!i) return m ? m.pos : null;
   if (!m) {
-    m = { phase: 0, stamp: -1, last: t, seed: hash(id) * TAU, pos: new THREE.Vector3(), target: new THREE.Vector3() };
+    // seeded per run + per agent (stable for the agent's lifetime): ring angle offset, moon radius, moon tilt
+    const dup = isScout(i.type) ? 0 : roleIndex(i); // same-role agents in one run spread along the ring
+    m = {
+      phase: 0,
+      stamp: -1,
+      last: t,
+      seed: hash(id) * TAU,
+      off: runSpin(i.run) + alt(dup) * 0.34 + jit(id, 12) * 0.2,
+      rr: 1.55 + hash01(id, 13) * 0.75,
+      tilt: 0.2 + hash01(id, 14) * 0.45,
+      pos: new THREE.Vector3(),
+      target: new THREE.Vector3(),
+    };
     motion.set(id, m);
   }
   if (m.stamp === t) return m.pos;
@@ -83,11 +98,11 @@ export function instPos(id: string, t: number, now: number): THREE.Vector3 | nul
   const parentPos = i.parent ? instPos(i.parent, t, now) : null;
   if (scout && parentPos && world.instances.has(i.parent!)) {
     const mi = moons.get(id) ?? { k: 0, n: 1 };
-    const a = (mi.k / mi.n) * TAU + m.phase;
-    const rr = 1.85;
-    m.target.set(Math.cos(a) * rr, Math.sin(a * 2 + m.seed) * 0.4, Math.sin(a) * rr).applyQuaternion(ring.q).add(parentPos);
+    const a = (mi.k / mi.n) * TAU + m.phase + hash01(i.run, 15) * TAU; // each run's moons start at their own angle
+    const rr = m.rr;
+    m.target.set(Math.cos(a) * rr, Math.sin(a * 2 + m.seed) * m.tilt, Math.sin(a) * rr).applyQuaternion(ring.q).add(parentPos);
   } else {
-    ringLocal(ring.r, TYPE_ANGLE[i.type] + m.phase, m.target).applyQuaternion(ring.q);
+    ringLocal(ring.r, TYPE_ANGLE[i.type] + m.off + m.phase, m.target).applyQuaternion(ring.q);
     m.target.y += Math.sin(t * 0.9 + m.seed) * (reduced ? 0 : 0.18);
   }
   const b = Math.min(1, (now - i.bornAt) / 950);

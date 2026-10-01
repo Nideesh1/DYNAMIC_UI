@@ -1,8 +1,8 @@
 /** Messages (arcing bolts ship → ship), MCP stations outside the shell, MCP packets punching through the wall, and live tethers for pending MCP calls. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { Label3D } from "../shared/Label3D";
 import { waitSeconds, world } from "../shared/world";
 import { MOTION, TUBE_R, glowTexture, ships, stationPos, stations } from "./lanes";
 import { useLiveKeys } from "./Runs";
@@ -309,11 +309,7 @@ function Station({ name }: { name: string }) {
         <meshBasicMaterial map={glow} color={color} transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
       </mesh>
       <group position={[0, -1.55, 0]}>
-        <Html center style={{ pointerEvents: "none" }} zIndexRange={[4, 0]}>
-          <div className="scene-label" style={{ ["--c" as string]: srv?.color ?? "#94a3b8", fontSize: 11 }}>
-            mcp · {name}
-          </div>
-        </Html>
+        <Label3D text={`mcp · ${name}`} color={srv?.color ?? "#94a3b8"} size={0.36} pxRange={[9, 13]} />
       </group>
     </group>
   );

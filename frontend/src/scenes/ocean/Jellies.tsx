@@ -2,9 +2,11 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { FADE_MS, TYPE_COLOR, energy, tick, world, type Instance } from "../shared/world";
-import { STEP_X, clamp01, currentPoint, dotTexture, easeOutBack, easeOutCubic, hash, homeOf, isScout, jellyPos, selection } from "./layout";
+import { TYPE_COLOR, energy, lingerMs, tick, world, type Instance } from "../shared/world";
+import { isExpanded, lod, lodScale, lodTick } from "../shared/lod";
+import { STEP_X, clamp01, currentPoint, dotTexture, easeOutBack, easeOutCubic, hash, homeOf, isScout, jellyPos, laneSlot, runOffset, selection } from "./layout";
 import { makeBellMaterial } from "./materials";
+import { roleIndex } from "../shared/spread";
 
 const N_TENT = 9;
 const SEGS = 11;
@@ -18,7 +20,7 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
   const id = inst.id;
   const scout = isScout(inst.type);
   const R = scout ? 0.42 : 0.62;
-  const k = scout ? Number(id.split(":")[2]) || 0 : 0;
+  const k = useMemo(() => roleIndex(inst), [inst]); // stable slot among same-role agents of this run
   const seed = (hash(id) % 1000) / 1000;
   const color = TYPE_COLOR[inst.type];
 
@@ -83,7 +85,7 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
     const p = inst.parent ? jellyPos.get(inst.parent) : undefined;
     const run = world.runs.get(inst.run);
     if (p) origin.copy(p);
-    else currentPoint(run?.slot ?? 0, STEP_X.plan, performance.now() / 1000, origin);
+    else currentPoint(laneSlot(run?.slot ?? 0), STEP_X.plan, performance.now() / 1000, origin).add(runOffset(inst.run, _home));
     pos.copy(origin);
     jellyPos.set(id, pos);
     return () => {
@@ -103,7 +105,7 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
     const t = clock.elapsedTime;
     const i = inst;
     const run = world.runs.get(i.run);
-    homeOf(i, run?.slot ?? 0, k, t, _home);
+    homeOf(i, laneSlot(run?.slot ?? 0), k, t, _home);
     _home.x += Math.sin(t * 0.4 + seed * 9) * 0.12;
     _home.y += Math.sin(t * 0.7 + seed * 5) * 0.12;
 
@@ -112,7 +114,7 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
     const larva = birth < 0.32;
     const bloom = larva ? 0 : easeOutBack(clamp01((birth - 0.32) / 0.68));
 
-    const exitAge = i.exitAt ? (now - i.exitAt) / FADE_MS : 0;
+    const exitAge = i.exitAt ? (now - i.exitAt) / lingerMs(i) : 0;
     const exiting = i.exitAt > 0;
     const fade = exiting ? Math.max(0, 1 - exitAge * 1.25) : 1;
     const flash = exiting ? Math.exp(-(now - i.exitAt) / 220) : 0;
@@ -138,7 +140,7 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
       group.current.rotation.x = Math.sin(t * 0.37 + seed * 3) * 0.08;
     }
 
-    const s = R * bloom * (1 + en * 0.14) * (1 + (exiting ? exitAge * 0.6 : 0));
+    const s = R * lodScale() * bloom * (1 + en * 0.14) * (1 + (exiting ? exitAge * 0.6 : 0));
     const sxz = 1 + c * 0.14 * amp;
     const sy = 0.8 * (1 - c * 0.24 * amp);
     if (body.current) body.current.visible = !(exiting && fade <= 0.001);
@@ -152,7 +154,7 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
 
     // glowing core: the larva while budding, then the jelly's heart
     if (core.current) {
-      const ls = larva ? R * (0.32 + 0.08 * Math.sin(now / 50)) : R * (0.22 + en * 0.06) * Math.min(1, bloom + 0.3);
+      const ls = lodScale() * (larva ? R * (0.32 + 0.08 * Math.sin(now / 50)) : R * (0.22 + en * 0.06) * Math.min(1, bloom + 0.3));
       core.current.scale.setScalar(Math.max(1e-4, ls * (1 - (exiting ? exitAge : 0))));
       core.current.position.y = larva ? 0 : s * sy * 0.35;
       _c.copy(base).multiplyScalar((larva ? 5 : 1.6 + en * 3) * dim + flash * 8);
@@ -160,7 +162,7 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
       coreMat.opacity = fade;
     }
     if (halo.current) {
-      halo.current.scale.setScalar(R * (larva ? 3 : 4.2 + en * 2 + flash * 4));
+      halo.current.scale.setScalar(R * lodScale() * (larva ? 3 : 4.2 + en * 2 + flash * 4));
       haloMat.opacity = (0.12 + en * 0.16 + (larva ? 0.5 : 0) + flash * 0.6 + (sel ? 0.2 : 0)) * fade;
     }
 
@@ -168,9 +170,9 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
     const tg = tentGeo.getAttribute("position") as THREE.BufferAttribute;
     const arr = tg.array as Float32Array;
     const rim = s * sxz * 0.88;
-    const L = R * (scout ? 3.0 : 3.6) * clamp01(bloom) * (0.85 + 0.15 * (1 - c));
+    const L = R * lodScale() * (scout ? 3.0 : 3.6) * clamp01(bloom) * (0.85 + 0.15 * (1 - c));
     const freq = thinking ? 3.2 : 1.1;
-    const sway = R * (thinking ? 0.55 : 0.35);
+    const sway = R * lodScale() * (thinking ? 0.55 : 0.35);
     for (let n = 0; n < N_TENT; n++) {
       const th = (n / N_TENT) * Math.PI * 2;
       const cx = Math.cos(th);
@@ -238,10 +240,12 @@ function Jelly({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => v
 export function Jellies({ onSelect }: { onSelect: (id: string) => void }) {
   const [list, setList] = useState<Instance[]>([]);
   const prev = useRef<string[]>([]);
+  const seen = useRef(-1);
   useFrame(() => {
     tick();
+    lodTick();
     const p = prev.current;
-    let same = p.length === world.instances.size;
+    let same = p.length === world.instances.size && seen.current === lod.version;
     if (same) {
       let n = 0;
       for (const id of world.instances.keys()) if (p[n++] !== id) {
@@ -251,7 +255,8 @@ export function Jellies({ onSelect }: { onSelect: (id: string) => void }) {
     }
     if (!same) {
       prev.current = [...world.instances.keys()];
-      setList([...world.instances.values()]);
+      seen.current = lod.version;
+      setList([...world.instances.values()].filter(isExpanded));
     }
   });
   return (

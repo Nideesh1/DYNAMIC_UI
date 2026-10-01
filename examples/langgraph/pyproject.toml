@@ -1,0 +1,20 @@
+[project]
+name = "agentglow-example-langgraph"
+version = "0.1.0"
+description = "LangGraph supervisor + named worker agents, visualized live by AgentGlow through OpenTelemetry only"
+requires-python = ">=3.11"
+dependencies = [
+  "agentglow[langchain]",
+  "langgraph",
+  "langchain",
+  "langchain-openai",
+  "langchain-anthropic",
+  "langchain-google-genai",
+  "python-dotenv",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agentglow = { workspace = true }  # in this repo; outside it, the published `agentglow` from PyPI is used

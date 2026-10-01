@@ -5,8 +5,9 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 const dist = (p) => new URL(`../dist/${p}`, import.meta.url);
 if (!existsSync(dist("style.css"))) throw new Error("dist/style.css missing");
-const js = readFileSync(dist("index.js"), "utf8");
-if (!js.startsWith('import "./style.css";')) writeFileSync(dist("index.js"), `import "./style.css";\n${js}`);
+//  ("use client" first, so Next.js App Router users can import <AgentScene/> from a server component)
+const js = readFileSync(dist("index.js"), "utf8").replace(/^"use client";\n/, "").replace(/^import "\.\/style\.css";\n/, "");
+writeFileSync(dist("index.js"), `"use client";\nimport "./style.css";\n${js}`);
 
 const world = readFileSync(dist("types/scenes/shared/world.d.ts"), "utf8");
 rmSync(dist("types/scenes"), { recursive: true, force: true });

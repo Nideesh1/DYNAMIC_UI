@@ -2,9 +2,11 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { TYPE_COLOR, energy, presence, world } from "../shared/world";
-import { FORK, LANE_R, MOTION, SHIP_LOCAL, type ShipInfo, ease3, glowTexture, laneAngle, runZ, ships, smooth } from "./lanes";
+import { TYPE_COLOR, energy, hash01, presence, world } from "../shared/world";
+import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
+import { FORK, LANE_R, MOTION, SHIP_LOCAL, type ShipInfo, ease3, glowTexture, runLaneAngle, runZ, ships, smooth } from "./lanes";
 import { useLiveKeys } from "./Runs";
+import { isExpanded, lodScale } from "../shared/lod";
 
 const AMBER = new THREE.Color("#f59e0b");
 const RED = new THREE.Color("#ef4444");
@@ -47,7 +49,7 @@ function buildFork(off: number) {
 function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSelect: (id: string) => void }) {
   const i0 = world.instances.get(id);
   const type = i0?.type ?? "planner";
-  const isScout = type === "graph_scout" || type === "records_scout";
+  const isScout = isSubRole(type);
   const color = useMemo(() => new THREE.Color(TYPE_COLOR[type]), [type]);
   const info = useMemo<ShipInfo>(() => ({ pos: new THREE.Vector3(0, 0, -200), color: color.clone(), energy: 0, active: 0, presence: 0, seed: Math.random() }), [color]);
   useEffect(() => {
@@ -72,6 +74,18 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
   const start = useRef<{ x: number; y: number; zl: number } | null>(null);
   const exitAt = useRef<THREE.Vector3 | null>(null);
   const fan = useRef(0);
+  // seeded placement (stable for the ship's lifetime): fan slot leans per run, depth along the lane per agent,
+  // same-role ships of one run spread along the lane instead of stacking
+  const place = useMemo(() => {
+    const inst = world.instances.get(id);
+    if (!inst) return { fan: 0, dz: 0 };
+    const k = roleIndex(inst);
+    if (isScout) {
+      const side = hash01(inst.run, 63) < 0.5 ? -1 : 1;
+      return { fan: jit(inst.run, 64) * 0.14 + side * alt(k) * (0.34 + 0.08 * hash01(inst.run, 65)), dz: jit(id, 66) * 1.6 };
+    }
+    return { fan: 0, dz: jit(id, 67) * 1.6 + alt(k) * 2.4 };
+  }, [id, isScout]);
   const builtOff = useRef(Number.NaN);
   const c = useMemo(() => new THREE.Color(), []);
   const glow = useMemo(() => glowTexture(), []);
@@ -87,7 +101,7 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
     const now = performance.now();
     const t = clock.elapsedTime;
     const run = world.runs.get(i.run);
-    const a0 = laneAngle(run?.slot ?? 0);
+    const a0 = runLaneAngle(i.run, run?.slot ?? 0);
     const rz = runZ.get(i.run) ?? -175;
     const p = presence(i, now);
     const e = energy(i, now);
@@ -100,18 +114,10 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
     // ---- fan-out slot (scouts spread around the researcher's lane)
     let off = 0;
     if (isScout) {
-      let n = 0;
-      let k = 0;
-      for (const o of world.instances.values())
-        if (o.parent === i.parent && (o.type === "graph_scout" || o.type === "records_scout")) {
-          n++;
-          if (o.bornAt < i.bornAt) k++;
-        }
-      const target = (k - (n - 1) / 2) * 0.36;
-      fan.current += (target - fan.current) * Math.min(1, dt * 3);
+      fan.current += (place.fan - fan.current) * Math.min(1, dt * 3);
       off = fan.current;
     }
-    const localZ = SHIP_LOCAL[i.type];
+    const localZ = SHIP_LOCAL[i.type] + place.dz;
     const ang = a0 + off;
     const R = LANE_R - (isScout ? 0.25 : 0);
     const bob = Math.sin(t * 1.1 + info.seed * 6) * 0.35 * MOTION;
@@ -151,7 +157,8 @@ function Ship({ id, selected, onSelect }: { id: string; selected: boolean; onSel
 
     const throb = waiting ? (toolWait ? 0.07 * Math.sin(t * 3.2) : 0.05 * Math.sin(t * 1.6)) * MOTION : 0;
     g.position.set(x, y, z);
-    g.scale.set(sxy * (1 + throb) * (selected ? 1.15 : 1), sxy * (1 + throb) * (selected ? 1.15 : 1), sz);
+    const ls = lodScale();
+    g.scale.set(sxy * (1 + throb) * (selected ? 1.15 : 1) * ls, sxy * (1 + throb) * (selected ? 1.15 : 1) * ls, sz * ls);
 
     // spin along the flight axis
     if (spin.current) spin.current.rotation.z += dt * (thinking ? 5.5 : waiting ? 0.5 : 2) * (1 + e * 1.6) * Math.max(0.25, MOTION);
@@ -332,7 +339,7 @@ function ShipStreaks() {
 }
 
 export function Ships({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) {
-  const ids = useLiveKeys(() => world.instances);
+  const ids = useLiveKeys(() => world.instances, isExpanded);
   return (
     <group>
       {ids.map((id) => (

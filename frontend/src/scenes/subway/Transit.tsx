@@ -1,8 +1,9 @@
 /** Moving things between trains: message packets (comets), MCP express shuttles + tethers, and the MCP airports. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Label3D } from "../shared/Label3D";
+import { lod } from "../shared/lod";
 import { MCP_COLORS, TYPE_COLOR, waitSeconds, world } from "../shared/world";
 import { AIRPORT_R, airportAngle, airportPos, hdr, reduced, trainPos } from "./layout";
 
@@ -52,7 +53,10 @@ export function Streaks() {
         k++;
       }
     };
+    const grouped = lod.grouped;
     for (const c of world.comets) {
+      // collapsed agents have no train: skip their messages (instead of streaking hub → hub)
+      if (grouped && (!trainPos.has(c.from) || !trainPos.has(c.to))) continue;
       const t = Math.min(1, (now - c.start) / c.dur);
       const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
       const inst = world.instances.get(c.from);
@@ -60,7 +64,7 @@ export function Streaks() {
     }
     for (const c of world.mcpCalls) {
       const srv = world.mcpServers.get(c.server);
-      if (!srv) continue;
+      if (!srv || (grouped && !trainPos.has(c.instance))) continue;
       airportPos(srv.slot, _ap2);
       const t = Math.min(1, (now - c.start) / c.dur);
       const e = 1 - Math.pow(1 - t, 2.2);
@@ -153,11 +157,7 @@ function Airport({ name }: { name: string }) {
           <sphereGeometry args={[0.2, 16, 16]} />
           <meshBasicMaterial color={color} toneMapped={false} />
         </mesh>
-        <Html center position={[0, 1.55, 0]} distanceFactor={34} style={{ pointerEvents: "none" }} zIndexRange={[4, 0]}>
-          <div className="scene-label subway-airport" style={{ ["--c" as string]: color }}>
-            ✈ {name}
-          </div>
-        </Html>
+        <Label3D position={[0, 1.55, 0]} text={name} color={color} size={0.34} pxRange={[9, 13]} />
       </group>
     </group>
   );
