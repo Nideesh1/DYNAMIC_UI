@@ -30,6 +30,15 @@ const NODES = [
   ["Housing", "Stuyvesant Town", "Peter Cooper Village"],
 ];
 
+/** Backends behind each MCP server (rendered as nodes wired to the server). */
+const MCP_BACKENDS: Record<string, [string, "db" | "warehouse" | "spark" | "api" | "storage" | "queue"][]> = {
+  "nyc-open-data": [["Socrata API", "api"], ["Postgres cache", "db"]],
+  "cms-data": [["Snowflake warehouse", "warehouse"], ["Spark cluster", "spark"]],
+  github: [["GitHub API", "api"]],
+  "google-drive": [["Drive storage", "storage"]],
+  slack: [["Slack API", "api"], ["Kafka events", "queue"]],
+};
+
 const pick = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
 const rid = () => Math.random().toString(36).slice(2, 7);
 
@@ -98,8 +107,9 @@ function scheduleRun(at: Sched) {
     // MCP tool call to an external server: request out, response back after latency
     const [server, tool] = graphish ? pick([["nyc-open-data", "query_dataset"], ["github", "search_code"]]) : pick([["cms-data", "provider_lookup"], ["nyc-open-data", "311_complaints"], ["google-drive", "read_doc"]]);
     const lat = 600 + Math.random() * 1400;
-    put(400, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "call", ts: ts() }));
-    put(lat, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "result", latency_ms: lat, ts: ts() }));
+    const [resource, resource_kind] = pick(MCP_BACKENDS[server]);
+    put(400, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "call", resource, resource_kind, ts: ts() }));
+    put(lat, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "result", latency_ms: lat, resource, resource_kind, ts: ts() }));
     if (Math.random() < 0.7) put(500, () => ({ type: "graph", run_id: run, id, op: "read", nodes: pick(NODES), ts: ts() }));
     put(800 + Math.random() * 1200, () => ({ type: "message", run_id: run, from_id: id, to_id: researcher, text: `Found ${2 + Math.floor(Math.random() * 6)} linked records`, ts: ts() }));
     put(200, () => ({ type: "exit", run_id: run, id, status: "done", ts: ts() }));
@@ -117,8 +127,8 @@ function scheduleRun(at: Sched) {
   think(writer);
   llm(writer, 1800);
   later(400, () => ({ type: "graph", run_id: run, id: writer, op: "write", nodes: [`Brief: ${topic}`, ...pick(NODES).slice(0, 2)], ts: ts() }));
-  later(300, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "call", ts: ts() }));
-  later(700, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "result", latency_ms: 700, ts: ts() }));
+  later(300, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "call", resource: "Slack API", resource_kind: "api", ts: ts() }));
+  later(700, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "result", latency_ms: 700, resource: "Slack API", resource_kind: "api", ts: ts() }));
   step("write", "done", 400);
   later(150, () => ({ type: "final", run_id: run, text: `Brief on "${topic}": linked votes, hearings and meetings summarized with sources.`, ts: ts() }));
   exit(writer, 100);

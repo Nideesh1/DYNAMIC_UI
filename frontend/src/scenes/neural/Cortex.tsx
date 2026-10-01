@@ -58,7 +58,6 @@ function pointsMaterial() {
   return new THREE.ShaderMaterial({ uniforms: { uScale: { value: 400 } }, vertexShader: pointVert, fragmentShader: pointFrag, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
 }
 
-const MAX_WAVES = 56;
 const MAX_BEAMS = 48;
 const BEAM_SEG = 12;
 const WHITE = new THREE.Color(1, 1, 1);
@@ -89,17 +88,15 @@ function relax(pos: Float32Array, pairs: [number, number][], iters = 12) {
   }
 }
 
-const MAX_NAMES = 3;
+const MAX_NAMES = 4;
 
 export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
   const galaxy = useMemo(() => sampleGalaxy(full), [full]);
   const n = galaxy.nodes.length;
   const nameRefs = useRef<(HTMLDivElement | null)[]>([]);
   const nameGroups = useRef<(THREE.Group | null)[]>([]);
-  const nameShown = useRef<string[]>(["", "", ""]);
+  const nameShown = useRef<string[]>(["", "", "", "", "", ""]);
   const group = useRef<THREE.Group>(null);
-  const waves = useRef<THREE.InstancedMesh>(null);
-  const rings = useRef<THREE.InstancedMesh>(null);
   const { size, gl, camera } = useThree();
 
   const data = useMemo(() => {
@@ -120,7 +117,7 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
       }
       relax(pos, lp);
     }
-    const base = galaxy.nodes.map((nd) => new THREE.Color(KIND_COLOR[nd.kind] ?? "#94a3b8").lerp(TINT, 0.3).multiplyScalar(0.8));
+    const base = galaxy.nodes.map((nd) => new THREE.Color(KIND_COLOR[nd.kind] ?? "#94a3b8").lerp(TINT, 0.55).multiplyScalar(0.16));
     const sizes = new Float32Array(n);
     const colors = new Float32Array(n * 3);
     // links: FalkorDB relations + 2 nearest-neighbour dendrites per neuron
@@ -170,7 +167,7 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
       const j = 1 + (rng() - 0.5) * 0.25;
       dpos.set([p[0] * j, p[1] * j, p[2] * j], i * 3);
       dsize[i] = 0.06 + rng() * 0.16;
-      c.copy(cA).lerp(cB, rng() * rng()).multiplyScalar(0.12 + rng() * 0.2);
+      c.copy(cA).lerp(cB, rng() * rng()).multiplyScalar(0.04 + rng() * 0.07);
       dcol.set([c.r, c.g, c.b], i * 3);
     }
     const dgeo = new THREE.BufferGeometry();
@@ -191,17 +188,12 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
       dust: pointsMaterial(),
       line: new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
       beam: new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
-      wave: shellMaterial("#ffffff", 2.2),
-      lobe: shellMaterial(new THREE.Color("#6d4cff").multiplyScalar(0.1), 3.6),
-      ring: new THREE.MeshBasicMaterial({ blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }),
-      nebula: glowSpriteMaterial(new THREE.Color("#4c1d95").multiplyScalar(0.55)),
-      nebula2: glowSpriteMaterial(new THREE.Color("#0e7490").multiplyScalar(0.35)),
+      lobe: shellMaterial(new THREE.Color("#6d4cff").multiplyScalar(0.05), 3.6),
+      nebula: glowSpriteMaterial(new THREE.Color("#4c1d95").multiplyScalar(0.3)),
+      nebula2: glowSpriteMaterial(new THREE.Color("#0e7490").multiplyScalar(0.15)),
     }),
     [],
   );
-  const ringGeo = useMemo(() => new THREE.TorusGeometry(1, 0.03, 8, 72), []);
-  const waveColors = useMemo(() => new Float32Array(MAX_WAVES * 3), []);
-  const ringColors = useMemo(() => new Float32Array(MAX_WAVES * 3), []);
   const cache = useMemo(() => new Map<string, number>(), []);
   const tmp = useMemo(
     () => ({ o: new THREE.Object3D(), v: new THREE.Vector3(), v2: new THREE.Vector3(), mid: new THREE.Vector3(), c: new THREE.Color(), c2: new THREE.Color(), q: new THREE.Quaternion() }),
@@ -227,67 +219,42 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
 
     // spontaneous background firing: the brain is alive
     ambClock.current += dt;
-    const every = reduced ? 0.4 : 0.06;
+    // very rare, slow ambient glimmer (memory at rest)
+    const every = reduced ? 9 : 1.2;
     while (ambClock.current > every) {
       ambClock.current -= every;
-      amb[Math.floor(Math.random() * n)] = 0.5 + Math.random() * 0.5;
+      amb[Math.floor(Math.random() * n)] = 0.4;
     }
-    const decay = Math.exp(-dt * 2.5);
+    const decay = Math.exp(-dt * 0.8);
     fire.fill(0);
     white.fill(0);
     for (let i = 0; i < n; i++) amb[i] *= decay;
 
     // flares → neuron firing, shockwaves, rings, beams
-    const { o, v, v2, mid, c, c2 } = tmp;
-    let w = 0;
-    let r = 0;
+    const { v, v2, mid, c, c2 } = tmp;
     let b = 0;
     const bp = data.bgeo.getAttribute("position") as THREE.BufferAttribute;
     const bc = data.bgeo.getAttribute("color") as THREE.BufferAttribute;
-    g.getWorldQuaternion(tmp.q).invert().multiply(camera.quaternion);
     for (const f of world.flares) {
       const i = idx(f.node);
       const age = (now - f.start) / 1000;
       const inst = world.instances.get(f.instance);
       const tc = inst ? TYPE_C[inst.type] : WHITE;
       const isW = f.op === "write";
-      const k = Math.exp(-age * 1.7);
+      const k = age < 0.4 ? easeRing(age / 0.4) : Math.exp(-(age - 0.4) * 1.3);
       if (k > fire[i]) {
         fire[i] = k;
         fireC[i].copy(isW ? WHITE : tc);
         white[i] = isW ? 1 : 0.25;
       }
-      // shockwave sphere
-      if (age < 1.6 && w < MAX_WAVES) {
-        const u = age / 1.6;
-        o.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-        o.quaternion.identity();
-        o.scale.setScalar(0.08 + (1 - Math.pow(1 - u, 2.2)) * (isW ? 1.5 : 0.7));
-        o.updateMatrix();
-        waves.current?.setMatrixAt(w, o.matrix);
-        c.copy(isW ? WHITE : tc).multiplyScalar((isW ? 2.2 : 1.2) * (1 - u) * (1 - u));
-        c.toArray(waveColors, w * 3);
-        w++;
-      }
-      // write = bright white ring facing the camera
-      if (isW && age < 1.4 && r < MAX_WAVES) {
-        const u = age / 1.4;
-        o.quaternion.copy(tmp.q);
-        o.scale.setScalar(0.25 + easeRing(u) * 1.7);
-        o.updateMatrix();
-        rings.current?.setMatrixAt(r, o.matrix);
-        c.setRGB(3, 3, 3).multiplyScalar((1 - u) ** 1.5);
-        c.toArray(ringColors, r * 3);
-        r++;
-      }
       // beam soma -> neuron with a travelling data packet (read: node→agent, write: agent→node)
       const sp = somaPos.get(f.instance);
-      if (sp && age < 1.5 && b < MAX_BEAMS) {
+      if (sp && age < 2.2 && b < MAX_BEAMS) {
         v.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).applyMatrix4(g.matrix);
         mid.copy(sp).add(v).multiplyScalar(0.5);
         mid.z += 1.2;
-        const fade = (1 - age / 1.5) ** 1.3;
-        const head = isW ? Math.min(1, age * 1.6) : 1 - Math.min(1, age * 1.6);
+        const fade = Math.min(1, age / 0.3) * (1 - age / 2.2) ** 1.5;
+        const head = isW ? Math.min(1, age * 1.1) : 1 - Math.min(1, age * 1.1);
         for (let s = 0; s < BEAM_SEG; s++) {
           for (let e = 0; e < 2; e++) {
             const t = (s + e) / BEAM_SEG;
@@ -295,25 +262,13 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
             v2.set(a * a * sp.x + 2 * a * t * mid.x + t * t * v.x, a * a * sp.y + 2 * a * t * mid.y + t * t * v.y, a * a * sp.z + 2 * a * t * mid.z + t * t * v.z);
             const vi = (b * BEAM_SEG + s) * 2 + e;
             bp.setXYZ(vi, v2.x, v2.y, v2.z);
-            const pk = Math.exp(-(((t - head) / 0.07) ** 2)) * 4;
-            c2.copy(isW ? WHITE : tc).multiplyScalar(fade * (0.35 + pk));
+            const pk = Math.exp(-(((t - head) / 0.1) ** 2)) * 1.4;
+            c2.copy(isW ? WHITE : tc).multiplyScalar(fade * (0.25 + pk) * 0.8);
             bc.setXYZ(vi, c2.r, c2.g, c2.b);
           }
         }
         b++;
       }
-    }
-    const wm = waves.current;
-    if (wm) {
-      wm.count = w;
-      wm.instanceMatrix.needsUpdate = true;
-      if (wm.instanceColor) wm.instanceColor.needsUpdate = true;
-    }
-    const rm = rings.current;
-    if (rm) {
-      rm.count = r;
-      rm.instanceMatrix.needsUpdate = true;
-      if (rm.instanceColor) rm.instanceColor.needsUpdate = true;
     }
     data.bgeo.setDrawRange(0, b * BEAM_SEG * 2);
 
@@ -321,11 +276,18 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
     let shown = 0;
     for (let q = world.flares.length - 1; q >= 0 && shown < MAX_NAMES; q--) {
       const f = world.flares[q];
-      if (now - f.start > 1300) break;
+      if (now - f.start > 2200) break;
       let dup = false;
       for (let z = 0; z < shown; z++) if (nameShown.current[z] === f.node) dup = true;
       if (dup) continue;
       const i = idx(f.node);
+      // skip names that would sit on top of one already shown
+      let near = false;
+      for (let z = 0; z < shown; z++) {
+        const ng0 = nameGroups.current[z];
+        if (ng0 && Math.abs(ng0.position.y - pos[i * 3 + 1] * 1.22) < 0.55 && Math.abs(ng0.position.x - pos[i * 3] * 1.22) < 3.2) near = true;
+      }
+      if (near) continue;
       const el = nameRefs.current[shown];
       const ng = nameGroups.current[shown];
       if (el && ng) {
@@ -353,9 +315,9 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
     for (let i = 0; i < n; i++) {
       const f = fire[i];
       const a = amb[i];
-      sz.setX(i, 0.3 + a * 0.18 + f * (1.1 + white[i] * 0.7));
+      sz.setX(i, 0.16 + a * 0.12 + f * (0.75 + white[i] * 0.35));
       c.copy(base[i]).multiplyScalar(1 + a * 2.2);
-      if (f > 0.01) addScaled(addScaled(c, fireC[i], f * 4.5), WHITE, f * (1 + white[i] * 3));
+      if (f > 0.01) addScaled(addScaled(c, fireC[i], f * 2.2), WHITE, f * (0.4 + white[i] * 1.6));
       nc.setXYZ(i, c.r, c.g, c.b);
     }
     sz.needsUpdate = true;
@@ -366,11 +328,11 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
     for (let j = 0; j < pairs.length; j += 2) {
       const a = pairs[j];
       const z = pairs[j + 1];
-      const s = strong[j >> 1] ? 0.3 : 0.07;
+      const s = strong[j >> 1] ? 0.22 : 0.08;
       const fa = fire[a] + amb[a] * 0.4;
       const fz = fire[z] + amb[z] * 0.4;
-      lc.setXYZ(j, base[a].r * (s + fa * 3) + fa * 0.4, base[a].g * (s + fa * 3) + fa * 0.4, base[a].b * (s + fa * 3) + fa * 0.4);
-      lc.setXYZ(j + 1, base[z].r * (s + fz * 3) + fz * 0.4, base[z].g * (s + fz * 3) + fz * 0.4, base[z].b * (s + fz * 3) + fz * 0.4);
+      lc.setXYZ(j, base[a].r * s + fa * 0.35, base[a].g * s + fa * 0.35, base[a].b * s + fa * 0.45);
+      lc.setXYZ(j + 1, base[z].r * s + fz * 0.35, base[z].g * s + fz * 0.35, base[z].b * s + fz * 0.45);
     }
     lc.needsUpdate = true;
   });
@@ -386,12 +348,6 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
         <points geometry={data.dgeo} material={mats.dust} frustumCulled={false} />
         <lineSegments geometry={data.lgeo} material={mats.line} frustumCulled={false} />
         <points geometry={data.ngeo} material={mats.neuron} frustumCulled={false} />
-        <instancedMesh ref={waves} args={[SHELL_GEO, mats.wave, MAX_WAVES]} frustumCulled={false}>
-          <instancedBufferAttribute attach="instanceColor" args={[waveColors, 3]} />
-        </instancedMesh>
-        <instancedMesh ref={rings} args={[ringGeo, mats.ring, MAX_WAVES]} frustumCulled={false}>
-          <instancedBufferAttribute attach="instanceColor" args={[ringColors, 3]} />
-        </instancedMesh>
       </group>
       <lineSegments geometry={data.bgeo} material={mats.beam} frustumCulled={false} />
       {Array.from({ length: MAX_NAMES }, (_, k) => (
@@ -402,8 +358,8 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
         </group>
       ))}
       <Html center position={[0, -4.7, 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-        <div className="scene-label" style={{ ["--c" as string]: "#a78bfa" }}>
-          FalkorDB · knowledge graph
+        <div className="scene-label" style={{ ["--c" as string]: "#a78bfa", opacity: 0.6, fontSize: 11 }}>
+          FalkorDB · memory
         </div>
       </Html>
     </>

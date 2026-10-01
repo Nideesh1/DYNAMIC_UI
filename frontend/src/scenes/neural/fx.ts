@@ -259,27 +259,34 @@ export function somaTarget(inst: Instance, out: THREE.Vector3) {
 /** Live soma positions by instance id (stage space), written by each Soma every frame. */
 export const somaPos = new Map<string, THREE.Vector3>();
 
-// MCP sensory organs ring the brain behind the pathway plane.
+// MCP servers sit on an outer ring (diagonals first); their backends fan out beyond them.
 const SAT_SPOTS: [number, number, number][] = [
-  [-8.6, 6.2, -5],
-  [8.6, 6.2, -5],
-  [-8.4, -6.0, -5],
-  [8.4, -6.0, -5],
-  [0, -8.4, -6.5],
-  [0, 8.6, -7.5],
-  [-13, 3.5, -9],
-  [13, -3.5, -9],
+  [-11.8, 7.0, -2],
+  [11.8, 7.0, -2],
+  [-11.8, -5.8, -2],
+  [11.8, -5.8, -2],
+  [0, -9.0, -2.5],
+  [0, 9.6, -3],
+  [-14, 6.5, -4],
+  [14, -6.5, -4],
 ];
 export function satPos(slot: number, out: THREE.Vector3) {
   const s = SAT_SPOTS[slot % SAT_SPOTS.length];
   const ring = Math.floor(slot / SAT_SPOTS.length);
   return out.set(s[0] * (1 + ring * 0.15), s[1] * (1 + ring * 0.15), s[2] - ring * 3);
 }
-/** Where a sensory organ's nerve enters the cortex. */
-export function nerveRoot(slot: number, out: THREE.Vector3) {
+/** Backend k of n for a server: fanned outward/sideways from the server. */
+export function backendPos(slot: number, k: number, n: number, out: THREE.Vector3) {
   satPos(slot, out);
-  const l = Math.hypot(out.x / 4.2, out.y / 2.9, out.z / 3.1) || 1;
-  return out.multiplyScalar(1.05 / l);
+  if (Math.abs(out.x) < 1) {
+    out.x += (k - (n - 1) / 2) * 3.4;
+    out.y += Math.sign(out.y || 1) * 1.0;
+  } else {
+    out.x += Math.sign(out.x) * 3.3;
+    out.y += (k - (n - 1) / 2) * 2.1;
+  }
+  out.z -= 0.4;
+  return out;
 }
 
 /** c += src * k (THREE.Color has no addScaledVector). */

@@ -32,7 +32,10 @@ export type WorldEvent =
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
   | { type: "final"; run_id: string; text: string; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
-  | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number };
+  | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number; resource?: string; resource_kind?: ResourceKind };
+
+/** What sits behind an MCP server (the server is a node; its backends are nodes too). */
+export type ResourceKind = "db" | "warehouse" | "spark" | "api" | "storage" | "queue";
 
 export const AGENT_TYPES: { type: AgentType; label: string; color: string }[] = [
   { type: "planner", label: "Planner", color: "#a78bfa" },
@@ -93,11 +96,12 @@ export type Run = {
 };
 export type Comet = { id: number; run: string; from: string; to: string; start: number; dur: number; text: string };
 /** External MCP servers agents call (persistent "satellites"; registered on first use). */
-export type McpServer = { name: string; color: string; slot: number; activeAt: number; calls: number; inflight: number };
+export type McpResource = { name: string; kind: ResourceKind; activeAt: number; inflight: number; calls: number };
+export type McpServer = { name: string; color: string; slot: number; activeAt: number; calls: number; inflight: number; resources: Map<string, McpResource> };
 /** One MCP request/response: a packet flying instance → server ("call") or server → instance ("result"). */
-export type McpCall = { id: number; run: string; instance: string; server: string; tool: string; phase: "call" | "result"; start: number; dur: number };
+export type McpCall = { id: number; run: string; instance: string; server: string; tool: string; resource?: string; phase: "call" | "result"; start: number; dur: number };
 /** An MCP call that has been sent but not answered yet: draw a live tether instance ↔ server while it waits. */
-export type McpPending = { key: string; run: string; instance: string; server: string; tool: string; since: number };
+export type McpPending = { key: string; run: string; instance: string; server: string; tool: string; resource?: string; since: number };
 export const MCP_COLORS: Record<string, string> = {
   "nyc-open-data": "#f97316",
   "cms-data": "#06b6d4",
@@ -281,10 +285,23 @@ export function apply(ev: WorldEvent) {
     case "mcp": {
       let srv = world.mcpServers.get(ev.server);
       if (!srv) {
-        srv = { name: ev.server, color: MCP_COLORS[ev.server] ?? "#94a3b8", slot: world.mcpServers.size, activeAt: now, calls: 0, inflight: 0 };
+        srv = { name: ev.server, color: MCP_COLORS[ev.server] ?? "#94a3b8", slot: world.mcpServers.size, activeAt: now, calls: 0, inflight: 0, resources: new Map() };
         world.mcpServers.set(ev.server, srv);
       }
       srv.activeAt = now;
+      let res: McpResource | undefined;
+      if (ev.resource) {
+        res = srv.resources.get(ev.resource);
+        if (!res) {
+          res = { name: ev.resource, kind: ev.resource_kind ?? "api", activeAt: now, inflight: 0, calls: 0 };
+          srv.resources.set(ev.resource, res);
+        }
+        res.activeAt = now;
+        if (ev.phase === "call") {
+          res.inflight++;
+          res.calls++;
+        } else res.inflight = Math.max(0, res.inflight - 1);
+      }
       if (ev.phase === "call") {
         const inst = world.instances.get(ev.id);
         if (inst) inst.mcpCalls++;
@@ -292,9 +309,9 @@ export function apply(ev: WorldEvent) {
         srv.inflight++;
         world.stats.mcpCalls++;
       } else srv.inflight = Math.max(0, srv.inflight - 1);
-      world.mcpCalls.push({ id: ++seq, run: ev.run_id, instance: ev.id, server: ev.server, tool: ev.tool, phase: ev.phase, start: now, dur: 900 });
+      world.mcpCalls.push({ id: ++seq, run: ev.run_id, instance: ev.id, server: ev.server, tool: ev.tool, resource: ev.resource, phase: ev.phase, start: now, dur: 900 });
       const key = `${ev.id}|${ev.server}|${ev.tool}`;
-      if (ev.phase === "call") world.mcpPending.set(key, { key, run: ev.run_id, instance: ev.id, server: ev.server, tool: ev.tool, since: now });
+      if (ev.phase === "call") world.mcpPending.set(key, { key, run: ev.run_id, instance: ev.id, server: ev.server, tool: ev.tool, resource: ev.resource, since: now });
       else {
         const p = world.mcpPending.get(key);
         if (p) world.mcpResolved.push({ ...p, resolvedAt: now });
