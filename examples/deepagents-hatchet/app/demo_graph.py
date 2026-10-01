@@ -64,22 +64,23 @@ def seed(force: bool = False) -> int:
     return len(nodes)
 
 
+RESOLVE_Q = "MATCH (n:Entity) WHERE toLower(n.name) CONTAINS $t RETURN n.name AS name LIMIT $l"
+NEIGHBORS_Q = "MATCH (a:Entity {name: $n})-[r]-(b:Entity) RETURN a.name AS a, type(r) AS rel, b.name AS b, b.kind AS kind LIMIT $l"
+
+
 def resolve(text: str, limit: int = 5) -> list[str]:
     t = text.lower()
-    hits = rows("MATCH (n:Entity) WHERE toLower(n.name) CONTAINS $t RETURN n.name AS name LIMIT $l", {"t": t, "l": limit})
+    hits = rows(RESOLVE_Q, {"t": t, "l": limit})
     if not hits:  # fall back to any word
         for w in sorted(t.split(), key=len, reverse=True)[:3]:
-            hits = rows("MATCH (n:Entity) WHERE toLower(n.name) CONTAINS $t RETURN n.name AS name LIMIT $l", {"t": w, "l": limit})
+            hits = rows(RESOLVE_Q, {"t": w, "l": limit})
             if hits:
                 break
     return [h["name"] for h in hits]
 
 
 def neighbors(name: str, limit: int = 20) -> list[dict]:
-    return rows(
-        "MATCH (a:Entity {name: $n})-[r]-(b:Entity) RETURN a.name AS a, type(r) AS rel, b.name AS b, b.kind AS kind LIMIT $l",
-        {"n": name, "l": limit},
-    )
+    return rows(NEIGHBORS_Q, {"n": name, "l": limit})
 
 
 def sample(limit: int = 200) -> dict:

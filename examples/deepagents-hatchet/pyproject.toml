@@ -1,9 +1,10 @@
 [project]
-name = "cb6-observatory"
+name = "agentglow-example-deepagents-hatchet"
 version = "0.1.0"
-description = "Live agent observatory: Hatchet + deepagents + Langfuse + FalkorDB + MCP, streamed to the 3D scenes"
+description = "Hatchet + deepagents + MCP + FalkorDB, visualized live by AgentGlow through OpenTelemetry only"
 requires-python = ">=3.11"
 dependencies = [
+  "agentglow[langchain,hatchet]",
   "deepagents",
   "hatchet-sdk[otel]",
   "langchain-google-genai",
@@ -12,10 +13,13 @@ dependencies = [
   "opentelemetry-sdk",
   "opentelemetry-exporter-otlp-proto-http",
   "openinference-instrumentation-langchain",
+  "openinference-instrumentation-mcp",
   "falkordb",
-  "rapidfuzz",
-  "fastapi",
-  "uvicorn[standard]",
-  "httpx",
   "python-dotenv",
 ]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agentglow = { path = "../../backend", editable = true }

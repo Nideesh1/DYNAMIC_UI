@@ -1,4 +1,25 @@
+# AgentGlow + the deepagents-hatchet example stack.
+#
+#   ./scripts/gen-obs-env.sh && docker compose up -d --build     # agentglow, falkordb, hatchet, mcp, worker
+#   open http://localhost:8100                                    # 3D scenes
+#   docker compose exec worker python trigger.py "Why is churn rising for Acme Corp?"
+#   LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d     # + Langfuse at :3100 (same spans, side by side)
+#
+# Ports avoid the BOOKIE stack: agentglow :8100, Hatchet UI :8180, Hatchet gRPC :7177, Langfuse :3100.
+
 services:
+  # ------------------------------------------------------------------ visualizer
+  agentglow:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports: ["8100:8100"]
+    environment:
+      AGENTGLOW_FALKOR_URL: redis://falkordb:6379
+    depends_on: [falkordb]
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ example: graph DB
   falkordb:
     image: falkordb/falkordb:latest
     ports:
@@ -8,44 +29,42 @@ services:
       - falkordb_data:/var/lib/falkordb/data
     restart: unless-stopped
 
-  app:
-    build: .
-    ports:
-      - "8000:8000"   # UI at / and API at /api
-    env_file: .env
+  # ------------------------------------------------------------------ example: MCP server + Hatchet worker
+  mcp:          # `analytics` MCP server (streamable HTTP :8200/mcp) → Snowflake / Spark / Postgres (simulated)
+    image: agentglow-example-deepagents-hatchet:local
+    build: &example-build
+      context: .
+      dockerfile: examples/deepagents-hatchet/Dockerfile
+    command: ["python", "-m", "app.mcp_server"]
     environment:
-      FALKOR_HOST: falkordb
-    volumes:          # scraped data + File Search store id (generate with the scripts in README)
-      - ./blockparty/data:/app/blockparty/data:ro
-      - ./cb6/data:/app/cb6/data:ro
-      - ./corpus:/app/corpus:ro
-    depends_on:
-      falkordb:
-        condition: service_started
-      pipeline:
-        condition: service_completed_successfully
+      AGENTGLOW_URL: http://agentglow:8100
+    depends_on: [agentglow]
     restart: unless-stopped
 
-  pipeline:         # scrape -> docs -> File Search -> graph; skips finished steps
-    build:
-      context: .
-      dockerfile: Dockerfile.pipeline
-    env_file: .env
+  worker:       # Hatchet worker running the deepagents workflow `agent_smoke`
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["python", "-m", "app.worker"]
     environment:
+      AGENTGLOW_URL: http://agentglow:8100
+      MCP_URL: http://mcp:8200/mcp
       FALKOR_HOST: falkordb
-    volumes:
-      - ./blockparty/data:/app/blockparty/data
-      - ./cb6/data:/app/cb6/data
-      - ./corpus:/app/corpus
-      - ./graph/cache:/app/graph/cache
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OBS_MODEL: ${OBS_MODEL:-gemini-3.8-flash}
+      OBS_LANGFUSE_PUBLIC_KEY: ${OBS_LANGFUSE_PUBLIC_KEY:-}
+      OBS_LANGFUSE_SECRET_KEY: ${OBS_LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_EXPORT: ${LANGFUSE_EXPORT:-0}
+    volumes: [obs_hatchet_token:/hatchet-token:ro]
     depends_on:
-      - falkordb
+      agentglow: {condition: service_started}
+      falkordb: {condition: service_started}
+      mcp: {condition: service_started}
+      obs_hatchet_engine: {condition: service_started}
+      obs_hatchet_token: {condition: service_completed_successfully}
+    restart: unless-stopped
 
-  # ======================= agent observatory (profile: observatory) =======================
-  # docker compose --profile observatory up -d   — Hatchet + Langfuse + live agent workflow.
-  # Ports avoid the BOOKIE stack: Hatchet UI :8180, gRPC :7177, Langfuse :3100, observatory API :8100.
-  obs_postgres:
-    profiles: ["observatory"]
+  # ------------------------------------------------------------------ Hatchet (orchestration)
+  obs_postgres:     # Hatchet's database (Langfuse also uses it under the langfuse profile)
     image: postgres:15.6
     command: postgres -c 'max_connections=500'
     restart: unless-stopped
@@ -57,20 +76,7 @@ services:
       timeout: 5s
       retries: 20
 
-  obs_langfuse_db:
-    profiles: ["observatory"]
-    image: postgres:15.6
-    environment: [PGPASSWORD=hatchet]
-    entrypoint: >
-      /bin/sh -c "
-      psql -h obs_postgres -U hatchet -d hatchet -tc \"select 1 from pg_database where datname='langfuse'\" | grep -q 1 || psql -h obs_postgres -U hatchet -d hatchet -c \"create database langfuse\";
-      echo langfuse db ready;
-      "
-    depends_on:
-      obs_postgres: {condition: service_healthy}
-
   obs_hatchet_migrate:
-    profiles: ["observatory"]
     image: ghcr.io/hatchet-dev/hatchet/hatchet-migrate:latest
     command: /hatchet/hatchet-migrate
     environment:
@@ -79,7 +85,6 @@ services:
       obs_postgres: {condition: service_healthy}
 
   obs_hatchet_config:
-    profiles: ["observatory"]
     image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:latest
     command: /hatchet/hatchet-admin quickstart --skip certs --generated-config-dir /hatchet/config --overwrite=false
     environment:
@@ -96,7 +101,6 @@ services:
       obs_hatchet_migrate: {condition: service_completed_successfully}
 
   obs_hatchet_engine:
-    profiles: ["observatory"]
     image: ghcr.io/hatchet-dev/hatchet/hatchet-engine:latest
     command: /hatchet/hatchet-engine --config /hatchet/config
     restart: on-failure
@@ -110,8 +114,7 @@ services:
     depends_on:
       obs_hatchet_config: {condition: service_completed_successfully}
 
-  obs_hatchet_dashboard:
-    profiles: ["observatory"]
+  obs_hatchet_dashboard:   # Hatchet UI: http://localhost:8180 (login admin@example.com / Admin123!!)
     image: ghcr.io/hatchet-dev/hatchet/hatchet-dashboard:latest
     command: sh ./entrypoint.sh --config /hatchet/config
     restart: on-failure
@@ -122,8 +125,7 @@ services:
     depends_on:
       obs_hatchet_config: {condition: service_completed_successfully}
 
-  obs_hatchet_token:   # mints an API token once into a shared volume; observatory reads it at startup
-    profiles: ["observatory"]
+  obs_hatchet_token:   # mints an API token once into a shared volume; the worker reads it at startup
     image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:latest
     entrypoint: >
       /bin/sh -c "
@@ -138,8 +140,21 @@ services:
     depends_on:
       obs_hatchet_config: {condition: service_completed_successfully}
 
+  # ------------------------------------------------------------------ Langfuse (profile: langfuse)
+  obs_langfuse_db:
+    profiles: ["langfuse"]
+    image: postgres:15.6
+    environment: [PGPASSWORD=hatchet]
+    entrypoint: >
+      /bin/sh -c "
+      psql -h obs_postgres -U hatchet -d hatchet -tc \"select 1 from pg_database where datname='langfuse'\" | grep -q 1 || psql -h obs_postgres -U hatchet -d hatchet -c \"create database langfuse\";
+      echo langfuse db ready;
+      "
+    depends_on:
+      obs_postgres: {condition: service_healthy}
+
   obs_minio:
-    profiles: ["observatory"]
+    profiles: ["langfuse"]
     image: minio/minio:latest
     command: server /data
     restart: unless-stopped
@@ -150,7 +165,7 @@ services:
         aliases: [obs-minio]   # S3 SDK rejects hostnames with underscores
 
   obs_minio_init:
-    profiles: ["observatory"]
+    profiles: ["langfuse"]
     image: minio/mc:latest
     depends_on: [obs_minio]
     entrypoint: >
@@ -160,17 +175,17 @@ services:
       "
 
   obs_clickhouse:
-    profiles: ["observatory"]
+    profiles: ["langfuse"]
     image: clickhouse/clickhouse-server:25.12
     restart: unless-stopped
     user: "101:101"
     environment:
       - CLICKHOUSE_DB=default
       - CLICKHOUSE_USER=clickhouse
-      - CLICKHOUSE_PASSWORD=${OBS_CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_PASSWORD=${OBS_CLICKHOUSE_PASSWORD:-}
     volumes:
       - obs_clickhouse_data:/var/lib/clickhouse
-      - ./observatory/docker/clickhouse-low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+      - ./examples/deepagents-hatchet/docker/clickhouse-low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
     mem_limit: 3g
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
@@ -180,34 +195,34 @@ services:
       start_period: 20s
 
   obs_langfuse_redis:
-    profiles: ["observatory"]
+    profiles: ["langfuse"]
     image: redis:7.2.4
     restart: unless-stopped
-    command: redis-server --requirepass ${OBS_LANGFUSE_REDIS_AUTH} --maxmemory-policy noeviction
+    command: redis-server --requirepass ${OBS_LANGFUSE_REDIS_AUTH:-} --maxmemory-policy noeviction
     healthcheck:
-      test: ["CMD", "redis-cli", "--pass", "${OBS_LANGFUSE_REDIS_AUTH}", "ping"]
+      test: ["CMD", "redis-cli", "--pass", "${OBS_LANGFUSE_REDIS_AUTH:-}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
 
   obs_langfuse_worker:
-    profiles: ["observatory"]
+    profiles: ["langfuse"]
     image: docker.langfuse.com/langfuse/langfuse-worker:4
     restart: unless-stopped
     environment: &obs-langfuse-env
       DATABASE_URL: postgresql://hatchet:hatchet@obs_postgres:5432/langfuse
-      SALT: ${OBS_SALT}
-      ENCRYPTION_KEY: ${OBS_ENCRYPTION_KEY}
+      SALT: ${OBS_SALT:-}
+      ENCRYPTION_KEY: ${OBS_ENCRYPTION_KEY:-}
       NEXTAUTH_URL: http://localhost:3100
       TELEMETRY_ENABLED: "false"
       CLICKHOUSE_MIGRATION_URL: clickhouse://obs_clickhouse:9000
       CLICKHOUSE_URL: http://obs_clickhouse:8123
       CLICKHOUSE_USER: clickhouse
-      CLICKHOUSE_PASSWORD: ${OBS_CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_PASSWORD: ${OBS_CLICKHOUSE_PASSWORD:-}
       CLICKHOUSE_CLUSTER_ENABLED: "false"
       REDIS_HOST: obs_langfuse_redis
       REDIS_PORT: 6379
-      REDIS_AUTH: ${OBS_LANGFUSE_REDIS_AUTH}
+      REDIS_AUTH: ${OBS_LANGFUSE_REDIS_AUTH:-}
       LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
       LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
       LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minioadmin
@@ -229,23 +244,23 @@ services:
       obs_langfuse_db: {condition: service_completed_successfully}
       obs_minio: {condition: service_started}
 
-  obs_langfuse_web:
-    profiles: ["observatory"]
+  obs_langfuse_web:   # Langfuse UI: http://localhost:3100 (admin@observatory.local / OBS_LANGFUSE_PASSWORD)
+    profiles: ["langfuse"]
     image: docker.langfuse.com/langfuse/langfuse:4
     restart: unless-stopped
     ports: ["127.0.0.1:3100:3000"]
     environment:
       <<: *obs-langfuse-env
-      NEXTAUTH_SECRET: ${OBS_NEXTAUTH_SECRET}
+      NEXTAUTH_SECRET: ${OBS_NEXTAUTH_SECRET:-}
       LANGFUSE_INIT_ORG_ID: observatory
       LANGFUSE_INIT_ORG_NAME: observatory
       LANGFUSE_INIT_PROJECT_ID: observatory
       LANGFUSE_INIT_PROJECT_NAME: agent-observatory
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${OBS_LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${OBS_LANGFUSE_SECRET_KEY}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${OBS_LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${OBS_LANGFUSE_SECRET_KEY:-}
       LANGFUSE_INIT_USER_EMAIL: admin@observatory.local
       LANGFUSE_INIT_USER_NAME: admin
-      LANGFUSE_INIT_USER_PASSWORD: ${OBS_LANGFUSE_PASSWORD}
+      LANGFUSE_INIT_USER_PASSWORD: ${OBS_LANGFUSE_PASSWORD:-}
     depends_on: *obs-langfuse-deps
 
 volumes:

@@ -1,42 +1,34 @@
-/** Every scene calls this once: starts the event source (simulator for now) and loads the FalkorDB galaxy sample. */
-import { useEffect, useState } from "react";
+/**
+ * Every scene calls useSceneSetup() once: it connects the shared world to a data source and returns the
+ * graph sample ("galaxy") the scene draws as its memory/graph backdrop.
+ *
+ * Source (see config.tsx): `${source}/live/stream` (SSE world events), `/live/graph` (optional sample),
+ * `/live/health` (reachability), `/live/run` (optional "Run agents" button). `sim` forces the simulator;
+ * an unreachable server falls back to it automatically.
+ *
+ * The world is a page-level singleton, so the connection is too: scenes on the same page with the same
+ * source share ONE connection (ref-counted). A scene with a different source replaces it (last one wins).
+ */
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { useSceneConfig } from "./config";
 import { runWorldSimulator } from "./sim";
 import { apply, setMode, type WorldEvent } from "./world";
-
-/** Observatory API: vite proxies /obs → :8100 in dev; prod uses VITE_OBS_URL (default localhost:8100). */
-export const OBS = import.meta.env.DEV ? "/obs" : ((import.meta.env.VITE_OBS_URL as string | undefined) ?? "http://localhost:8100");
-
-async function liveUp(): Promise<boolean> {
-  if (new URLSearchParams(location.search).has("sim")) return false;
-  try {
-    const r = await fetch(`${OBS}/live/health`, { signal: AbortSignal.timeout(2000) });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
-/** Trigger a real Hatchet cb6_brief run (live mode only). */
-export async function startLiveRun(topic: string): Promise<string | null> {
-  const r = await fetch(`${OBS}/live/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ topic }) });
-  return r.ok ? ((await r.json()) as { run_id: string }).run_id : null;
-}
 
 export type GalaxyNode = { id: string; name: string; kind: string };
 export type Galaxy = { nodes: GalaxyNode[]; links: { source: string; target: string }[] };
 
-const KINDS = ["Business", "Address", "Resolution", "Meeting", "Hearing", "Agency", "Topic", "Committee"];
+const KINDS = ["Customer", "Account", "Incident", "Ticket", "Product", "Region", "Metric", "Team"];
 const WEIGHTS = [0.24, 0.24, 0.22, 0.12, 0.06, 0.03, 0.05, 0.04];
 const NAMED = [
-  "Tara Rose", "384 3rd Avenue", "Kips Bay Hospitality LLC", "Turtle Bay Tavern", "987 2nd Avenue",
-  "New York State Liquor Authority", "Murray Cafe", "165 Lexington Avenue", "The Station Cafe", "245 East 34th Street",
-  "HBSG LLC", "NYC Department of Transportation", "Dining Out NYC", "3rd Avenue", "Sanitation", "2nd Avenue",
-  "Rat Mitigation Zone", "Posto", "310 2nd Avenue", "Housing", "Stuyvesant Town", "Peter Cooper Village",
+  "Acme Corp", "Globex", "Initech", "Umbrella Co", "Payments API", "Fraud Shield", "Checkout Funnel",
+  "Enterprise Plan", "Incident #4821", "Incident #4790", "Ticket #9917", "EMEA", "APAC", "North America",
+  "p99 Latency", "Churn Q3", "Conversion Rate", "Chargeback Rate", "On-call Team", "Customer Success",
+  "Release 4.12", "Renewal 2026",
 ];
 
 function fakeGalaxy(n = 320): Galaxy {
   const nodes = Array.from({ length: n }, (_, i) => {
-    if (i < NAMED.length) return { id: NAMED[i], name: NAMED[i], kind: /\d/.test(NAMED[i]) || /Avenue|Street/.test(NAMED[i]) ? "Address" : "Business" };
+    if (i < NAMED.length) return { id: NAMED[i], name: NAMED[i], kind: KINDS[i % KINDS.length] };
     let r = Math.random();
     let k = 0;
     while (k < WEIGHTS.length - 1 && (r -= WEIGHTS[k]) > 0) k++;
@@ -46,39 +38,140 @@ function fakeGalaxy(n = 320): Galaxy {
   return { nodes, links };
 }
 
-export function useSceneSetup(): Galaxy {
-  const [galaxy, setGalaxy] = useState(fakeGalaxy);
-  useEffect(() => {
-    let stop: (() => void) | undefined;
-    let cancelled = false;
-    (async () => {
-      if (await liveUp()) {
-        if (cancelled) return;
-        setMode("live");
-        // real FalkorDB sample (representative), then the live event stream (replays recent events first)
-        fetch(`${OBS}/live/graph`)
-          .then((r) => r.json())
-          .then((g: Galaxy) => !cancelled && g.nodes?.length && setGalaxy(g))
-          .catch(() => {});
-        const es = new EventSource(`${OBS}/live/stream`);
-        es.onmessage = (m) => {
-          try {
-            apply(JSON.parse(m.data) as WorldEvent);
-          } catch {
-            /* ignore malformed */
-          }
-        };
-        stop = () => es.close();
-      } else if (!cancelled) {
-        setMode("sim");
-        stop = runWorldSimulator();
+
+type Conn = { key: string; source: string; refs: number; stop?: () => void; dead: boolean; galaxy: Galaxy | null };
+let conn: Conn | null = null;
+let runAvailable = false;
+const subs = new Set<() => void>();
+const emit = () => subs.forEach((f) => f());
+
+function setRunAvailable(v: boolean) {
+  if (runAvailable !== v) {
+    runAvailable = v;
+    emit();
+  }
+}
+
+/** True when the server exposes POST /live/run (the HUD shows a "Run agents" button). */
+export function useRunAvailable(): boolean {
+  return useSyncExternalStore(
+    (f) => (subs.add(f), () => subs.delete(f)),
+    () => runAvailable,
+    () => false,
+  );
+}
+
+async function health(source: string): Promise<Record<string, unknown> | null> {
+  try {
+    const r = await fetch(`${source}/live/health`, { signal: AbortSignal.timeout(2500) });
+    if (!r.ok) return null;
+    return ((await r.json().catch(() => ({}))) ?? {}) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** Does `${source}/live/run` exist? Health may say so (`run: bool`); else a side-effect-free GET (405 = POST route exists). */
+async function probeRun(source: string, h: Record<string, unknown>): Promise<boolean> {
+  if (typeof h.run === "boolean") return h.run;
+  try {
+    const r = await fetch(`${source}/live/run`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(2500) });
+    return r.status === 405;
+  } catch {
+    return false;
+  }
+}
+
+function start(c: Conn, sim: boolean) {
+  const useSim = () => {
+    if (c.dead) return;
+    setMode("sim");
+    c.stop = runWorldSimulator();
+  };
+  if (sim) return useSim();
+  (async () => {
+    const h = await health(c.source);
+    if (c.dead) return;
+    if (!h) return useSim();
+    setMode("live");
+    probeRun(c.source, h).then((ok) => !c.dead && setRunAvailable(ok));
+    fetch(`${c.source}/live/graph`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((g: Galaxy | null) => {
+        if (!c.dead && g?.nodes?.length) {
+          c.galaxy = g;
+          emit();
+        }
+      })
+      .catch(() => {});
+    const es = new EventSource(`${c.source}/live/stream`);
+    es.onmessage = (m) => {
+      try {
+        apply(JSON.parse(m.data) as WorldEvent);
+      } catch {
+        /* ignore malformed */
       }
-    })();
-    return () => {
-      cancelled = true;
-      stop?.();
     };
-  }, []);
+    c.stop = () => es.close();
+  })();
+}
+
+function teardown(c: Conn) {
+  c.dead = true;
+  c.stop?.();
+  if (conn === c) {
+    conn = null;
+    setRunAvailable(false);
+  }
+}
+
+function acquire(source: string, sim: boolean): Conn {
+  const key = sim ? "sim" : `live:${source}`;
+  if (conn && conn.key === key && !conn.dead) {
+    conn.refs++;
+    return conn;
+  }
+  if (conn) {
+    console.warn(`[agentglow] one data source per page: switching from "${conn.key}" to "${key}"`);
+    teardown(conn);
+  }
+  const c: Conn = { key, source, refs: 1, dead: false, galaxy: null };
+  conn = c;
+  start(c, sim);
+  return c;
+}
+
+function release(c: Conn) {
+  // deferred so React StrictMode's mount→unmount→mount keeps the same connection
+  window.setTimeout(() => {
+    if (--c.refs <= 0) teardown(c);
+  }, 0);
+}
+
+/** Trigger a run via the server's optional POST /live/run. Returns the run id, or null (404 → button hides). */
+export async function startLiveRun(topic: string): Promise<string | null> {
+  const source = conn?.source ?? "";
+  const r = await fetch(`${source}/live/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ topic }) });
+  if (r.status === 404 || r.status === 405) setRunAvailable(false);
+  if (!r.ok) return null;
+  const j = (await r.json().catch(() => ({}))) as { run_id?: string };
+  return j.run_id ?? "started";
+}
+
+export function useSceneSetup(): Galaxy {
+  const { source, sim } = useSceneConfig();
+  const [fallback] = useState(fakeGalaxy);
+  const [galaxy, setGalaxy] = useState<Galaxy>(fallback);
+  useEffect(() => {
+    const c = acquire(source, sim);
+    const sync = () => setGalaxy(c.galaxy ?? fallback);
+    sync();
+    subs.add(sync);
+    return () => {
+      subs.delete(sync);
+      release(c);
+    };
+  }, [source, sim, fallback]);
   return galaxy;
 }
 

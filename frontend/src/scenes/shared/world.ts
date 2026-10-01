@@ -52,6 +52,14 @@ export const TYPE_LABEL = Object.fromEntries(AGENT_TYPES.map((a) => [a.type, a.l
 export const STEPS: StepName[] = ["plan", "research", "write"];
 export const RUN_COLORS = ["#818cf8", "#f472b6", "#34d399", "#fb923c", "#38bdf8", "#e879f9"];
 export const KIND_COLOR: Record<string, string> = {
+  Customer: "#f59e0b",
+  Account: "#38bdf8",
+  Incident: "#22c55e",
+  Ticket: "#a78bfa",
+  Product: "#f472b6",
+  Region: "#ef4444",
+  Metric: "#facc15",
+  Team: "#2dd4bf",
   Business: "#f59e0b",
   Address: "#38bdf8",
   Resolution: "#22c55e",
@@ -108,8 +116,8 @@ export type McpCall = { id: number; run: string; instance: string; server: strin
 /** An MCP call that has been sent but not answered yet: draw a live tether instance ↔ server while it waits. */
 export type McpPending = { key: string; run: string; instance: string; server: string; tool: string; resource?: string; since: number };
 export const MCP_COLORS: Record<string, string> = {
-  "nyc-open-data": "#f97316",
-  "cms-data": "#06b6d4",
+  warehouse: "#f97316",
+  search: "#22d3ee",
   github: "#e5e7eb",
   slack: "#e879f9",
   "google-drive": "#facc15",

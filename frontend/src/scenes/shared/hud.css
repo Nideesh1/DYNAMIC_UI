@@ -113,3 +113,10 @@
 .hud-run button { border: 0; border-radius: 999px; padding: 6px 13px; font: inherit; font-size: 12px; font-weight: 600; background: linear-gradient(135deg, #818cf8, #22d3ee); color: #03050b; cursor: pointer; }
 .hud-run button:disabled { opacity: 0.5; }
 .hud-run span { font-size: 11px; color: #86efac; }
+
+/* ── Embedded (<AgentScene/>): fill the host container instead of the viewport ── */
+.agentglow-embed { position: relative; overflow: hidden; width: 100%; height: 100%; min-height: 320px; isolation: isolate; }
+.agentglow-embed .scene-root { position: absolute; inset: 0; }
+.agentglow-embed .hud-top { max-width: min(560px, calc(100% - 32px)); }
+.agentglow-embed .hud-ticker { width: min(560px, calc(100% - 32px)); }
+.agentglow-embed .hud-agents { width: min(360px, calc(100% - 32px)); max-height: calc(100% - 140px); }

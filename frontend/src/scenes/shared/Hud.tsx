@@ -1,6 +1,8 @@
 /** Shared glass HUD for every scene: title, live counts, event ticker, legend, agent inspector. */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useSceneConfig } from "./config";
 import "./hud.css";
+import { startLiveRun, useRunAvailable } from "./useSceneSetup";
 import { AGENT_TYPES, getInstance, selectInstance, STEPS, TYPE_COLOR, TYPE_LABEL, useWorld, waitSeconds, world, type AgentType, type Instance, type WorldEvent } from "./world";
 
 export const SCENES = ["orbit", "neural", "subway", "city", "ocean", "circuit", "tunnel", "flow"] as const;
@@ -17,9 +19,9 @@ function short(id: string) {
 export function describe(e: WorldEvent): string {
   switch (e.type) {
     case "run":
-      return `hatchet run ${e.status} · ${e.topic}`;
+      return `run ${e.status} · ${e.topic}`;
     case "step":
-      return `hatchet ${e.step} ${e.status} · ${shortRun(e.run_id)}`;
+      return `step ${e.step} ${e.status} · ${shortRun(e.run_id)}`;
     case "spawn":
       return `spawned ${short(e.id)}`;
     case "exit":
@@ -33,13 +35,13 @@ export function describe(e: WorldEvent): string {
     case "tool":
       return `${short(e.id)} · ${e.tool}(${e.args_preview})`;
     case "graph":
-      return `${short(e.id)} ${e.op === "read" ? "read" : "WROTE"} falkordb: ${e.nodes.slice(0, 2).join(", ")}`;
+      return `${short(e.id)} ${e.op === "read" ? "read" : "WROTE"} graph: ${e.nodes.slice(0, 2).join(", ")}`;
     case "mcp":
       return e.phase === "call" ? `${short(e.id)} → mcp ${e.server}.${e.tool}()${e.resource ? ` → ${e.resource}` : ""}` : `mcp ${e.server}.${e.tool} returned${e.latency_ms ? ` · ${Math.round(e.latency_ms)}ms` : ""}`;
     case "mcp_register":
       return `mcp server ${e.server} online`;
     case "final":
-      return `brief ready · ${shortRun(e.run_id)}`;
+      return `final answer · ${shortRun(e.run_id)}`;
   }
 }
 
@@ -52,7 +54,18 @@ function colorOf(e: WorldEvent) {
   return e.type === "run" || e.type === "step" ? "#fde68a" : "#c7d2fe";
 }
 
-export function Hud({ title, subtitle, selected, onClose, children }: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; children?: ReactNode }) {
+export function Hud(props: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; children?: ReactNode }) {
+  const { hud } = useSceneConfig();
+  // selection from 3D clicks must still reach the world even with the HUD hidden
+  useEffect(() => {
+    if (props.selected) selectInstance(props.selected);
+  }, [props.selected]);
+  return hud ? <HudPanels {...props} /> : <>{props.children}</>;
+}
+
+function HudPanels({ title, subtitle, onClose, children }: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; children?: ReactNode }) {
+  const { embedded } = useSceneConfig();
+  const canRun = useRunAvailable();
   const w = useWorld();
   const [, tick] = useState(0);
   useEffect(() => {
@@ -61,15 +74,12 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
   }, []);
   const alive = [...w.instances.values()].filter((i) => !i.exitAt);
   const runs = [...w.runs.values()].filter((r) => r.status === "started");
-  // a click on a 3D shape (scene-owned `selected`) also drives the shared selection
-  useEffect(() => {
-    if (selected) selectInstance(selected);
-  }, [selected]);
   const close = () => {
     selectInstance(null);
     onClose?.();
   };
-  const here = location.pathname.replace(/\/$/, "").slice(1);
+  const here = embedded ? "" : location.pathname.replace(/\/$/, "").slice(1);
+  const qs = embedded ? "" : location.search;
 
   return (
     <>
@@ -78,22 +88,25 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
           <span className="hud-dot" />
           {title}
           {w.mode === "sim" && <span className="hud-badge">simulated</span>}
-          {w.mode === "live" && <span className="hud-badge hud-badge--live">live · hatchet</span>}
+          {w.mode === "live" && <span className="hud-badge hud-badge--live">live</span>}
         </div>
         <div className="hud-sub">{subtitle}</div>
-        {w.mode === "live" && <RunButton />}
-        <nav className="hud-nav">
-          {SCENES.map((s) => (
-            <a key={s} href={`/${s}`} aria-current={s === here ? "page" : undefined}>
-              {s}
-            </a>
-          ))}
-        </nav>
+        {w.mode === "live" && canRun && <RunButton />}
+        {!embedded && (
+          <nav className="hud-nav">
+            <a href={`/${qs}`}>all</a>
+            {SCENES.map((s) => (
+              <a key={s} href={`/${s}${qs}`} aria-current={s === here ? "page" : undefined}>
+                {s}
+              </a>
+            ))}
+          </nav>
+        )}
       </header>
 
       <aside className="hud hud-counts">
         <div>
-          <b>{runs.length}</b>hatchet runs
+          <b>{runs.length}</b>runs
         </div>
         <div>
           <b>{alive.length}</b>agents alive
@@ -131,9 +144,9 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
   );
 }
 
-// ------------------------------------------------------------------ live: one-click real Hatchet run
+// ------------------------------------------------------------------ live: optional POST /live/run
 
-/** Demo topics that hit the demo graph + analytics MCP backends; rotated so each run differs. */
+/** Demo topics sent to POST /live/run; rotated so each run differs. */
 const TOPICS = ["Why is churn rising for Acme Corp?", "Root cause of payment latency incidents", "Which region has the most incidents?", "Is Fraud Shield worth expanding to Globex?"];
 let topicIdx = 0;
 
@@ -144,7 +157,6 @@ function RunButton() {
     const topic = TOPICS[topicIdx++ % TOPICS.length];
     setBusy(true);
     try {
-      const { startLiveRun } = await import("./useSceneSetup");
       setMsg((await startLiveRun(topic)) ? `started · ${topic}` : "failed to start");
       window.setTimeout(() => setMsg(""), 6000);
     } finally {
@@ -316,7 +328,7 @@ function AgentDetail({ i }: { i: Instance }) {
         </div>
       </dl>
       <section>
-        <h4>Hatchet run</h4>
+        <h4>Run</h4>
         <p>{run ? run.topic : i.run}</p>
         {run && (
           <div className="ap-steps">
@@ -355,7 +367,7 @@ function AgentDetail({ i }: { i: Instance }) {
       )}
       {i.nodes.size > 0 && (
         <section>
-          <h4>FalkorDB nodes touched</h4>
+          <h4>Graph nodes touched</h4>
           <p className="ap-nodes">{[...i.nodes].slice(0, 24).join(" · ")}</p>
         </section>
       )}

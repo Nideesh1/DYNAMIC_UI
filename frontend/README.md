@@ -1,20 +1,126 @@
-# CB6 Ask — frontend
+# agentglow
 
-Vite + React 19 + OpenUI (`@openuidev/react-lang` Renderer). Search page that streams an
-OpenUI Lang page from the backend and renders it progressively.
+**Live 3D views of agent systems, as a React component.** Every agent your system spawns appears as a
+living shape (a neuron, a train, a skyscraper, a jellyfish…): it's born when its span starts, thinks while it
+calls the LLM, waits on MCP servers, passes messages to other agents, and fades out when its span ends.
+It is driven only by OpenTelemetry, via the [`agentglow`](https://github.com/Nideesh1/agentglow#quickstart)
+Python server, so it works with LangGraph, deepagents, LangChain and anything else that emits OTel spans.
+
+![neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-neural.png)
+
+## Install
+
+```bash
+npm i agentglow
+```
+
+Requires React 19. `three`, `@react-three/fiber`, `@react-three/drei` and `@react-three/postprocessing` are
+regular dependencies (installed for you, and deduped against your own copies when versions match), so a
+project that already uses react-three-fiber v9 doesn't end up with two copies of three.js.
+
+## Run the server
+
+```bash
+pip install agentglow
+agentglow serve          # http://localhost:8100
+```
+
+```python
+import agentglow
+agentglow.watch()        # before your agents run
+```
+
+See the [Python quickstart](https://github.com/Nideesh1/agentglow#quickstart) for details.
+
+## Use
+
+```tsx
+import { AgentScene } from "agentglow";
+
+export default function Page() {
+  return (
+    <div style={{ height: 600 }}>
+      <AgentScene theme="neural" source="http://localhost:8100" />
+    </div>
+  );
+}
+```
+
+The scene fills its container, so give the container a height. Styles load automatically when you import the
+package. If your bundler drops CSS imported from `node_modules`, import them yourself:
+`import "agentglow/style.css"`.
+
+No server yet? `<AgentScene theme="orbit" sim />` runs the built-in simulator. If `source` can't be
+reached, the scene falls back to the simulator on its own and shows a "simulated" badge.
+
+### Next.js
+
+The scene uses WebGL, so render it on the client only:
+
+```tsx
+"use client";
+import dynamic from "next/dynamic";
+
+const AgentScene = dynamic(() => import("agentglow").then((m) => m.AgentScene), { ssr: false });
+
+export default function Live() {
+  return <AgentScene theme="subway" source="http://localhost:8100" style={{ height: "80vh" }} />;
+}
+```
+
+## Props
+
+| Prop        | Type                  | Default    | What it does |
+|-------------|-----------------------|------------|--------------|
+| `theme`     | `Theme`               | `"neural"` | Which view to render (see below). Each theme loads lazily as its own chunk. |
+| `source`    | `string`              | `""`       | Base URL of the agentglow server. `""` means same origin. The scene reads `${source}/live/stream` (SSE), `/live/graph` and `/live/health`. |
+| `hud`       | `boolean`             | `true`     | Show the glass HUD: counts, event ticker and the agent inspector panel. |
+| `sim`       | `boolean`             | `false`    | Use the built-in simulator instead of a server. |
+| `style`     | `CSSProperties`       | none       | Applied to the container (set a `height` here or on a parent). |
+| `className` | `string`              | none       | Added to the container. |
+
+The package also exports `THEMES` (the list of theme ids), `THEME_INFO` (names and one-liners) and the
+`WorldEvent` type (the event contract streamed by the server).
+
+If the server exposes `POST /live/run`, the HUD shows a **Run agents** button. Otherwise the button stays hidden.
+
+A cross-origin `source` requires the server to send CORS headers for `/live/*`.
+
+## Themes
+
+| Theme     | Picture |
+|-----------|---------|
+| `orbit`   | Agents orbit a graph galaxy. Runs are rings and MCP servers are satellites. |
+| `neural`  | A living brain. Agents fire as neurons and messages pulse along synapses. |
+| `subway`  | A neon transit map. Each run is a line and each agent is a train. |
+| `city`    | A night city. Agents rise as skyscrapers in run districts. |
+| `ocean`   | Bioluminescent jellyfish drift on run currents over a coral graph. |
+| `circuit` | Agent chips sit on run buses, wired to a memory bank and MCP I/O ports. |
+| `tunnel`  | A time warp. Runs are lanes and gates, and agents are ships. |
+| `flow`    | A murmuration. Agents condense as eddies out of the current. |
+
+| | |
+|---|---|
+| ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-orbit.png) | ![subway](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-subway.png) |
+| ![city](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-city.png) | ![ocean](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-ocean.png) |
+| ![circuit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-circuit.png) | ![tunnel](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/scene-tunnel.png) |
+
+## One scene per page
+
+All scenes on a page share one world model. Several `<AgentScene/>`s with the **same** `source` (or all with
+`sim`) share a single connection and show the same agents, so they work fine side by side. Scenes with
+**different** sources on one page aren't supported: the most recently mounted source wins.
+
+## Develop
 
 ```bash
 npm install
-npm run generate   # writes src/generated/system-prompt.txt (read by the backend)
-npm run dev        # http://localhost:5173, proxies /api -> http://localhost:8000
-npm run build      # tsc --noEmit + vite build
-npm run validate   # parses the home dashboard + prompt examples against the library
+npm run dev          # app at http://localhost:5173, proxies /live → http://localhost:8100 (AGENTGLOW_URL)
+npm run build:lib    # → dist/ (this package)
+npm run build:app    # → ../backend/agentglow/static (served by `agentglow serve`)
 ```
 
-- `src/library.ts` — `library` (openuiLibrary + YouTubeClip + HearingCard) and `promptOptions`
-- `src/tools.ts` — the 5 tool specs (input/output JSON schema) used in the prompt
-- `src/home.ts` — hardcoded home dashboard (OpenUI Lang)
-- `src/prompt-examples.ts` — full-page examples injected into the prompt
-- `src/api.ts` — SSE client for `POST /api/search`, toolProvider for `POST /api/tools/{name}`
+In the app, `/` is the theme gallery and `/<theme>` is a full-screen scene. It accepts `?sim=1`,
+`?source=http://host:8100` and `?hud=0`.
 
-Re-run `npm run generate` after changing the library, tools, examples or preamble.
+MIT License

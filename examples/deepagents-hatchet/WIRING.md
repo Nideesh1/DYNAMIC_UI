@@ -26,8 +26,8 @@ Env: `OTEL_EXPORTER_OTLP_ENDPOINT=http://langfuse:3000/api/public/otel`,
 `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic base64(pk:sk)`. No Langfuse SDK needed.
 Custom spans: `with tracer.start_as_current_span("app.step") as s: s.set_attribute(...)`.
 
-**Tap for the visualizer:** add a second span processor next to the OTLP one that forwards each finished
-span (name, attrs, parent, duration, tokens) to our live event stream. Zero changes to agent code.
+**Visualizer:** `agentglow.watch()` adds a live span processor to the same provider (span start + end →
+AgentGlow) and turns on the Hatchet + LangChain instrumentation. See README.md for the few span attributes we add.
 
 ## 2. Agents (compiled once per worker process)
 
@@ -50,11 +50,3 @@ span (name, attrs, parent, duration, tokens) to our live event stream. Zero chan
 
 `ctx.workflow_run_id` → used in thread_ids, stored on every output doc, set as span attribute.
 Everything the visualizer shows joins on it.
-
-## Our build (agent-observatory branch)
-
-1. Simple 2–3 agent workflow (planner → researcher(s) → writer) on Hatchet, tracing to Langfuse,
-   reading/writing the CB6 FalkorDB graph we already have.
-2. Event stream: span-forwarding processor + Hatchet run status → SSE `/api/live/{run_id}`.
-3. 3D scene (react-three-fiber + bloom): agents = pulsing orbs, messages = comets, steps = beads on rings,
-   FalkorDB = galaxy core; OpenUI cards on click.

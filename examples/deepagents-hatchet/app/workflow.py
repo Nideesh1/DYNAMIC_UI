@@ -1,4 +1,4 @@
-"""agent_smoke — a generic, real Hatchet workflow running deepagents, traced to Langfuse, streamed to the 3D observatory.
+"""agent_smoke — a real Hatchet workflow running deepagents. Observability is plain OpenTelemetry only.
 
   plan      planner (Gemini, structured output) → 2–4 research questions
   research  researcher deep agent fans out to subagents via the `task` tool:
@@ -6,37 +6,26 @@
               data_scout  → MCP tools from the `analytics` MCP server (Snowflake / Spark / Postgres backends)
   write     writer deep agent drafts the brief and WRITES it back to FalkorDB
 
-Tracing follows observatory/WIRING.md: OTel → OTLP → Langfuse (HatchetInstrumentor + LangChainInstrumentor).
-Live 3D events come from app/tap.py (LangChain callbacks) + the lifecycle events emitted here.
+Spans come from the Hatchet + LangChain instrumentation that `agentglow.watch()` turns on (see worker.py).
+The only hand-written telemetry here is a few span attributes the visualizer can't infer:
+  agentglow.run.topic  on the Hatchet task span  (what the run is about)
+  agentglow.agent      on a span around the planner's bare LLM call (so it shows as an agent)
+  agentglow.final      on the write task span  (the finished brief)
 """
 import os
 from datetime import timedelta
 
-from . import config  # noqa: F401  (must be first: Hatchet/OTel env)
+from . import config  # noqa: F401  (must be first: Hatchet env)
 
 from hatchet_sdk import Context, Hatchet
-from hatchet_sdk.opentelemetry.instrumentor import HatchetInstrumentor
 from langchain_google_genai import ChatGoogleGenerativeAI
-from openinference.instrumentation.langchain import LangChainInstrumentor
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel, Field
 
 from .config import MODEL
-from .emit import emitter
-from .tap import Tap
 
-# ---- tracing → Langfuse -------------------------------------------------------------------
-provider = TracerProvider(resource=Resource.create({"service.name": "agent-observatory"}))
-provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-trace.set_tracer_provider(provider)
-tracer = trace.get_tracer(__name__)
+tracer = trace.get_tracer("deepagents-hatchet")
 hatchet = Hatchet()
-HatchetInstrumentor(tracer_provider=provider, enable_hatchet_otel_collector=False).instrument()
-LangChainInstrumentor().instrument(tracer_provider=provider)
 
 WORKFLOW = "agent_smoke"
 
@@ -64,95 +53,59 @@ def text_of(msg) -> str:
     return str(c)
 
 
-def ev(run: str, **kw) -> None:
-    emitter.emit({"run_id": run, **kw})
+def step_span(topic: str):
+    """The Hatchet task span (current inside a task) — tag it with the run topic."""
+    span = trace.get_current_span()
+    span.set_attribute("agentglow.run.topic", topic)
+    return span
 
 
 # ---- plan ---------------------------------------------------------------------------------
 @agent_smoke.task(execution_timeout=timedelta(minutes=3), retries=1)
 async def plan(input: BriefInput, ctx: Context) -> dict:
-    run = ctx.workflow_run_id
-    me = f"{run}:planner"
-    ev(run, type="run", status="started", topic=input.topic, workflow=WORKFLOW)
-    ev(run, type="step", step="plan", status="running")
-    ev(run, type="spawn", id=me, agent="planner", parent_id=None)
-    with tracer.start_as_current_span("agent.plan") as span:
-        span.set_attribute("run_id", run)
-        span.set_attribute("topic", input.topic)
+    step_span(input.topic)
+    # A bare structured LLM call isn't an agent to any instrumentation, so name it one.
+    with tracer.start_as_current_span("planner", attributes={"agentglow.agent": "planner", "agentglow.run.topic": input.topic}):
         planner = make_model().with_structured_output(Plan)
         p: Plan = await planner.ainvoke(
             "You plan research for a short business brief. Data available: a knowledge graph of companies, products, customers, "
             "regions, teams and incidents, plus an analytics MCP server (warehouse metrics, Spark jobs, customer records).\n"
-            f"Topic: {input.topic}\nReturn 2-4 specific research questions.",
-            config={"callbacks": [Tap(run, me)]},
+            f"Topic: {input.topic}\nReturn 2-4 specific research questions."
         )
-    ev(run, type="agent", id=me, status="waiting")
-    ev(run, type="step", step="plan", status="done")
-    await emitter.flush()
     return {"topic": input.topic, "questions": p.questions[:4]}
 
 
 # ---- research (fan-out to subagents) --------------------------------------------------------
 @agent_smoke.task(parents=[plan], execution_timeout=timedelta(minutes=8), retries=0)
 async def research(input: BriefInput, ctx: Context) -> dict:
-    run = ctx.workflow_run_id
+    step_span(input.topic)
     p = ctx.task_output(plan)
-    me, planner = f"{run}:researcher", f"{run}:planner"
-    ev(run, type="step", step="research", status="running")
-    ev(run, type="spawn", id=me, agent="researcher", parent_id=planner)
-    ev(run, type="message", from_id=planner, to_id=me, text=f"{len(p['questions'])} questions on \"{p['topic']}\"")
-    ev(run, type="exit", id=planner, status="done")
-    agent = ctx.lifespan["researcher"]
     qs = "\n".join(f"- {q}" for q in p["questions"])
-    with tracer.start_as_current_span("agent.research") as span:
-        span.set_attribute("run_id", run)
-        out = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": (
-                f"Research topic: {p['topic']}\nQuestions:\n{qs}\n\n"
-                "Delegate IN PARALLEL using the task tool: give graph_scout 1-2 tasks (entities and relationships in the knowledge graph) "
-                "and data_scout 1-2 tasks (warehouse metrics, a Spark analysis, customer lookups). Then merge their findings into "
-                "concise notes with specific numbers and names. Do not write files."
-            )}]},
-            config={"callbacks": [Tap(run, me)], "recursion_limit": 60, "configurable": {"thread_id": f"{run}:research"}},
-        )
-    notes = text_of(out["messages"][-1])[:6000]
-    ev(run, type="agent", id=me, status="waiting")
-    ev(run, type="step", step="research", status="done")
-    await emitter.flush()
-    return {"topic": p["topic"], "notes": notes}
+    out = await ctx.lifespan["researcher"].ainvoke(
+        {"messages": [{"role": "user", "content": (
+            f"Research topic: {p['topic']}\nQuestions:\n{qs}\n\n"
+            "Delegate IN PARALLEL using the task tool: give graph_scout 1-2 tasks (entities and relationships in the knowledge graph) "
+            "and data_scout 1-2 tasks (warehouse metrics, a Spark analysis, customer lookups). Then merge their findings into "
+            "concise notes with specific numbers and names. Do not write files."
+        )}]},
+        config={"recursion_limit": 60, "configurable": {"thread_id": f"{ctx.workflow_run_id}:research"}},
+    )
+    return {"topic": p["topic"], "notes": text_of(out["messages"][-1])[:6000]}
 
 
 # ---- write --------------------------------------------------------------------------------
 @agent_smoke.task(parents=[research], execution_timeout=timedelta(minutes=4), retries=0)
 async def write(input: BriefInput, ctx: Context) -> dict:
-    run = ctx.workflow_run_id
+    span = step_span(input.topic)
     r = ctx.task_output(research)
-    me, researcher = f"{run}:writer", f"{run}:researcher"
-    ev(run, type="step", step="write", status="running")
-    ev(run, type="spawn", id=me, agent="writer", parent_id=researcher)
-    ev(run, type="message", from_id=researcher, to_id=me, text="Findings merged — draft the brief")
-    ev(run, type="exit", id=researcher, status="done")
-    agent = ctx.lifespan["writer"]
-    with tracer.start_as_current_span("agent.write") as span:
-        span.set_attribute("run_id", run)
-        out = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": (
-                f"Write an executive brief (max 150 words) on: {r['topic']}\nResearch notes:\n{r['notes']}\n\n"
-                "First call graph_write_brief exactly once with the topic, your brief as summary, and the key entity names "
-                "(companies, products, teams). Then reply with only the brief text."
-            )}]},
-            config={"callbacks": [Tap(run, me)], "recursion_limit": 30, "configurable": {"thread_id": f"{run}:write"}},
-        )
+    out = await ctx.lifespan["writer"].ainvoke(
+        {"messages": [{"role": "user", "content": (
+            f"Write an executive brief (max 150 words) on: {r['topic']}\nResearch notes:\n{r['notes']}\n\n"
+            "First call graph_write_brief exactly once with the topic, your brief as summary, and the key entity names "
+            "(companies, products, teams). Then reply with only the brief text."
+        )}]},
+        config={"recursion_limit": 30, "configurable": {"thread_id": f"{ctx.workflow_run_id}:write"}},
+    )
     brief = text_of(out["messages"][-1])[:2000]
-    ev(run, type="final", text=brief)
-    ev(run, type="exit", id=me, status="done")
-    ev(run, type="step", step="write", status="done")
-    ev(run, type="run", status="completed", topic=r["topic"], workflow=WORKFLOW)
-    await emitter.flush()
+    span.set_attribute("agentglow.final", brief)
     return {"brief": brief}
-
-
-@agent_smoke.on_failure_task()
-async def on_failure(input: BriefInput, ctx: Context) -> None:
-    ev(ctx.workflow_run_id, type="run", status="failed", topic=input.topic, workflow=WORKFLOW)
-    await emitter.flush()

@@ -1,0 +1,222 @@
+"""`agentglow serve`: OTel spans in (live JSON + OTLP/HTTP), world events out (SSE), 3D UI served from static/."""
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import gzip
+import json
+import os
+import time
+from pathlib import Path
+from urllib.parse import urlparse
+
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+
+from . import __version__
+from .state import Hub
+
+STATIC = Path(__file__).parent / "static"
+KEEPALIVE_S = 15.0
+
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+# ---------------------------------------------------------------------- OTLP decoding
+def _any_value(v) -> object:  # protobuf AnyValue → python
+    which = v.WhichOneof("value")
+    if which == "array_value":
+        return [_any_value(x) for x in v.array_value.values]
+    if which == "kvlist_value":
+        return json.dumps({kv.key: _any_value(kv.value) for kv in v.kvlist_value.values}, default=str)
+    if which == "bytes_value":
+        return v.bytes_value.hex()
+    return getattr(v, which) if which else None
+
+
+def otlp_proto_spans(body: bytes) -> list[dict]:
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+
+    req = ExportTraceServiceRequest()
+    req.ParseFromString(body)
+    out = []
+    for rs in req.resource_spans:
+        for ss in rs.scope_spans:
+            for sp in ss.spans:
+                out.append({
+                    "trace_id": sp.trace_id.hex(),
+                    "span_id": sp.span_id.hex(),
+                    "parent_span_id": sp.parent_span_id.hex() or None,
+                    "name": sp.name,
+                    "start_time_ms": sp.start_time_unix_nano // 1_000_000,
+                    "end_time_ms": sp.end_time_unix_nano // 1_000_000 or None,
+                    "status": {1: "ok", 2: "error"}.get(sp.status.code, "unset"),
+                    "attributes": {kv.key: _any_value(kv.value) for kv in sp.attributes},
+                })
+    return out
+
+
+def _json_value(v: dict) -> object:  # OTLP/JSON AnyValue → python
+    if not isinstance(v, dict) or not v:
+        return None
+    k, x = next(iter(v.items()))
+    if k == "intValue":
+        return int(x)
+    if k == "doubleValue":
+        return float(x)
+    if k == "arrayValue":
+        return [_json_value(i) for i in x.get("values", [])]
+    if k == "kvlistValue":
+        return json.dumps({i["key"]: _json_value(i.get("value", {})) for i in x.get("values", [])}, default=str)
+    return x
+
+
+def _id(x: str | None) -> str | None:
+    if not x:
+        return None
+    if len(x) in (16, 32) and all(c in "0123456789abcdefABCDEF" for c in x):
+        return x.lower()
+    import base64  # some exporters send ids base64-encoded (protobuf JSON mapping)
+
+    return base64.b64decode(x).hex()
+
+
+def otlp_json_spans(data: dict) -> list[dict]:
+    out = []
+    for rs in data.get("resourceSpans", []):
+        for ss in rs.get("scopeSpans", []):
+            for sp in ss.get("spans", []):
+                code = (sp.get("status") or {}).get("code", 0)
+                code = {"STATUS_CODE_OK": 1, "STATUS_CODE_ERROR": 2}.get(code, code)
+                out.append({
+                    "trace_id": _id(sp.get("traceId")),
+                    "span_id": _id(sp.get("spanId")),
+                    "parent_span_id": _id(sp.get("parentSpanId")),
+                    "name": sp.get("name", "span"),
+                    "start_time_ms": int(sp.get("startTimeUnixNano", 0)) // 1_000_000,
+                    "end_time_ms": int(sp.get("endTimeUnixNano", 0)) // 1_000_000 or None,
+                    "status": {1: "ok", 2: "error"}.get(int(code or 0), "unset"),
+                    "attributes": {a["key"]: _json_value(a.get("value", {})) for a in sp.get("attributes", [])},
+                })
+    return out
+
+
+# ---------------------------------------------------------------------- optional FalkorDB graph sample
+def falkor_sample(url: str, limit: int = 220) -> dict:
+    from falkordb import FalkorDB
+
+    u = urlparse(url if "://" in url else f"redis://{url}")
+    graph = (u.path or "/").strip("/") or os.environ.get("AGENTGLOW_FALKOR_GRAPH", "demo")
+    g = FalkorDB(host=u.hostname or "localhost", port=u.port or 6379, password=u.password).select_graph(graph)
+    q = "MATCH (n) RETURN id(n), coalesce(n.name, n.id, toString(id(n))), coalesce(n.kind, labels(n)[0]) LIMIT $l"
+    rows = g.query(q, {"l": limit}).result_set
+    ids = {r[0]: str(r[1]) for r in rows}
+    nodes = [{"id": str(r[1]), "name": str(r[1]), "kind": str(r[2] or "Node")} for r in rows]
+    lq = "MATCH (a)-[]->(b) WHERE id(a) IN $ids AND id(b) IN $ids RETURN id(a), id(b) LIMIT 800"
+    links = [{"source": ids[a], "target": ids[b]} for a, b in g.query(lq, {"ids": list(ids)}).result_set]
+    return {"nodes": nodes, "links": links}
+
+
+# ---------------------------------------------------------------------- app
+def create_app(*, falkor_url: str | None = None, hub: Hub | None = None) -> FastAPI:
+    hub = hub or Hub()
+    falkor_url = falkor_url or os.environ.get("AGENTGLOW_FALKOR_URL")
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI):
+        async def ticker():  # completes idle Hatchet runs (no span marks a whole workflow run's end)
+            while True:
+                await asyncio.sleep(1)
+                hub.tick(now_ms())
+
+        task = asyncio.create_task(ticker())
+        yield
+        task.cancel()
+
+    app = FastAPI(title="agentglow", version=__version__, lifespan=lifespan)
+    app.state.hub = hub
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+    async def body_of(request: Request) -> bytes:
+        body = await request.body()
+        return gzip.decompress(body) if request.headers.get("content-encoding") == "gzip" else body
+
+    @app.post("/v1/live")
+    async def live(request: Request):
+        items = json.loads(await body_of(request) or b"[]")
+        return {"ok": True, "n": hub.ingest_live(items if isinstance(items, list) else [items])}
+
+    @app.post("/v1/traces")
+    async def traces(request: Request):
+        body = await body_of(request)
+        ctype = request.headers.get("content-type", "")
+        try:
+            spans = otlp_json_spans(json.loads(body)) if "json" in ctype else otlp_proto_spans(body)
+        except Exception as e:
+            raise HTTPException(400, f"bad OTLP payload: {e}")
+        hub.ingest_ended(spans)
+        if "json" in ctype:
+            return JSONResponse({"partialSuccess": {}})
+        from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
+
+        return Response(ExportTraceServiceResponse().SerializeToString(), media_type="application/x-protobuf")
+
+    @app.get("/live/stream")
+    async def stream(request: Request):
+        q = hub.subscribe()
+        replay = hub.replay()
+
+        async def gen():
+            try:
+                yield "retry: 2000\n\n"
+                for ev in replay:
+                    yield f"data: {json.dumps(ev)}\n\n"
+                while not await request.is_disconnected():
+                    try:
+                        ev = await asyncio.wait_for(q.get(), timeout=KEEPALIVE_S)
+                        yield f"data: {json.dumps(ev)}\n\n"
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+            finally:
+                hub.unsubscribe(q)
+
+        return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.post("/live/topology")
+    async def topology(body: dict):
+        if not body.get("server"):
+            raise HTTPException(400, "server is required")
+        res = [{"name": str(r["name"]), "kind": str(r.get("kind", "api"))} for r in body.get("resources", []) if r.get("name")]
+        return hub.register_mcp(str(body["server"]), res, now_ms())
+
+    @app.get("/live/graph")
+    async def graph():
+        if not falkor_url:
+            raise HTTPException(404, "no graph provider (set AGENTGLOW_FALKOR_URL or --falkor)")
+        try:
+            return await asyncio.to_thread(falkor_sample, falkor_url)
+        except Exception as e:
+            raise HTTPException(503, f"graph provider error: {e}")
+
+    @app.get("/live/health")
+    def health():
+        return {"ok": True, "version": __version__, "subscribers": len(hub.subs), "buffered": len(hub.buffer),
+                "open_runs": len(hub.mapper.runs), "ui": (STATIC / "index.html").exists()}
+
+    # ---- static UI with SPA fallback (/ and /<theme> → index.html)
+    @app.get("/{path:path}", include_in_schema=False)
+    def ui(path: str):
+        f = (STATIC / path).resolve()
+        if path and f.is_file() and STATIC.resolve() in f.parents:
+            return FileResponse(f)
+        if path.startswith(("assets/", "v1/", "live/")) or "." in path.rsplit("/", 1)[-1]:
+            raise HTTPException(404)
+        index = STATIC / "index.html"
+        if not index.exists():
+            return JSONResponse({"agentglow": __version__, "ui": "not bundled", "stream": "/live/stream"})
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
+
+    return app
