@@ -164,21 +164,25 @@ export function removeCliCopies() {
 export async function serveForeground({ port, version, log = console.error }) {
   const runner = await findRunner({ log });
   const specs = pySpecs(version);
+  let stopping = false;
   for (const [i, spec] of specs.entries()) {
     const t0 = Date.now();
     const code = await new Promise((resolve) => {
       const child = spawn(runner.cmd, serveArgv(runner, spec, port), { stdio: "inherit" });
-      const fwd = (sig) => () => child.kill(sig);
+      // A requested stop (Ctrl-C, `launchctl stop`, `systemctl stop`) must exit 0, or a supervisor with
+      // "restart unless it exited successfully" (launchd KeepAlive/SuccessfulExit) would bring it right back.
+      const fwd = (sig) => () => { stopping = true; child.kill(sig); };
       const onInt = fwd("SIGINT"), onTerm = fwd("SIGTERM");
       process.on("SIGINT", onInt);
       process.on("SIGTERM", onTerm);
       child.on("exit", (c, sig) => {
         process.off("SIGINT", onInt);
         process.off("SIGTERM", onTerm);
-        resolve(c ?? (sig ? 130 : 1));
+        resolve(stopping ? 0 : (c ?? (sig ? 130 : 1)));
       });
     });
     // a pinned version missing on PyPI fails fast; fall back to latest once
+    if (stopping) return 0;
     if (code !== 0 && i < specs.length - 1 && Date.now() - t0 < 30000) {
       log(`${spec} failed, retrying with the latest agentglow ...`);
       continue;

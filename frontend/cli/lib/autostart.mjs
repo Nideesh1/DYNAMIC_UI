@@ -1,7 +1,6 @@
-// OS-native "start AgentGlow at login" so the server is always already running, and `setup` (pointed at it via
-// AGENTGLOW_URL) can skip the per-session SessionStart command hook entirely - no shell spawn on every `claude`
-// session. One mechanism per platform; `command` is the same string `startHookCommand()` would use for the hook,
-// so autostart and the hook always resolve to the exact same way of starting the server.
+// OS-native "start AgentGlow at login" (installed by `agentglow setup`): the server is always already running for
+// every claude session, survives reboots and is restarted on crash. macOS/Linux run it in the foreground under
+// launchd/systemd (argv); Windows uses Task Scheduler (or the Startup folder) with the hook's shell command.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -130,6 +129,18 @@ export function removeAutostart({ platform = process.platform, home = os.homedir
   }
   try { execFileSync("systemctl", ["--user", "disable", "--now", "agentglow"], { stdio: "pipe" }); } catch { /* not installed */ }
   try { fs.rmSync(systemdUnitPath(home), { force: true }); } catch { /* ignore */ }
+}
+
+/** Stop the login-item server for now (it starts again at next login / next claude session). Never throws. */
+export function stopLoginItem({ platform = process.platform } = {}) {
+  try {
+    if (platform === "darwin") execFileSync("launchctl", ["stop", LABEL], { stdio: "pipe" });
+    else if (platform === "win32") execFileSync("schtasks", ["/end", "/tn", TASK_NAME], { stdio: "pipe" });
+    else execFileSync("systemctl", ["--user", "stop", "agentglow"], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Best-effort check: is the autostart entry currently installed? Never throws. */
