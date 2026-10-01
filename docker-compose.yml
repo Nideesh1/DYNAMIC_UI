@@ -155,7 +155,7 @@ services:
     depends_on: [obs_minio]
     entrypoint: >
       /bin/sh -c "
-      until (mc alias set local http://obs_minio:9000 minioadmin minioadmin) do sleep 1; done;
+      until (mc alias set local http://obs-minio:9000 minioadmin minioadmin) do sleep 1; done;
       mc mb --ignore-existing local/langfuse; echo bucket ready;
       "
 
