@@ -79,6 +79,7 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
           {w.mode === "live" && <span className="hud-badge hud-badge--live">live · hatchet</span>}
         </div>
         <div className="hud-sub">{subtitle}</div>
+        {w.mode === "live" && <RunButton />}
         <nav className="hud-nav">
           {SCENES.map((s) => (
             <a key={s} href={`/${s}`} aria-current={s === here ? "page" : undefined}>
@@ -125,6 +126,34 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
 
       {children}
     </>
+  );
+}
+
+// ------------------------------------------------------------------ live: one-click real Hatchet run
+
+/** Demo topics that hit the demo graph + analytics MCP backends; rotated so each run differs. */
+const TOPICS = ["Why is churn rising for Acme Corp?", "Root cause of payment latency incidents", "Which region has the most incidents?", "Is Fraud Shield worth expanding to Globex?"];
+let topicIdx = 0;
+
+function RunButton() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const run = async () => {
+    const topic = TOPICS[topicIdx++ % TOPICS.length];
+    setBusy(true);
+    try {
+      const { startLiveRun } = await import("./useSceneSetup");
+      setMsg((await startLiveRun(topic)) ? `started · ${topic}` : "failed to start");
+      window.setTimeout(() => setMsg(""), 6000);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="hud-run">
+      <button onClick={run} disabled={busy}>{busy ? "Starting…" : "▶ Run agents"}</button>
+      {msg && <span>{msg}</span>}
+    </div>
   );
 }
 
