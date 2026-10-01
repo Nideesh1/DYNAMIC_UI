@@ -433,7 +433,8 @@ class Mapper:
         s.agent, s.candidate = name, None
         parent, via_tool = self._ancestor_agent(s)
         run = self.runs.get(s.run)
-        s.subagent = bool(parent and via_tool)
+        hint = s.attrs.get("agentglow.subagent")  # manual API: an agent nested directly in an agent
+        s.subagent = bool(parent and (via_tool or hint is True or str(hint).lower() == "true"))
         text = ""
         if parent:
             pa = self.agents.get(parent)

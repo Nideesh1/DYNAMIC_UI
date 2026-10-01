@@ -31,6 +31,17 @@ Open **http://localhost:8100/neural** and run your agents. No agents yet? **http
 Already sending traces to Langfuse / LangSmith / a collector? Nothing changes: `watch()` adds AgentGlow alongside.
 Any OTel exporter can also send OTLP/HTTP straight to `http://localhost:8100/v1/traces`.
 
+**Hand-written agent loop, no framework?** Trace it yourself (sync `with` or `async with`):
+```python
+async with agentglow.run(topic="Inbound call", scope=clinic_id):
+    async with agentglow.agent("receptionist") as a:
+        a.llm(model="gpt-realtime", tokens_in=812, tokens_out=64)
+        with agentglow.tool("book_appointment", args={"slot": "Tue 10:30"}): ...
+        a.final("Booked Tue 10:30")
+```
+Nested `agentglow.agent(...)` = subagent; also `agentglow.mcp(...)`, `agentglow.graph(...)`, `@agentglow.traced_agent`,
+`@agentglow.traced_tool`. See [examples/custom-loop](examples/custom-loop).
+
 ## 15 themes
 
 | | | |
@@ -116,6 +127,7 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [quickstart](examples/quickstart) | 40-line deepagents researcher with two subagents - the "just show me" path |
 | [langgraph](examples/langgraph) | LangGraph supervisor with worker agents (`langgraph-supervisor` works too) |
 | [openai-agents](examples/openai-agents) | OpenAI Agents SDK: handoffs + agent-as-tool |
+| [custom-loop](examples/custom-loop) | no framework: a hand-written voice-call loop traced with the manual API (runs without an LLM key) |
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
 | [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts) - no code |
 | [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |

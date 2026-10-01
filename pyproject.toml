@@ -4,7 +4,7 @@
 #   uv run --package agentglow pytest backend/tests -q
 #   uv build --package agentglow               # sdist + wheel → ./dist
 [tool.uv.workspace]
-members = ["backend", "examples/deepagents-hatchet", "examples/quickstart", "examples/langgraph", "examples/openai-agents"]
+members = ["backend", "examples/deepagents-hatchet", "examples/quickstart", "examples/langgraph", "examples/openai-agents", "examples/custom-loop"]
 
 [dependency-groups]
 dev = ["pytest>=8"]

@@ -124,7 +124,7 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 |---|---|---|
 | Run | first span seen for a run id | `run started` (topic: `agentglow.run.topic` or workflow/root span name); `run completed/failed` when the root span ends |
 | Step | Hatchet task/step span (or `agentglow.step`) | `step running` on start, `step done/failed` on end |
-| Agent | `agentglow.agent` attr; or `gen_ai.operation.name=invoke_agent`; or OpenInference kind `AGENT`; or a LangGraph agent graph span (determine the reliable signal for deepagents from REAL captured spans - e.g. the compiled graph's span name = agent `name=`, and deepagents subagents invoked under the `task` tool) | `spawn` on start (parent = owning agent; `subagent: true` when it runs under a tool span such as `task`) + delegation `message`; `exit` on end (+ result `message`) |
+| Agent | `agentglow.agent` attr; or `gen_ai.operation.name=invoke_agent`; or OpenInference kind `AGENT`; or a LangGraph agent graph span (determine the reliable signal for deepagents from REAL captured spans - e.g. the compiled graph's span name = agent `name=`, and deepagents subagents invoked under the `task` tool) | `spawn` on start (parent = owning agent; `subagent: true` when it runs under a tool span such as `task`, or carries `agentglow.subagent=true`) + delegation `message`; `exit` on end (+ result `message`) |
 | OpenAI Agents SDK | OpenInference `AGENT` span with no agent above it is a candidate: an agent span below it → workflow container (the SDK trace, never spawned); an LLM/tool below it → agent. Agent spans are siblings under the container | handoff = next top-level agent gets the previous one as parent (`handoff → X`); `handoff` tool span named after the model's `transfer_to_*` call; `agent.as_tool` agent under the function span → `subagent: true`, delegation text = tool input; exit text / run `final` = agent's last LLM text |
 | langgraph-supervisor | team graph whose supervisor node (`<sup>` node → `<sup>` graph) calls a `transfer_to_*` tool | ONE supervisor agent for the run (later turns alias it; exits when the team graph ends); workers (`<name>` → `call_agent` → `<name>` graph) → `subagent: true` under it, delegation text = supervisor's turn text else latest user request; supervisor `waiting` while a worker runs; `transfer_*` tools emit no `tool` event |
 | LLM | OpenInference kind `LLM` or `gen_ai.operation.name ∈ {chat, text_completion, generate_content}` | `agent thinking` on start; `llm` on end - a span guessed from its parent node but ending with a non-LLM kind (react agent's RunnableSequence/call_model/should_continue) is dropped (tokens from `gen_ai.usage.input_tokens/output_tokens` or `llm.token_count.prompt/completion`) |
@@ -135,6 +135,24 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 | Claude Code hooks | `POST /v1/claude-code` (`claude_code.py`) | one prompt = one run (topic `Claude Code · <cwd basename>`); main agent `claude`; `Agent` tool → `task` + subagent named after its type; tools; 0-token thinking pulses |
 | Claude Code traces | `claude_code.*` spans on `/v1/traces` (`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`) | `interaction` = run + `claude`; each `agent_id` = subagent (`subagent: true`, parent `claude`, linked via its `Agent` tool's `tool.execution` span; named from `query_source_safe` `agent.<kind>.<type>`, else `subagent <id>`); `llm_request` = `llm` with `tokens_in` = input + cache_creation, `tokens_out`, `tokens_cached` = cache_read; `tool` = tool event (`tool.blocked_on_user`/`tool.execution` skipped). Merged with hooks when `session.id` is a hooks session: no new agents/tools, token `llm` events go to the hooks agents (by `agent_id`), hook pulses muted, exits wait up to 15 s for the agent's trace spans |
 Unknown spans are kept only for tree/ownership. Ids: agent instance id = span id (stable string).
+
+## Manual API (backend `manual.py`)
+For hand-written agent loops (no framework). Plain OpenTelemetry spans (`opentelemetry-api`) on the global provider
+(the one `watch()` uses), all attributes set at start so `LiveSpanProcessor` shows long-lived agents immediately; no
+SDK provider = no-op. Context in contextvars (asyncio tasks created inside inherit it). Sync `with` and `async with`.
+
+| Call | Span | Attributes |
+|---|---|---|
+| `run(topic, run_id=None, scope=None, workflow=None)` | new root span (new trace), name = workflow or `run` | `agentglow.run.topic`, `agentglow.run.id`, `agentglow.run.workflow`, `agentglow.scope` (+ scope baggage for every span inside); `.final(t)` sets `agentglow.final` |
+| `agent(name, final=None, task=None, parent=None)` | child of the current span (or `parent`) | `agentglow.agent=name`; nested in another manual agent: `agentglow.subagent=true` (spawn `subagent: true`, delegation `message` = `task` via `input.value`); `.say(t)` sets `output.value` (exit/result text); `.final(t)` also sets `agentglow.final` on a top-level agent |
+| `llm(model, tokens_in, tokens_out)` / `Agent.llm(..., latency_ms=0)` | `chat <model>` | `gen_ai.operation.name=chat`, `gen_ai.request.model`, `gen_ai.usage.input_tokens/output_tokens` (`.set_tokens`) |
+| `tool(name, args=None)` | `<name>` | `gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`, `input.value` = args JSON; `.result(v)` → `output.value` |
+| `mcp(server, tool, resource=None, kind="api", args=None)` | tool span | + `agentglow.mcp.server/tool/resource/resource_kind` |
+| `graph(op, nodes, system="graph")` | `db <op>` | `db.system`, `agentglow.db.op`, `agentglow.graph.nodes` |
+| `@traced_agent(name)`, `@traced_tool(name, capture_args=False)` | per call | as `agent` / `tool`; args recorded only with `capture_args=True` |
+
+A span that raises ends with status error (run → failed). Text in `say`/`final`/`task`/`args` passes the Privacy
+scrub (secrets only): callers must keep PHI/PII out of it. Example: `examples/custom-loop/`.
 
 ## Privacy
 One scrub (`backend/agentglow/scrub.py`) runs at the Hub ingestion boundary for every path (`/v1/live`, `/v1/traces`

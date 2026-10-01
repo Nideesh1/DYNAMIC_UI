@@ -54,6 +54,40 @@ Optional attributes you can set on your own spans: `agentglow.agent` (mark a spa
 
 Announce MCP servers before they are called: `agentglow.register_mcp("analytics", {"snowflake": "warehouse", "spark": "spark"})`.
 
+## Hand-written agent loops (manual API)
+
+No framework? Wrap your own loop. Each call is a plain OpenTelemetry span with the hint attributes below, so it works
+with `watch()` (agents appear the moment they start, even if they live for minutes) and with OTLP exporters. Without
+any TracerProvider every call is a cheap no-op. Context rides in contextvars: asyncio tasks created inside inherit it.
+
+```python
+import agentglow
+agentglow.watch()
+
+async def handle_call(call_id):                      # one asyncio task per phone call
+    async with agentglow.run(topic="Inbound call", run_id=call_id, scope=clinic_id):
+        async with agentglow.agent("receptionist") as a:
+            a.llm(model="gpt-realtime", tokens_in=812, tokens_out=64)   # one finished turn (or `with agentglow.llm(...) as l: l.set_tokens(i, o)`)
+            with agentglow.tool("lookup_patient", args={"phone": "+1-555-0100"}) as t:
+                with agentglow.mcp("clinic-db", tool="query", resource="Postgres", kind="db"):
+                    ...
+                t.result("found")
+            async with agentglow.agent("scheduler", task="find a slot") as s:  # nested agent = subagent
+                with agentglow.graph("write", nodes=["Appointment"]): ...
+                s.final("Tue 10:30")                  # subagent: result message to its parent
+            a.final("Booked Tue 10:30")               # top-level agent: the run's final text
+```
+
+| | |
+|---|---|
+| `agentglow.run(topic, run_id=None, scope=None, workflow=None)` | a run (always a new trace); `scope` tags every span inside; `.final(text)` |
+| `agentglow.agent(name, final=None, task=None, parent=None)` | an agent; inside another agent (or `parent=`) it is a subagent, `task` = delegation text; `.llm()`, `.say()`, `.final()`, `.tool()`, `.mcp()`, `.graph()`, `.agent()` |
+| `agentglow.llm(model, tokens_in=None, tokens_out=None)` | an LLM turn (context manager, `.set_tokens(in, out)`); `a.llm(..., latency_ms=)` records a finished one |
+| `agentglow.tool(name, args=None)` / `agentglow.mcp(server, tool, resource, kind)` / `agentglow.graph(op, nodes)` | tool call / MCP or backend call / graph read or write on the current agent; `.result(value)` |
+| `@agentglow.traced_agent("name")`, `@agentglow.traced_tool("name", capture_args=False)` | decorators for sync and async functions; `agentglow.current_agent()` inside |
+
+Text you pass (`say`, `final`, `task`, `args`) is shown in the UI after the secret scrub only: keep PHI/PII out of it.
+
 ## Options
 
 ```
