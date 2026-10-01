@@ -8,7 +8,7 @@
 [![npm](https://img.shields.io/npm/v/agentglow?color=e879f9)](https://www.npmjs.com/package/agentglow)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22d3ee)](LICENSE)
 
-![AgentGlow neural theme](docs/media/hero.gif)
+![AgentGlow neural theme](docs/media/hero.webp)
 
 </div>
 
@@ -16,29 +16,36 @@ Agents spawn as glowing shapes, pulse on every LLM call, fan out to subagents, q
 and fade when they finish. One line of Python. Works with **LangChain, LangGraph, deepagents, OpenAI Agents SDK,
 Hatchet, MCP**, and **Claude Code** itself.
 
-## Quickstart
+## Get started
 
+Pick your path. Each one ends at **http://localhost:8100/neural** (no agents yet? try `?sim=1`).
+
+### 1. Claude Code (only Node needed)
 ```bash
-uvx agentglow serve                  # → http://localhost:8100   (or: pip install agentglow && agentglow serve)
-uv add "agentglow[langchain]"        # in your agent project     ([openai-agents] for the OpenAI Agents SDK)
+npx agentglow claude                 # starts AgentGlow, opens the 3D view, runs claude with AgentGlow hooks + traces
+npx agentglow claude --install       # or make it always on (backs up and merges ~/.claude/settings.json)
+npx agentglow claude --uninstall     # undo
+```
+uv and Python are fetched automatically on first run. Pass Claude flags after `--` (`npx agentglow claude -- --model sonnet`).
+Prefer asking Claude? Install the [agentglow skill](skills/agentglow) and say *"show my agents in 3D"*:
+```bash
+mkdir -p ~/.claude/skills/agentglow && curl -fsSL \
+  https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/SKILL.md -o ~/.claude/skills/agentglow/SKILL.md
+```
+
+### 2. Python agents (LangChain, LangGraph, deepagents, OpenAI Agents SDK, Hatchet)
+```bash
+uvx agentglow serve                  # or: pip install agentglow && agentglow serve
+uv add "agentglow[langchain]"        # in your agent project ([openai-agents] for the OpenAI Agents SDK)
 ```
 ```python
 import agentglow
 agentglow.watch()                    # one line, before your agents run
 ```
-Open **http://localhost:8100/neural** and run your agents. No agents yet? **http://localhost:8100/neural?sim=1**.
-
 Already sending traces to Langfuse / LangSmith / a collector? Nothing changes: `watch()` adds AgentGlow alongside.
 Any OTel exporter can also send OTLP/HTTP straight to `http://localhost:8100/v1/traces`.
 
-**Using Claude Code?** One command, only Node needed (uv and Python are fetched on first run):
-```bash
-npx agentglow claude                 # starts the server, opens /neural, runs claude with AgentGlow hooks + traces
-npx agentglow claude --install       # or: report every `claude` session (merges into ~/.claude/settings.json)
-```
-Pass Claude flags after `--` (`npx agentglow claude -- --model sonnet`). See [examples/claude-code](examples/claude-code).
-
-**Hand-written agent loop, no framework?** Trace it yourself (sync `with` or `async with`):
+### 3. Hand-written agent loop (no framework)
 ```python
 async with agentglow.run(topic="Inbound call", scope=clinic_id):
     async with agentglow.agent("receptionist") as a:
@@ -48,6 +55,15 @@ async with agentglow.run(topic="Inbound call", scope=clinic_id):
 ```
 Nested `agentglow.agent(...)` = subagent; also `agentglow.mcp(...)`, `agentglow.graph(...)`, `@agentglow.traced_agent`,
 `@agentglow.traced_tool`. See [examples/custom-loop](examples/custom-loop).
+
+### 4. The full demo stack (Hatchet + deepagents + MCP + FalkorDB)
+```bash
+cp .env.example .env                 # add one LLM key (OpenAI, Anthropic or Gemini) - that's all the setup
+docker compose up                    # then open http://localhost:8100 and press ▶ Run agents
+```
+Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d`.
+
+▶ [Watch the demo in HD](docs/media/hero.mp4)
 
 ## 15 themes
 
@@ -79,32 +95,41 @@ import { AgentScene } from "agentglow";
 | `sim` | `false` | built-in fake agents, no server needed (also kicks in automatically if `source` is unreachable) |
 | `style` | - | inline styles for the container, e.g. `{{ height: "80vh" }}` |
 | `className` | - | CSS class for the container |
+| `scope` / `run` | - | show only one user's/tenant's runs, or a single run (see [Security](#security--multi-user)) |
+| `token` | - | viewer token minted by your backend; sent as `Authorization: Bearer` |
 
 ```tsx
 <AgentScene theme="hive" sim hud={false} style={{ height: 400 }} />   // demo background, no server
 ```
 Works in Next.js App Router out of the box (the package is `"use client"`). See [examples/react-embed](examples/react-embed).
 
-## Show each user only their agents
+## Security & multi-user
 
-Tag runs with a scope where your agents run:
+Everything is open by default for local dev. For a shared or public deployment, turn on what you need:
+
+| | Server | Producers / viewers |
+|---|---|---|
+| **Ingest key** (who can send spans) | `AGENTGLOW_INGEST_KEY=k1,k2` (comma list = rotation) | `agentglow.watch(api_key=...)` or `AGENTGLOW_API_KEY`; OTLP: `OTEL_EXPORTER_OTLP_HEADERS="x-api-key=..."`; Claude Code reads `$AGENTGLOW_API_KEY` |
+| **Viewer tokens** (who sees what) | `agentglow serve --secret $AGENTGLOW_SECRET` | your backend mints `agentglow.make_token(secret, scope=..., run=..., ttl_s=3600)`; the scene sends it as `Authorization: Bearer` |
+| **Scopes** (show each user only their agents) | runs tagged with `with agentglow.scope(user.id):` | `<AgentScene scope={user.id} token={token} />`; one run: `run="<id>"` or `/neural?run=<id>` |
+
 ```python
 import agentglow
-agentglow.watch()
+agentglow.watch(api_key=os.environ["AGENTGLOW_API_KEY"])
 with agentglow.scope(user.id):        # every span inside (incl. asyncio tasks) carries agentglow.scope
     graph.invoke({"messages": [...]})
-```
-Start the server with a secret (`agentglow serve --secret $AGENTGLOW_SECRET`), mint a short-lived token in your
-backend, and pass it to the scene. The token alone decides what the viewer sees:
-```python
+
 token = agentglow.make_token(os.environ["AGENTGLOW_SECRET"], scope=user.id, ttl_s=3600)  # no scope/run = admin
 ```
 ```tsx
 <AgentScene source="https://agentglow.yourco.com" scope={user.id} token={token} />
 ```
-The token travels in an `Authorization: Bearer` header, never in the URL. Not using Python on the backend? The format
-is a 3-line HMAC, see [docs/SPEC.md "Scopes & auth"](docs/SPEC.md#scopes--auth). Without a secret (dev), `scope`
-alone filters, with no auth.
+Tokens and keys always travel in headers, never in URLs. Not using Python on the backend? The token is a 3-line HMAC,
+see [docs/SPEC.md "Scopes & auth"](docs/SPEC.md#scopes--auth).
+
+**Privacy:** every ingestion path drops identity attributes (emails, user/account/org ids) and raw user prompts and
+redacts secret-looking values before anything reaches the stream ([docs/SPEC.md](docs/SPEC.md#privacy)). Keep
+patient/customer data (names, phone numbers, ids) out of agent names, tool args and final text.
 
 ## What shows up
 
@@ -141,30 +166,11 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 
 Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
 
-### Claude Code skill
-
-Let Claude set AgentGlow up for you: install the [agentglow skill](skills/agentglow) once, then ask
-"set up agentglow" or "show my agents in 3D" (or type `/agentglow`).
-
-```bash
-mkdir -p ~/.claude/skills/agentglow
-curl -fsSL https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/SKILL.md \
-  -o ~/.claude/skills/agentglow/SKILL.md
-```
-
-### The full stack in one command
-
-```bash
-cp .env.example .env            # add one LLM key (OpenAI, Anthropic or Gemini) - that's all the setup
-docker compose up               # then open http://localhost:8100 and press ▶ Run agents
-```
-Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d`.
-
 ## Production
 
 Run **one** `agentglow serve` per environment (Docker image / k8s Deployment with `replicas: 1`) and point every app
 pod at it: `agentglow.watch("http://agentglow:8100")`. If it's down, your app is unaffected - spans are just dropped.
-Lock down ingestion with `AGENTGLOW_INGEST_KEY` on the server and `AGENTGLOW_API_KEY` (same value) on producers.
+Turn on the ingest key and viewer tokens (see [Security & multi-user](#security--multi-user)).
 
 ## Develop
 
@@ -183,8 +189,5 @@ uv build --package agentglow --out-dir dist         # sdist + wheel
 | `backend/` | Python package `agentglow`: server, `watch()`, OTel → agent mapping, Claude Code hooks |
 | `frontend/` | the 3D scenes; npm package `agentglow` + the app bundled into the Python package |
 | `examples/` | real agent stacks instrumented with one line |
-
-Privacy: every ingestion path drops identity attributes (emails, user/account/org ids) and raw user prompts and
-redacts secret-looking values before anything reaches the stream (see [docs/SPEC.md](docs/SPEC.md#privacy)).
 
 MIT licensed.

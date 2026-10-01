@@ -6,7 +6,7 @@ calls the LLM, waits on MCP servers, passes messages to other agents, and fades 
 It is driven only by OpenTelemetry, via the [`agentglow`](https://github.com/Nideesh1/agentglow#quickstart)
 Python server, so it works with LangGraph, deepagents, LangChain and anything else that emits OTel spans.
 
-![neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.gif)
+![neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.webp)
 
 ## Watch Claude Code (CLI)
 
