@@ -72,6 +72,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const canRun = useRunAvailable();
   const w = useWorld();
   const [, tick] = useState(0);
+  const [info, setInfo] = useState(false); // the theme legend lives behind the (i) toggle
   useEffect(() => {
     const t = window.setInterval(() => tick((x) => x + 1), 500);
     return () => clearInterval(t);
@@ -88,24 +89,29 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   return (
     <>
       <header className="hud hud-top">
-        <div className="hud-title">
-          <span className="hud-dot" />
-          {title}
-          {w.mode === "sim" && <span className="hud-badge">simulated</span>}
-          {w.mode === "live" && <span className="hud-badge hud-badge--live">live</span>}
+        <div className="hud-bar">
+          <div className="hud-title">
+            <span className="hud-dot" />
+            {title}
+            {w.mode === "sim" && <span className="hud-badge">simulated</span>}
+            {w.mode === "live" && <span className="hud-badge hud-badge--live">live</span>}
+          </div>
+          <button className={`hud-info${info ? " on" : ""}`} onClick={() => setInfo((v) => !v)} aria-label="What am I looking at?" title="What am I looking at?">
+            i
+          </button>
+          {w.mode === "live" && canRun && <RunButton />}
+          {!embedded && (
+            <select className="hud-theme" value={here} aria-label="Theme" onChange={(e) => (location.href = `/${e.target.value}${qs}`)}>
+              <option value="">all themes</option>
+              {SCENES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
-        <div className="hud-sub">{subtitle}</div>
-        {w.mode === "live" && canRun && <RunButton />}
-        {!embedded && (
-          <nav className="hud-nav">
-            <a href={`/${qs}`}>all</a>
-            {SCENES.map((s) => (
-              <a key={s} href={`/${s}${qs}`} aria-current={s === here ? "page" : undefined}>
-                {s}
-              </a>
-            ))}
-          </nav>
-        )}
+        {info && <div className="hud-sub">{subtitle}</div>}
       </header>
 
       <aside className="hud hud-counts">
