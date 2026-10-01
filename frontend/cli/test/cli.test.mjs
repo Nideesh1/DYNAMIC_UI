@@ -42,7 +42,7 @@ test("temp settings substitute the port / remote URL everywhere", () => {
   const s = claudeSettings(baseUrl({ port: 8165 }));
   assert.equal(s.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, "http://localhost:8165/v1/traces");
   const urls = Object.values(s.hooks).flat().flatMap((g) => g.hooks.map((h) => h.url));
-  assert.equal(urls.length, 9);
+  assert.equal(urls.length, 10);
   assert.ok(urls.every((u) => u === "http://localhost:8165/v1/claude-code"));
   assert.ok(!JSON.stringify(s).includes("8100"));
   const r = claudeSettings(baseUrl({ url: "https://glow.example.com/" }));
@@ -73,7 +73,7 @@ test("merge is idempotent and re-install on another port replaces our entries", 
   assert.deepEqual(b.state, a.state);
   const c = mergeSettings(a.settings, "http://localhost:8165", a.state);
   const urls = Object.values(c.settings.hooks).flat().flatMap((g) => g.hooks).filter(isOurHook).map((h) => h.url);
-  assert.equal(urls.length, 9);
+  assert.equal(urls.length, 10);
   assert.ok(urls.every((u) => u.includes(":8165/")));
   assert.equal(c.settings.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, "http://localhost:8165/v1/traces");
 });
@@ -265,7 +265,7 @@ test("AGENTGLOW_URL: setup points hooks at the remote server and adds no Session
   assert.ok(r.out.includes("Done. Just run `claude` as usual. View: http://127.0.0.1:9/neural  Undo: npx agentglow remove"));
   const s = JSON.parse(fs.readFileSync(file, "utf8"));
   const hooks = Object.values(s.hooks).flat().flatMap((g) => g.hooks);
-  assert.equal(hooks.length, 9);
+  assert.equal(hooks.length, 10);
   assert.ok(hooks.every((h) => h.type === "http" && h.url === "http://127.0.0.1:9/v1/claude-code"));
   assert.equal(s.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, "http://127.0.0.1:9/v1/traces");
   assert.ok(!fs.existsSync(path.join(home, "cache", "cli")));

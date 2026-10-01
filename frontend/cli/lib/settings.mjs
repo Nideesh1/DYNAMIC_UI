@@ -16,6 +16,7 @@ export const HOOK_EVENTS = [
   ["SubagentStart", true],
   ["SubagentStop", true],
   ["Stop", false],
+  ["StopFailure", false],
   ["SessionEnd", false],
 ];
 

@@ -181,6 +181,24 @@
           }
         ]
       }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
     ]
   }
 }
