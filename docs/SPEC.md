@@ -1,75 +1,69 @@
-# AgentVision spec (contract shared by server, web and examples)
+# AgentVision — v1 spec (contract for backend, frontend, examples)
 
-AgentVision turns OpenTelemetry traces from agent systems into live 3D scenes.
-**Span lifecycle = agent lifecycle.** Anything instrumented with OTel can be visualized; the
-deepagents + Hatchet stack in `examples/` is just one producer.
+Live 3D views of agent systems, driven only by **OpenTelemetry**. Span lifecycle = agent lifecycle.
 
 ```
-your agents ──OTel spans──► agentvision server ──SSE world events──► agentvision web (3D themes)
-             (OTLP /v1/traces  or  LiveSpanProcessor /v1/live)
+your agents ──agentvision.watch()──► agentvision serve (:8100) ──SSE world events──► 3D UI
+  (OTel spans: start + end)              (FastAPI, Python)                   (bundled page, or <AgentScene/> via npm)
 ```
 
-## 1. Ingest (server, Python package `agentvision`)
-
-| Endpoint | Purpose |
-|---|---|
-| `POST /v1/traces` | Standard **OTLP/HTTP** (protobuf `application/x-protobuf` and JSON `application/json`). Receives *ended* spans from any OTel SDK/collector. Good for post-hoc / non-live sources. |
-| `POST /v1/live` | JSON batches from `agentvision.otel.LiveSpanProcessor`: `{"kind": "start"|"end", "span": {...}}`. Gives **span starts** in real time (OTLP only exports ended spans), so agents appear the moment they spawn. |
-| `GET /live/stream` | SSE of **world events** (§3). On connect: replay topology (`mcp_register`) + events of runs still in progress. Keepalive comment every 15s. |
-| `GET /live/graph` | Optional representative graph sample `{nodes:[{id,name,kind}], links:[{source,target}]}` (pluggable provider; FalkorDB provider included, off unless configured). |
-| `GET /live/health` | `{ok, subscribers, buffered}` |
-| `POST /live/topology` | Register MCP servers/backends up front: `{server, resources:[{name, kind}]}` → `mcp_register`. |
-
-Span JSON shape used by `/v1/live` (and the internal normalized form of OTLP spans):
-```json
-{"trace_id": "hex", "span_id": "hex", "parent_span_id": "hex|null", "name": "str",
- "start_time_ms": 0, "end_time_ms": 0|null, "status": "ok|error|unset", "attributes": {"k": "v"}}
+## User experience (the whole point — keep it this simple)
+```bash
+pip install agentvision
+agentvision serve                      # http://localhost:8100  (gallery at /, scenes at /neural, /orbit, …)
 ```
+```python
+import agentvision
+agentvision.watch()                    # before agents run; url defaults to http://localhost:8100
+```
+Optional React embed: `npm i agentvision-web` → `<AgentScene theme="neural" source="http://localhost:8100" />`.
 
-`agentvision.otel.LiveSpanProcessor(endpoint="http://localhost:8100", service=None)` — an OTel
-`SpanProcessor`: `on_start` and `on_end` enqueue the span (non-blocking, batched ~50ms, background
-thread, drops on failure — never slows or breaks the app). Add it next to any other exporter
-(e.g. Langfuse) on the same `TracerProvider`.
+## Repo layout
+| Path | What | Published as |
+|---|---|---|
+| `backend/` | Python package `agentvision`: server + `watch()` + CLI. Built UI copied into `backend/agentvision/static/` | PyPI `agentvision` |
+| `frontend/` | React + react-three-fiber: 8 themes + HUD. Two builds: **app** (→ backend static) and **library** (`<AgentScene/>`) | npm `agentvision-web` |
+| `examples/deepagents-hatchet/` | Hatchet + deepagents + MCP + FalkorDB, instrumented only via `agentvision.watch()` | — |
+| `docker-compose.yml` | agentvision + example stack (Hatchet, FalkorDB; Langfuse under profile `langfuse`) | — |
 
-### Deployment modes (same package)
-- `agentvision serve --port 8100` — standalone server (also serves the bundled 3D UI at `/` and `/<theme>`).
-- `mount_agentvision(app, path="/agentvision", redis_url=None)` — mount into an existing FastAPI app.
-- `redis_url=...` — shared state backend for multi-process / multi-container deployments: every process
-  publishes ingested events to a Redis stream and streams to its SSE clients from it; replay + topology
-  are kept in Redis. Without it, state is in-memory (single process).
+## Backend (`backend/`, package `agentvision`)
+- `agentvision serve [--host 0.0.0.0] [--port 8100]` — standalone FastAPI app. Run ONE per environment
+  (k8s: Deployment replicas 1 + Service). In-memory state, no Redis.
+- Endpoints:
+  - `POST /v1/live` — JSON batch `[{"kind":"start"|"end","span":{...}}]` from `watch()` (real-time starts).
+  - `POST /v1/traces` — standard OTLP/HTTP (protobuf + JSON), ended spans from any OTel SDK/collector.
+  - `GET /live/stream` — SSE world events. On connect: replay MCP topology + events of runs still in progress. Keepalive 15s.
+  - `POST /live/topology` — `{server, resources:[{name, kind}]}` → `mcp_register` (also `agentvision.register_mcp(...)`).
+  - `GET /live/graph` — optional graph sample `{nodes:[{id,name,kind}],links:[{source,target}]}`; FalkorDB provider when `AGENTVISION_FALKOR_URL`/`--falkor` set, else 404 → UI uses its built-in sample.
+  - `GET /live/health`; static UI at `/`, `/<theme>`, assets.
+- Span JSON (normalized): `{trace_id, span_id, parent_span_id, name, start_time_ms, end_time_ms|null, status: ok|error|unset, attributes:{}}`.
+- `agentvision.watch(url="http://localhost:8100", *, instrument=True, service_name=None)`:
+  uses the existing global TracerProvider if it's an SDK provider (keeps Langfuse etc.), else creates one;
+  adds `LiveSpanProcessor(url)` (on_start + on_end → background-thread batched POST to `/v1/live`, ~50 ms,
+  never blocks, drops on failure); if `instrument`, enables OpenInference LangChain instrumentation (covers
+  LangChain/LangGraph/deepagents) and Hatchet instrumentation when those packages are installed and not
+  already instrumented. Idempotent. Also exports `agentvision.otel.LiveSpanProcessor`, `agentvision.register_mcp`.
 
-## 2. Span → world mapping (server)
+## Span → world event mapping (backend `mapper.py`)
+Owning agent of any span = nearest ancestor agent span. Run id = Hatchet workflow run id found on the span or
+any ancestor (HatchetInstrumentor attrs), else `agentvision.run.id`, else the trace id.
 
-Recognize spans by **standard semantic conventions first**, then optional `agentvision.*` hints:
+| Recognized as | Rule (first match) | Emits |
+|---|---|---|
+| Run | first span seen for a run id | `run started` (topic: `agentvision.run.topic` or workflow/root span name); `run completed/failed` when the root span ends |
+| Step | Hatchet task/step span (or `agentvision.step`) | `step running` on start, `step done/failed` on end |
+| Agent | `agentvision.agent` attr; or `gen_ai.operation.name=invoke_agent`; or OpenInference kind `AGENT`; or a LangGraph agent graph span (determine the reliable signal for deepagents from REAL captured spans — e.g. the compiled graph's span name = agent `name=`, and deepagents subagents invoked under the `task` tool) | `spawn` on start (parent = owning agent; `subagent: true` when it runs under a tool span such as `task`) + delegation `message`; `exit` on end (+ result `message`) |
+| LLM | OpenInference kind `LLM` or `gen_ai.operation.name ∈ {chat, text_completion, generate_content}` | `agent thinking` on start; `llm` on end (tokens from `gen_ai.usage.input_tokens/output_tokens` or `llm.token_count.prompt/completion`) |
+| Tool | OpenInference kind `TOOL` or `gen_ai.operation.name=execute_tool` | `tool` |
+| MCP | span with `mcp.server.name` or `agentvision.mcp.server` (+ `agentvision.mcp.resource`, `agentvision.mcp.resource_kind` ∈ db,warehouse,spark,api,storage,queue) | `mcp call` (start, pending) / `mcp result` (end); auto `mcp_register` of server+resource |
+| Graph/DB | `db.system` set | `graph` read/write (`agentvision.db.op` or inferred from query text); node names from `agentvision.graph.nodes` (list or JSON string) |
+| Final | `agentvision.final` attr on any span | `final` text |
+Unknown spans are kept only for tree/ownership. Ids: agent instance id = span id (stable string).
 
-| What | Recognized by (any of) |
-|---|---|
-| **Run** (workflow run) | Hatchet task spans (HatchetInstrumentor; run id attr such as `hatchet.workflow_run_id`), else `agentvision.run.id`. Run id groups everything below. If no run attr anywhere up the tree: the **trace id** is the run. Topic/label: `agentvision.run.topic` or workflow name. |
-| **Step** | Hatchet step/task span (`hatchet.step_name`/task name) or `agentvision.step`. start → `step running`, end → `step done/failed`. |
-| **Agent** (instance) | `gen_ai.operation.name = invoke_agent` (+ `gen_ai.agent.name`), OpenInference `openinference.span.kind = AGENT`, or `agentvision.agent = <type>`. start → `spawn` (parent = nearest ancestor agent span; `subagent=true` if that parent is an agent and this span sits under a tool span, e.g. deepagents `task`), end → `exit` (`failed` if status error). Agent type = `agentvision.agent` → `gen_ai.agent.name` → span name. |
-| **LLM call** | OpenInference kind `LLM`, or `gen_ai.operation.name ∈ {chat, text_completion, generate_content}`. start → agent `thinking`; end → `llm` with tokens from `gen_ai.usage.input_tokens/output_tokens` or `llm.token_count.prompt/completion`, latency = duration. |
-| **Tool call** | OpenInference kind `TOOL` or `gen_ai.operation.name = execute_tool`; name from `tool.name` / `gen_ai.tool.name` / span name → `tool`. |
-| **MCP call** | tool span with `mcp.server.name` (or `agentvision.mcp.server`); backend from `agentvision.mcp.resource` + `agentvision.mcp.resource_kind` (db, warehouse, spark, api, storage, queue). start → `mcp call` (+pending), end → `mcp result`. |
-| **Graph / DB access** | `db.system` set (falkordb, postgresql, neo4j, …). Op: `agentvision.db.op` or inferred from `db.operation.name`/query text (MATCH/SELECT → read, MERGE/CREATE/INSERT/UPDATE/DELETE → write). Node names: `agentvision.graph.nodes` (list or JSON string). → `graph` event attributed to the owning agent. |
-| **Message** | Agent → child agent spawn emits a `message` (text from `agentvision.message` or the tool input preview); child exit emits result `message` back. |
+## World events (backend → frontend)
+Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
+`run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final`. `ts` = epoch ms.
 
-Owning agent of any span = nearest ancestor agent span. Unknown spans are ignored (but keep the tree).
-
-## 3. World events (server → web, unchanged from `web/src/scenes/shared/world.ts`)
-
-`run`, `step`, `spawn`, `exit`, `agent`, `llm`, `message`, `tool`, `graph`, `mcp_register`, `mcp`, `final`
-— see `WorldEvent` in `web/src/scenes/shared/world.ts` (that file is the source of truth; ids are
-`<run>:<agent_type>[:<n>]` or span ids — any stable string). `ts` = epoch ms.
-
-## 4. Web (`web/`, npm package `agentvision-web`)
-
-React + react-three-fiber. Exports `<SpanScene theme="neural" source="http://localhost:8100" />`,
-the 8 themes, the world store, sources (`sse(url)`, `simulator()`), and the HUD. Demo app: `/` gallery,
-`/<theme>` scene, `?sim=1` simulator, `?source=` override.
-
-## 5. Examples
-
-`examples/deepagents-hatchet/` — Hatchet workflow + deepagents (planner → researcher fan-out →
-writer) + MCP (`analytics`) + FalkorDB, instrumented **only via OTel** (HatchetInstrumentor,
-LangChain/OpenInference instrumentor, MCP spans, FalkorDB db spans) + `LiveSpanProcessor`;
-optional Langfuse exporter side by side. No custom callbacks.
+## Frontend (`frontend/`, npm `agentvision-web`)
+- App build: gallery at `/`, `/<theme>`; data source = same origin `/live/stream` (`?source=<url>` override, `?sim=1` simulator, `?hud=0` hide HUD). Output copied to `backend/agentvision/static/`.
+- Library build: `export { AgentScene, THEMES }` — `<AgentScene theme="neural" source="http://…:8100" hud={true} sim={false} style className />`; react/react-dom are peerDependencies; ships types.
