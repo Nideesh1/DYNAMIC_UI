@@ -56,8 +56,35 @@ export function claudeSettings(base) {
   return { env: envBlock(base), hooks };
 }
 
+// Marker in the SessionStart command hook that starts the server; recognises it on remove / re-setup.
+export const START_MARK = "start --background --quiet";
+
+const isOurHttpHook = (h) => !!h && h.type === "http" && typeof h.url === "string" && h.url.includes(HOOK_PATH);
+const isOurStartHook = (h) =>
+  !!h && h.type === "command" && typeof h.command === "string" && h.command.includes("agentglow") && h.command.includes(START_MARK);
+
 export function isOurHook(h) {
-  return !!h && h.type === "http" && typeof h.url === "string" && h.url.includes(HOOK_PATH);
+  return isOurHttpHook(h) || isOurStartHook(h);
+}
+
+const shq = (s) => `"${String(s).replace(/(["\\$`])/g, "\\$1")}"`;
+
+/**
+ * Shell command for the SessionStart hook that makes sure the local server runs. Prints nothing (SessionStart stdout
+ * would land in Claude's context) and always exits 0. Calls the CLI copy in the cache directly (~30 ms) and falls
+ * back to the pinned npm version through npx (~0.5 s when cached). Windows without Git Bash runs it in PowerShell,
+ * so there it is npx only.
+ */
+export function startHookCommand({ port, version, node, script, cacheDir: dir, platform = process.platform }) {
+  const args = `${START_MARK} --port ${port}`;
+  const npx = `npx -y agentglow${version ? `@${version}` : ""} ${args}`;
+  if (platform === "win32" || !node || !script) return npx;
+  const env = dir ? `AGENTGLOW_CACHE_DIR=${shq(dir)} ` : "";
+  return `${env}${shq(node)} ${shq(script)} ${args} || ${env}${npx}`;
+}
+
+export function startHookGroup(command) {
+  return { hooks: [{ type: "command", command, timeout: 10 }] };
 }
 
 /** Base URLs of our hooks found in a settings object (used to recognise our traces endpoint). */
@@ -66,7 +93,7 @@ export function ourBases(settings) {
   for (const groups of Object.values(settings?.hooks || {})) {
     if (!Array.isArray(groups)) continue;
     for (const g of groups) for (const h of g?.hooks || []) {
-      if (isOurHook(h)) out.add(h.url.slice(0, h.url.indexOf(HOOK_PATH)));
+      if (isOurHttpHook(h)) out.add(h.url.slice(0, h.url.indexOf(HOOK_PATH)));
     }
   }
   return [...out];
@@ -114,11 +141,13 @@ export function unmergeSettings(settings, state = null) {
 /**
  * Add our hooks + env to `settings` (idempotent: our previous entries are replaced, foreign ones kept).
  * Env keys the user already set to a different value are left alone and reported in `skipped`.
- * Returns { settings, state: { addedEnv, base }, skipped }.
+ * `startCommand` adds the SessionStart command hook that starts the local server (see startHookCommand).
+ * Returns { settings, state: { addedEnv, base, startHook }, skipped }.
  */
-export function mergeSettings(settings, base, state = null) {
+export function mergeSettings(settings, base, state = null, { startCommand = null } = {}) {
   const s = unmergeSettings(settings, state);
   const ours = claudeSettings(base);
+  if (startCommand) ours.hooks.SessionStart.unshift(startHookGroup(startCommand));
   s.hooks = s.hooks && typeof s.hooks === "object" ? s.hooks : {};
   for (const [event, groups] of Object.entries(ours.hooks)) {
     s.hooks[event] = [...(Array.isArray(s.hooks[event]) ? s.hooks[event] : []), ...groups];
@@ -131,7 +160,7 @@ export function mergeSettings(settings, base, state = null) {
     else if (s.env[k] !== v) skipped.push(k);
   }
   if (!Object.keys(s.env).length) delete s.env;
-  return { settings: s, state: { base, addedEnv }, skipped };
+  return { settings: s, state: { base, addedEnv, startHook: !!startCommand }, skipped };
 }
 
 // ---------- files ----------
@@ -157,29 +186,40 @@ function backup(file, now) {
 }
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const sorted = (o) => Object.fromEntries(Object.entries(o || {}).sort(([a], [b]) => a.localeCompare(b)));
 
 /** Merge into a settings file. Returns { changed, backup, skipped, file }. */
-export function installSettingsFile(file, base, { now = Date.now() } = {}) {
+export function installSettingsFile(file, base, { now = Date.now(), startCommand = null, extra = {} } = {}) {
   const before = readJson(file, {});
   const st = readJson(statePath(file), null);
-  const { settings, state, skipped } = mergeSettings(before, base, st);
-  if (same(before, settings) && st && same(st.addedEnv, state.addedEnv)) {
+  const merged = mergeSettings(before, base, st, { startCommand });
+  const { settings, skipped } = merged;
+  const state = { ...merged.state, ...extra };
+  // keep the first backup we made, so `remove` can point at the pre-AgentGlow settings
+  if (st?.backup && !state.backup) state.backup = st.backup;
+  if (same(before, settings) && st && same(sorted({ ...st, backup: state.backup }), sorted(state))) {
     return { changed: false, backup: null, skipped, file };
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const bak = same(before, settings) ? null : backup(file, now);
+  if (bak && !state.backup) state.backup = bak;
   if (!same(before, settings)) fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
   fs.writeFileSync(statePath(file), JSON.stringify(state, null, 2) + "\n");
   return { changed: true, backup: bak, skipped, file };
 }
 
-/** Remove our entries from a settings file. Returns { changed, backup, file }. */
+/** Read the install sidecar (null when AgentGlow is not installed in `file`). */
+export function readState(file) {
+  return readJson(statePath(file), null);
+}
+
+/** Remove our entries from a settings file. Returns { changed, backup, file, state }. */
 export function uninstallSettingsFile(file, { now = Date.now() } = {}) {
   const before = readJson(file, null);
   const st = readJson(statePath(file), null);
   if (before === null) {
     if (st) fs.rmSync(statePath(file), { force: true });
-    return { changed: false, backup: null, file };
+    return { changed: false, backup: null, file, state: st };
   }
   const after = unmergeSettings(before, st);
   let bak = null;
@@ -188,5 +228,5 @@ export function uninstallSettingsFile(file, { now = Date.now() } = {}) {
     fs.writeFileSync(file, JSON.stringify(after, null, 2) + "\n");
   }
   fs.rmSync(statePath(file), { force: true });
-  return { changed: !same(before, after), backup: bak, file };
+  return { changed: !same(before, after), backup: bak, file, state: st };
 }
