@@ -6,7 +6,7 @@
  *   frame N+1  labelTick() sorts the visible labels by priority and greedily places them: a label that overlaps
  *              an already placed one first drops its secondary line, then hides (fades out). Hidden labels keep
  *              projecting, so they come back as soon as there is room.
- * Priority: selected agent > busiest top-level agents > run labels > MCP servers > resource captions (the graph's
+ * Priority: selected agent > busiest top-level agents > skill chips > run labels > MCP servers > resource captions (the graph's
  * name) > cluster badges > backends / graph node names > theme extras > subagent names. The kind comes from the slot a label is rendered in
  * (<KitScene> wraps each slot in a LabelScope); a label can override it with its `declutter` prop.
  * No per-frame allocations: entries are created once per label, the pass reuses scratch arrays.
@@ -15,9 +15,9 @@ import { createContext } from "react";
 import { energy, world } from "../world";
 import type { KitAgent } from "./state";
 
-export type LabelKind = "agent" | "run" | "mcp" | "resource" | "cluster" | "backend" | "graph" | "extra" | "sub";
+export type LabelKind = "agent" | "skill" | "run" | "mcp" | "resource" | "cluster" | "backend" | "graph" | "extra" | "sub";
 
-const KIND_PRIO: Record<LabelKind, number> = { agent: 600, run: 400, mcp: 300, resource: 290, cluster: 250, backend: 150, graph: 140, extra: 120, sub: 100 };
+const KIND_PRIO: Record<LabelKind, number> = { agent: 600, skill: 450, run: 400, mcp: 300, resource: 290, cluster: 250, backend: 150, graph: 140, extra: 120, sub: 100 };
 
 /** Which slot a label is rendered in (set by <KitScene>); `agent` lets the pass rank agent labels by activity. */
 export type LabelScopeValue = { kind: LabelKind; agent?: KitAgent };
@@ -91,7 +91,7 @@ export function unregisterLabel(e: LabelEntry) {
 
 const PASS_MS = 100;
 /** minor kinds that hide when the canvas edge cuts them (the framed / important ones stay) */
-const CLIP_HIDES: Record<LabelKind, boolean> = { agent: false, run: false, mcp: false, resource: false, cluster: false, backend: true, graph: true, extra: true, sub: true };
+const CLIP_HIDES: Record<LabelKind, boolean> = { agent: false, skill: true, run: false, mcp: false, resource: false, cluster: false, backend: true, graph: true, extra: true, sub: true };
 const PAD = 3;
 const order: LabelEntry[] = [];
 let rects = new Float64Array(256 * 4);
@@ -106,6 +106,11 @@ function scoreOf(e: LabelEntry, now: number) {
     const busy = Math.min(1, energy(inst, now)) * 60 + (inst.status === "thinking" ? 30 : 0);
     s = a.depth > 0 ? KIND_PRIO.sub + busy * 0.5 : KIND_PRIO.agent + busy;
     if (inst.exitAt || inst.doneAt) s -= a.depth > 0 ? 60 : 350; // finished / fading agents yield to working ones
+  } else if (a && e.kind === "skill") {
+    // an agent's skill chip: transient and important, so above run labels; its own (selected) agent's name wins
+    if (world.selected === a.id) return 9990;
+    s += Math.min(1, energy(a.inst, now)) * 30 + (a.depth > 0 ? 0 : 20);
+    if (a.inst.exitAt || a.inst.doneAt) s -= 300;
   }
   return s + e.size * 10 + (e.placed ? 8 : 0);
 }
@@ -195,7 +200,7 @@ export function labelTick(now: number, w: number, h: number) {
 }
 
 /** label kinds the camera framing keeps on screen (agent names hug their agents; graph-node names come and go) */
-const FRAMED: Record<LabelKind, boolean> = { agent: false, sub: false, run: true, mcp: true, resource: true, backend: true, cluster: true, graph: false, extra: false };
+const FRAMED: Record<LabelKind, boolean> = { agent: false, skill: false, sub: false, run: true, mcp: true, resource: true, backend: true, cluster: true, graph: false, extra: false };
 
 /**
  * Visit the world anchors of recently visible framed labels with their plate rect around the anchor in css px

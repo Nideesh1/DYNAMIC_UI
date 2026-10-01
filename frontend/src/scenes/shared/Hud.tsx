@@ -45,12 +45,18 @@ export function describe(e: WorldEvent): string {
       return e.phase === "call" ? `${short(e.id)} → mcp ${e.server}.${e.tool}()${e.resource ? ` → ${e.resource}` : ""}` : `mcp ${e.server}.${e.tool} returned${e.latency_ms ? ` · ${Math.round(e.latency_ms)}ms` : ""}`;
     case "mcp_register":
       return `mcp server ${e.server} online`;
+    case "skill":
+      return e.status === "start" ? `${short(e.id)} · skill: ${e.name}` : `${short(e.id)} · skill: ${e.name} done`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
   }
 }
 
+/** skill badge accent (3D chip + HUD chips) */
+export const SKILL_COLOR = "#f5b83d";
+
 function colorOf(e: WorldEvent) {
+  if (e.type === "skill") return SKILL_COLOR;
   const id = "id" in e ? e.id : e.type === "message" ? e.from_id : null;
   const inst = id ? world.instances.get(id) : null;
   if (inst) return TYPE_COLOR[inst.type];
@@ -350,11 +356,12 @@ function EventLog() {
         const body = (
           <>
             <i />
+            {e.type === "skill" && <b className="hs-skill">{e.status === "start" ? "skill" : "skill done"}</b>}
             <span>{describe(e)}</span>
           </>
         );
         return (
-          <li key={`${e.ts}-${e.type}-${i}`} style={{ ["--c" as string]: colorOf(e) }}>
+          <li key={`${e.ts}-${e.type}-${i}`} className={e.type === "skill" ? "is-skill" : undefined} style={{ ["--c" as string]: colorOf(e) }}>
             {id ? (
               <button onClick={() => selectInstance(id)} title="Inspect agent">
                 {body}
@@ -451,6 +458,12 @@ function age(i: Instance) {
   return s < 60 ? `${s.toFixed(0)}s` : `${(s / 60).toFixed(1)}m`;
 }
 
+/** the skill this agent is using right now ("" = none) */
+function activeSkill(i: Instance): string {
+  if (!isLive(i) || !i.skill || i.skillEndAt) return "";
+  return i.skill;
+}
+
 function AgentList() {
   const w = useWorld();
   const [q, setQ] = useState("");
@@ -534,7 +547,14 @@ function AgentList() {
             <button onClick={() => selectInstance(i.id)} style={{ ["--c" as string]: TYPE_COLOR[i.type] }} className={isLive(i) ? "" : "is-done"}>
               <i data-status={isLive(i) ? i.status : "done"} />
               <span className="ap-name">
-                {short(i.id)}
+                <span className="ap-title">
+                  {short(i.id)}
+                  {activeSkill(i) && (
+                    <em className="ap-skill" title={`using skill ${activeSkill(i)}`}>
+                      {activeSkill(i)}
+                    </em>
+                  )}
+                </span>
                 <small>{w.runs.get(i.run)?.topic ?? "finished run"}</small>
               </span>
               <span className="ap-meta">
@@ -613,6 +633,19 @@ function AgentDetail({ i }: { i: Instance }) {
               ↓ {short(c.id)} {isDone(c) ? "✓" : ""}
             </button>
           ))}
+        </section>
+      )}
+      {i.skills.size > 0 && (
+        <section>
+          <h4>Skills used</h4>
+          <div className="ap-skills">
+            {[...i.skills].map(([name, u]) => (
+              <span key={name} className={u.active && isLive(i) ? "on" : ""} title={u.active && isLive(i) ? "in use now" : `used ${u.count}x`}>
+                {name}
+                <em>{u.count}x</em>
+              </span>
+            ))}
+          </div>
         </section>
       )}
       {pending.length > 0 && (

@@ -11,7 +11,8 @@ import { ClusterBalls, type ClusterBallProps, type ClusterColor } from "../Clust
 import { Hud } from "../Hud";
 import { LOD_LANES, lod, lodTick, type LodCluster } from "../lod";
 import { useSceneSetup, type Galaxy } from "../useSceneSetup";
-import { tick, useHasGraph } from "../world";
+import { Label3D, type Label3DHandle, type LabelSeg } from "../Label3D";
+import { presence, skillMix, tick, useHasGraph } from "../world";
 import { applyDim } from "./dim";
 import { FitCamera, setFitProfile, type FitProfile } from "./fit";
 import { LabelScope, labels, labelTick, type LabelScopeValue } from "./labels";
@@ -163,7 +164,76 @@ function Dim({ agent, children }: { agent: KitAgent; children: ReactNode }) {
   return <group ref={g}>{children}</group>;
 }
 
-function Agents({ Agent, Edge, selected, onSelect }: { Agent: ComponentType<AgentSlotProps>; Edge?: ComponentType<EdgeSlotProps>; selected: string | null; onSelect: (id: string) => void }) {
+/** skill badge colors (amber; the HUD uses the same accent) */
+const SKILL_ACCENT = "#f5b83d";
+const SKILL_TEXT = "#fde7b0";
+const SKILL_DIM = "#c99a45";
+/** "skill · <name>" with a dim prefix (built only when the shown skill changes) */
+const skillLine = (name: string): LabelSeg[] => [
+  { text: "skill · ", color: SKILL_DIM },
+  { text: name, color: SKILL_TEXT },
+];
+const CAM_UP = new THREE.Vector3();
+
+/**
+ * "skill · pptx" chip above an agent while it uses a skill (world `skill` events), lingering ~3s after the skill
+ * ends while it fades. Mounted lazily (first skill) so agents that never use one cost nothing. Agent names sit
+ * below their agents in most themes, so the chip goes on the SCREEN-up side: from the agent's top (`height` on
+ * ground-plane stages) out by its radius along the camera's up vector. Declutter kind "skill" (labels.ts): above
+ * run labels, below top-level agent names; selected agents always win.
+ */
+function SkillBadge({ agent, radius, height }: { agent: KitAgent; radius: number; height: number }) {
+  const [on, setOn] = useState(() => !!agent.inst.skill);
+  useFrame(() => {
+    if (!on && agent.inst.skill) setOn(true);
+  });
+  return on ? <SkillChip agent={agent} radius={radius} height={height} /> : null;
+}
+
+function SkillChip({ agent, radius, height }: { agent: KitAgent; radius: number; height: number }) {
+  const g = useRef<THREE.Group>(null);
+  const label = useRef<Label3DHandle>(null);
+  const shown = useRef("");
+  useFrame(({ camera }) => {
+    const o = g.current;
+    if (!o) return;
+    const now = performance.now();
+    const inst = agent.inst;
+    const a = skillMix(inst, now) * presence(inst, now);
+    o.visible = a > 0.003;
+    if (!o.visible) return;
+    if (inst.skill !== shown.current) {
+      shown.current = inst.skill;
+      label.current?.setText(skillLine(inst.skill));
+    }
+    label.current?.setOpacity(a);
+    const s = agent.scale;
+    CAM_UP.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    o.position.copy(agent.live).addScaledVector(CAM_UP, radius * s * 0.8 + 0.12);
+    o.position.y += height * s;
+  });
+  return (
+    <group ref={g} visible={false}>
+      <Label3D
+        ref={label}
+        text={skillLine(agent.inst.skill)}
+        color={SKILL_ACCENT}
+        textColor={SKILL_TEXT}
+        size={agent.depth > 0 ? 0.2 : 0.24}
+        pxRange={agent.depth > 0 ? [8, 11] : [8.5, 12.5]}
+        anchorY="bottom"
+        plate="pill"
+        opacity={0}
+        glow={1.05}
+        renderOrder={24}
+        declutter="skill"
+        fit
+      />
+    </group>
+  );
+}
+
+function Agents({ Agent, Edge, selected, onSelect, radius, height }: { Agent: ComponentType<AgentSlotProps>; Edge?: ComponentType<EdgeSlotProps>; selected: string | null; onSelect: (id: string) => void; radius: number; height: number }) {
   const list = useKitAgents();
   return (
     <>
@@ -173,6 +243,7 @@ function Agents({ Agent, Edge, selected, onSelect }: { Agent: ComponentType<Agen
             {Edge && a.inst.parent && <Edge child={a} />}
             <Agent agent={a} selected={selected === a.id} onSelect={onSelect} />
           </Dim>
+          <SkillBadge agent={a} radius={radius} height={height} />
         </AgentScope>
       ))}
     </>
@@ -362,7 +433,7 @@ export function KitScene(p: KitSceneProps) {
             {p.RunMarker && <Runs RunMarker={p.RunMarker} />}
             {p.GraphResource && <SideGraph galaxy={galaxy} Graph={p.GraphResource} />}
             <Mcp McpServer={p.McpServer} Backend={p.Backend} />
-            <Agents Agent={p.Agent} Edge={p.Edge} selected={selected} onSelect={setSelected} />
+            <Agents Agent={p.Agent} Edge={p.Edge} selected={selected} onSelect={setSelected} radius={agentRadius} height={p.plane === "xz" ? agentHeight : 0} />
             <LabelScope.Provider value={SCOPE_CLUSTER}>
               <Clusters cluster={p.cluster} Cluster={p.Cluster} offset={p.clusterOffset} />
             </LabelScope.Provider>

@@ -87,6 +87,16 @@
 .ap-name small { color: #64748b; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ap-meta { text-align: right; font-size: 11px; color: #94a3b8; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; }
 .ap-meta b { color: var(--c); font-weight: 600; text-transform: lowercase; }
+/* skills: amber chips (Events log, Agents row, Selected inspector) */
+.hs-events li.is-skill > * { background: rgba(245, 184, 61, 0.07); }
+.hs-skill { flex: 0 0 auto; font-size: 9.5px; font-weight: 600; line-height: 1.5; text-transform: uppercase; letter-spacing: 0.06em; color: #fcd581; padding: 0 6px; border-radius: 999px; border: 1px solid rgba(245, 184, 61, 0.55); background: rgba(245, 184, 61, 0.12); }
+.ap-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ap-skill { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; font-size: 9.5px; font-weight: 600; color: #fcd581; padding: 0 6px; border-radius: 999px; border: 1px solid rgba(245, 184, 61, 0.55); background: rgba(245, 184, 61, 0.12); }
+.ap-skill::before { content: "skill · "; color: #b8893a; font-weight: 500; }
+.ap-skills { display: flex; flex-wrap: wrap; gap: 4px; }
+.ap-skills span { font-size: 11px; color: #e2e8f0; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(245, 184, 61, 0.35); background: rgba(245, 184, 61, 0.06); display: inline-flex; gap: 5px; align-items: baseline; }
+.ap-skills span.on { border-color: #f5b83d; background: rgba(245, 184, 61, 0.18); color: #fde7b0; box-shadow: 0 0 10px rgba(245, 184, 61, 0.25); }
+.ap-skills em { font-style: normal; font-size: 10px; color: #b8893a; font-variant-numeric: tabular-nums; }
 .ap-more { padding: 6px; color: #64748b; font-size: 11px; }
 .ap-detail { overflow-y: auto; min-height: 0; margin-top: 8px; flex: 1; }
 .ap-detail h3 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--c); }

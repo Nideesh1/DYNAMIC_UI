@@ -31,6 +31,8 @@ export type WorldEvent =
   | { type: "tool"; run_id: string; id: string; tool: string; args_preview: string; ts: number }
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
   | { type: "final"; run_id: string; text: string; ts: number }
+  // an agent instance started / finished using a SKILL (e.g. "pptx"); the same call also arrives as a `tool` event
+  | { type: "skill"; run_id: string; id: string; name: string; status: "start" | "end"; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
   // topology: an MCP server and the backends behind it (sent at worker startup and to every new viewer)
   | { type: "mcp_register"; run_id?: string; server: string; resources: { name: string; kind: ResourceKind }[]; ts: number }
@@ -97,7 +99,21 @@ export type Instance = {
   toolCalls: number;
   mcpCalls: number;
   nodes: Set<string>; // FalkorDB nodes this agent read/wrote
+  /** skills this agent used: name -> active now, times started, performance.now() of the last start/end */
+  skills: Map<string, SkillUse>;
+  /** the skill the 3D badge shows: newest started one ("" = none yet) and when it ended (0 while active) */
+  skill: string;
+  skillEndAt: number;
 };
+export type SkillUse = { active: boolean; count: number; last: number };
+/** How long the skill badge lingers (fading) after the skill ends (ms). */
+export const SKILL_LINGER_MS = 3000;
+/** 0..1 skill badge visibility: 1 while a skill is active, fades over SKILL_LINGER_MS after it ends. */
+export function skillMix(i: Instance, now = performance.now()): number {
+  if (!i.skill) return 0;
+  if (!i.skillEndAt) return 1;
+  return Math.max(0, 1 - (now - i.skillEndAt) / SKILL_LINGER_MS);
+}
 export type Run = {
   id: string;
   topic: string;
@@ -302,6 +318,9 @@ export function apply(ev: WorldEvent) {
         toolCalls: 0,
         mcpCalls: 0,
         nodes: new Set(),
+        skills: new Map(),
+        skill: "",
+        skillEndAt: 0,
       });
       world.stats.spawned++;
       world.focus = ev.id;
@@ -322,6 +341,11 @@ export function apply(ev: WorldEvent) {
         if (!r || r.endedAt || staleReplay) i.exitAt = now;
       }
       for (const [k, p] of world.mcpPending) if (p.instance === ev.id) world.mcpPending.delete(k);
+      if (i && i.skill && !i.skillEndAt) {
+        // finished without a skill "end": close its skills so the badge fades with it
+        for (const u of i.skills.values()) u.active = false;
+        i.skillEndAt = now;
+      }
       break;
     }
     case "agent": {
@@ -358,6 +382,29 @@ export function apply(ev: WorldEvent) {
         i.pulse = Math.max(i.pulse, 0.5);
         i.pulseAt = now;
         i.toolCalls++;
+      }
+      break;
+    }
+    case "skill": {
+      const i = world.instances.get(ev.id);
+      if (!i) break;
+      let u = i.skills.get(ev.name);
+      if (!u) i.skills.set(ev.name, (u = { active: false, count: 0, last: now }));
+      u.last = now;
+      if (ev.status === "start") {
+        u.active = true;
+        u.count++;
+        i.skill = ev.name;
+        i.skillEndAt = 0;
+      } else {
+        u.active = false;
+        if (i.skill === ev.name) {
+          // another skill still running: the badge switches to it, else it lingers and fades
+          let other = "";
+          for (const [n, v] of i.skills) if (v.active && (!other || v.last > i.skills.get(other)!.last)) other = n;
+          if (other) i.skill = other;
+          else i.skillEndAt = now;
+        }
       }
       break;
     }
