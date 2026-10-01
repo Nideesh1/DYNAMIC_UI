@@ -189,3 +189,6 @@ export function stageToGraph(stage: THREE.Vector3, out: THREE.Vector3) {
 let uidSeq = 0;
 /** next unique object id (React keys) */
 export const nextUid = () => ++uidSeq;
+
+// debugging / verification hook (read-only use): window.__agentglowKit
+if (typeof window !== "undefined") (window as unknown as { __agentglowKit?: typeof kit }).__agentglowKit = kit;

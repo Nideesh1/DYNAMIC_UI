@@ -143,7 +143,8 @@ export const lanes: LayoutPreset = {
     const rows = Math.ceil(n / cols);
     const col = i % cols;
     const row = Math.floor(i / cols);
-    out.a = (col - (cols - 1) / 2) * cw;
+    const inRow = Math.min(cols, n - row * cols); // a partial last row stays centred
+    out.a = (col - (inRow - 1) / 2) * cw;
     out.b = ((rows - 1) / 2 - row) * ch - LANE_LABEL / 2;
     out.angle = -PI / 2;
   },
@@ -166,7 +167,8 @@ export const grid: LayoutPreset = {
     const rows = Math.ceil(n / cols);
     const col = i % cols;
     const row = Math.floor(i / cols);
-    out.a = (col - (cols - 1) / 2) * cw;
+    const inRow = Math.min(cols, n - row * cols);
+    out.a = (col - (inRow - 1) / 2) * cw;
     out.b = ((rows - 1) / 2 - row) * ch;
     out.angle = -PI / 2;
   },

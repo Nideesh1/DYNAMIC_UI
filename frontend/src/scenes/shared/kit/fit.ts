@@ -47,6 +47,8 @@ export const fit = {
   insets: { top: 0, right: 0, bottom: 0, left: 0 },
   /** free-area aspect (w/h after insets): presets use it to stretch layouts to the visible shape */
   aspect: 16 / 9,
+  /** last framing numbers (debug / verification): wanted camera distance, current distance, user zoom factor */
+  cam: { want: 0, dist: 0, user: 1, points: 0 },
 };
 
 export function setFitProfile(p: Partial<FitProfile>) {
@@ -84,9 +86,11 @@ const PANELS = [".hud-agents", ".hud-top", ".hud-ticker", ".hud-counts", ".hud-l
 
 /**
  * Measure the HUD panels overlapping the canvas: each panel is excluded by cutting the free rect from whichever
- * side loses the least area (a tall right column cuts from the right, a wide top bar from the top...).
+ * side keeps the most room for content of aspect `aspect` (w/h): a tall right column cuts from the right, a wide
+ * top bar from the top, and a short top-right panel cuts from the top for wide content but from the right for
+ * round content.
  */
-export function measureInsets(canvas: HTMLCanvasElement) {
+export function measureInsets(canvas: HTMLCanvasElement, aspect = 1.6) {
   const root = canvas.closest(".scene-root") ?? canvas.parentElement?.parentElement;
   const c = canvas.getBoundingClientRect();
   const ins = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -101,28 +105,39 @@ export function measureInsets(canvas: HTMLCanvasElement) {
     if (r.right <= 0 || r.bottom <= 0 || r.left >= c.width || r.top >= c.height) continue;
     rects.push(r);
   }
-  // greedy: largest panels first
-  rects.sort((a, b) => (b.right - b.left) * (b.bottom - b.top) - (a.right - a.left) * (a.bottom - a.top));
+  // exhaustive: every panel is cut from one of the 4 sides (4^n, n <= 5); keep the assignment that leaves the
+  // largest rect of the content's aspect
   const W = c.width;
   const H = c.height;
-  for (const r of rects) {
-    const fl = ins.left, ft = ins.top, fr = W - ins.right, fb = H - ins.bottom;
-    if (r.right <= fl || r.left >= fr || r.bottom <= ft || r.top >= fb) continue; // already outside the free rect
-    const fw = fr - fl, fh = fb - ft;
-    // remaining area per option
-    const opts = [
-      { k: "left", v: Math.max(0, r.right), area: (fr - Math.max(fl, r.right)) * fh },
-      { k: "right", v: Math.max(0, W - r.left), area: (Math.min(fr, r.left) - fl) * fh },
-      { k: "top", v: Math.max(0, r.bottom), area: fw * (fb - Math.max(ft, r.bottom)) },
-      { k: "bottom", v: Math.max(0, H - r.top), area: fw * (Math.min(fb, r.top) - ft) },
-    ] as const;
-    let best: (typeof opts)[number] = opts[0];
-    for (const o of opts) if (o.area > best.area) best = o;
-    ins[best.k] = Math.max(ins[best.k], best.v);
+  const usable = (w: number, h: number) => {
+    if (w <= 0 || h <= 0) return 0;
+    const uw = Math.min(w, h * aspect);
+    return uw * (uw / aspect) + w * h * 1e-3; // tie-break: more leftover room
+  };
+  const n = rects.length;
+  let best = -1;
+  for (let code = 0; code < 1 << (2 * n); code++) {
+    let l = 0, t = 0, rr = 0, bb = 0;
+    for (let i = 0; i < n; i++) {
+      const r = rects[i];
+      const side = (code >> (2 * i)) & 3;
+      if (side === 0) l = Math.max(l, r.right);
+      else if (side === 1) rr = Math.max(rr, W - r.left);
+      else if (side === 2) t = Math.max(t, r.bottom);
+      else bb = Math.max(bb, H - r.top);
+    }
+    const u = usable(W - l - rr, H - t - bb);
+    if (u > best) {
+      best = u;
+      ins.left = l;
+      ins.right = rr;
+      ins.top = t;
+      ins.bottom = bb;
+    }
   }
-  // tiny embeds: the free area keeps at least ~45% of each axis
-  const capX = W * 0.55;
-  const capY = H * 0.55;
+  // tiny embeds: the free area keeps at least ~32% of each axis (content may then tuck under a panel edge)
+  const capX = W * 0.68;
+  const capY = H * 0.68;
   if (ins.left + ins.right > capX) {
     const k = capX / (ins.left + ins.right);
     ins.left *= k;
@@ -160,7 +175,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
   const controls = useThree((s) => s.controls) as unknown as Controls | null;
   const gl = useThree((s) => s.gl);
   const size = useThree((s) => s.size);
-  const st = useRef({ base: 0, user: 1, userActive: false, desired: 0, want: 0, lastMeasure: -1e9, dir: new THREE.Vector3(), lastFit: -1e9 });
+  const st = useRef({ base: 0, user: 1, userActive: false, desired: 0, want: 0, lastMeasure: -1e9, dir: new THREE.Vector3(), lastFit: -1e9, aspect: 1.6, mx: 0, my: 0 });
 
   useEffect(() => {
     fit.w = size.width;
@@ -198,7 +213,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     const H = Math.max(1, size.height);
     if (now - s.lastMeasure > 700) {
       s.lastMeasure = now;
-      fit.insets = measureInsets(gl.domElement);
+      fit.insets = measureInsets(gl.domElement, s.aspect);
     }
     const ins = fit.insets;
     const freeW = Math.max(W * 0.3, W - ins.left - ins.right);
@@ -224,15 +239,21 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     const hy = (freeH / H) * tanH;
     let need = 0;
     let n = 0;
+    s.mx = s.my = 0;
     points((p, r) => {
       if (!Number.isFinite(p.x)) return;
       _q.set(p.x + origin.x - tgt.x, p.y + origin.y - tgt.y, p.z + origin.z - tgt.z).applyMatrix4(_m);
+      // content shape on screen (for choosing how HUD panels cut the free area)
+      const depth = Math.max(1, cur - _q.z);
+      s.mx = Math.max(s.mx, (Math.abs(_q.x) + r) / depth);
+      s.my = Math.max(s.my, (Math.abs(_q.y) + r) / depth);
       // camera at distance d looks down -z: depth = d - q.z; need |q.x|+r <= depth*hx (same for y)
       const dx = _q.z + (Math.abs(_q.x) + r) / hx + r;
       const dy = _q.z + (Math.abs(_q.y) + r) / hy + r;
       need = Math.max(need, dx, dy);
       n++;
     });
+    if (n && s.my > 1e-4) s.aspect += (THREE.MathUtils.clamp(s.mx / s.my, 0.5, 4) - s.aspect) * 0.1;
     const P = fit.profile;
     let desired: number;
     if (!n) desired = s.base;
@@ -247,6 +268,10 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
       s.lastFit = now;
     }
     s.desired = s.want;
+    fit.cam.want = s.want;
+    fit.cam.dist = cur;
+    fit.cam.user = s.user;
+    fit.cam.points = n;
     if (s.userActive) return;
     let want = s.want * s.user;
     if (controls?.minDistance !== undefined) want = Math.max(want, controls.minDistance);
@@ -258,3 +283,5 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
   });
   return null;
 }
+
+if (typeof window !== "undefined") (window as unknown as { __agentglowFit?: typeof fit }).__agentglowFit = fit;
