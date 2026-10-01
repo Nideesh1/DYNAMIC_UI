@@ -52,7 +52,7 @@ export default function Scene() {
       </Canvas>
       <Hud
         title="neural · living brain"
-        subtitle="Agents are neurons (spiky = thinking, smooth = waiting, amber ring = waiting on MCP) · ⬢ MCP servers wire to their backends · FalkorDB memory lights up on reads/writes"
+        subtitle="Agents are neurons (spiky = thinking, smooth = waiting, amber ring = waiting on MCP) · ⬢ MCP servers wire to their backends · graph memory lights up on reads/writes"
         selected={selected}
         onClose={() => setSelected(null)}
       />

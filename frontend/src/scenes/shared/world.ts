@@ -102,6 +102,8 @@ export type Run = {
   slot: number; // 0..N stable lane/position for scenes
   status: "started" | "completed" | "failed";
   steps: Record<StepName, "queued" | "running" | "done" | "failed">;
+  /** true once a step event arrives (e.g. Hatchet); plain agent runs have no steps */
+  hasSteps: boolean;
   startedAt: number;
   endedAt: number;
   handoffAt: number;
@@ -147,6 +149,8 @@ export const world = {
   lastFinal: "" as string,
   simulated: false,
   mode: "connecting" as "connecting" | "sim" | "live",
+  /** label for the graph/memory structure: names the DB only when the server provides a real graph */
+  graphLabel: "knowledge graph",
   focus: null as string | null, // instance id most recently active
   focusAt: 0,
   /** exited instances kept for the agent panel after their shape fades (newest last, capped) */
@@ -194,6 +198,7 @@ export function apply(ev: WorldEvent) {
           slot,
           status: "started",
           steps: { plan: "queued", research: "queued", write: "queued" },
+          hasSteps: false,
           startedAt: now,
           endedAt: 0,
           handoffAt: 0,
@@ -214,6 +219,7 @@ export function apply(ev: WorldEvent) {
     case "step": {
       const r = world.runs.get(ev.run_id);
       if (!r) break;
+      r.hasSteps = true;
       const prev = STEPS.find((s) => r.steps[s] === "running");
       r.steps[ev.step] = ev.status;
       if (ev.status === "running" && prev && prev !== ev.step) {
@@ -439,6 +445,13 @@ export function selectInstance(id: string | null) {
 
 export function setSimulated(v: boolean) {
   world.simulated = v;
+  notify();
+}
+
+/** Name the graph structure (e.g. when the server serves a real FalkorDB sample). */
+export function setGraphLabel(label: string) {
+  if (world.graphLabel === label) return;
+  world.graphLabel = label;
   notify();
 }
 

@@ -127,7 +127,7 @@ function RunLane({ id }: { id: string }) {
     if (key !== labelKey.current && l1.current && l2.current) {
       labelKey.current = key;
       l1.current.textContent = r.topic;
-      l2.current.textContent = r.status === "completed" ? "hatchet · run complete ✓" : `hatchet · ${activeStep} ${st}`;
+      l2.current.textContent = r.status === "completed" ? "run complete ✓" : r.hasSteps ? `hatchet · ${activeStep} ${st}` : "running…";
     }
   });
 

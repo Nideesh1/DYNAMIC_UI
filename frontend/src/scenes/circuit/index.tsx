@@ -100,7 +100,7 @@ export default function Scene() {
       >
         <SceneContents galaxy={galaxy} selected={selected} onSelect={setSelected} />
       </Canvas>
-      <Hud title="circuit" subtitle="Hatchet buses · agent chips · FalkorDB memory bank · MCP I/O ports" selected={selected} onClose={() => setSelected(null)} />
+      <Hud title="circuit" subtitle="Hatchet buses · agent chips · graph memory bank · MCP I/O ports" selected={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

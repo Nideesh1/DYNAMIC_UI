@@ -1,4 +1,4 @@
-/** /subway — neon transit map in 3D: Hatchet runs are lines, agents are trains, FalkorDB is Graph Central. */
+/** /subway — neon transit map in 3D: Hatchet runs are lines, agents are trains, the knowledge graph is Graph Central. */
 import { Grid, OrbitControls, Stars } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
@@ -96,7 +96,7 @@ export default function Scene() {
       <Canvas camera={{ position: [0, 29, 35], fov: 46 }} dpr={[1, 2]} gl={{ antialias: false, powerPreference: "high-performance", preserveDrawingBuffer: true }} onPointerMissed={() => setSelected(null)}>
         <World galaxy={galaxy} selected={selected} onSelect={setSelected} />
       </Canvas>
-      <Hud title="subway" subtitle="neon transit map · each hatchet run is a line, each agent a train, FalkorDB is Graph Central, MCP servers are airports" selected={selected} onClose={() => setSelected(null)} />
+      <Hud title="subway" subtitle="neon transit map · each hatchet run is a line, each agent a train, the knowledge graph is Graph Central, MCP servers are airports" selected={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

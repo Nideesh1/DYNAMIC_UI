@@ -47,7 +47,7 @@ export default function Scene() {
       </Canvas>
       <Hud
         title="orbit · planetary system"
-        subtitle="FalkorDB galaxy core · each Hatchet run is an orbit · agents are born, work and implode · MCP stations on the rim"
+        subtitle="knowledge-graph galaxy core · each Hatchet run is an orbit · agents are born, work and implode · MCP stations on the rim"
         selected={selected}
         onClose={() => setSelected(null)}
       />

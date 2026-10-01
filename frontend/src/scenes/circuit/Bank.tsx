@@ -2,6 +2,7 @@
  * FalkorDB as a MEMORY BANK: a representative sample of graph nodes as instanced memory cells (colored by kind),
  * graph edges as arcing traces between cells. Reads light a cell (+ its edges); writes flash white and ripple across the bank.
  */
+import { GraphLabel } from "../shared/GraphLabel";
 import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
@@ -242,7 +243,7 @@ export function Bank({ galaxy }: { galaxy: Galaxy }) {
       ))}
       <Html position={[cx, 0.4, BANK_Z0 + d + 0.7]} center style={{ pointerEvents: "none" }}>
         <div className="scene-label" style={{ ["--c" as string]: "#22d3ee", fontSize: 14, letterSpacing: "0.06em" }}>
-          FalkorDB · knowledge graph memory bank
+          <GraphLabel suffix=" · memory bank" />
         </div>
       </Html>
     </group>

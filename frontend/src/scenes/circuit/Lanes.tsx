@@ -112,7 +112,7 @@ function Lane({ run }: { run: Run }) {
       ))}
       <Html position={[BUS_X0 + 0.2, 0.3, 0]} style={{ pointerEvents: "none", transform: "translate(-50%, -115%)" }}>
         <div className="scene-label" style={{ ["--c" as string]: run.color, textAlign: "center", lineHeight: 1.35, borderRadius: 10 }}>
-          hatchet · {run.topic}
+          {run.hasSteps ? "hatchet · " : ""}{run.topic}
           <br />
           <span ref={label} style={{ fontWeight: 500, opacity: 0.8, fontSize: 11 }} />
         </div>

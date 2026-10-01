@@ -43,6 +43,7 @@ function RunLabel({ run, pos }: { run: Run; pos: THREE.Vector3 }) {
     <Html center position={pos} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
       <div className="scene-label" style={{ ["--c" as string]: run.color, opacity: done ? 0.5 : 1, display: "grid", gap: 2, textAlign: "center", padding: "4px 10px" }}>
         <span>{run.topic}</span>
+        {run.hasSteps ? (
         <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.03em", color: "#94a3b8" }}>
           hatchet ·{" "}
           {STEPS.map((s, i) => (
@@ -53,6 +54,9 @@ function RunLabel({ run, pos }: { run: Run; pos: THREE.Vector3 }) {
           ))}
           {done ? " ✓" : ""}
         </span>
+        ) : (
+          <span style={{ fontSize: 10, fontWeight: 500, color: "#94a3b8" }}>{done ? "run complete ✓" : "running…"}</span>
+        )}
       </div>
     </Html>
   );

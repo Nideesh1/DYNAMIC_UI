@@ -85,7 +85,7 @@ function RunLabel({ run }: { run: Run }) {
     <group>
       <Html center position={[RUN_CENTERS[s][0], 0.6, RUN_CENTERS[s][1]]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
         <div className="flow-run" style={{ ["--c" as string]: run.color }}>
-          <div className="scene-label">hatchet · {run.topic}</div>
+          <div className="scene-label">{run.hasSteps ? "hatchet · " : ""}{run.topic}</div>
           <div className="flow-steps">
             {STEPS.map((st, i) => (
               <span key={st} ref={(el) => void (chips.current[i] = el)} data-s={run.steps[st]}>
@@ -246,7 +246,7 @@ export default function Scene() {
           <Noise opacity={0.03} />
         </EffectComposer>
       </Canvas>
-      <Hud title="flow · murmuration" subtitle="agents are eddies condensing out of the current · hatchet runs are vortices · falkordb is the nebula" selected={selected} onClose={() => setSelected(null)} />
+      <Hud title="flow · murmuration" subtitle="agents are eddies condensing out of the current · hatchet runs are vortices · the knowledge graph is the nebula" selected={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

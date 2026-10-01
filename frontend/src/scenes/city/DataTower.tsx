@@ -3,6 +3,7 @@
  * cylinder as glowing window-lights, with the graph's edges traced across the facade like circuitry.
  * Flares make nodes blaze (reads = agent colour, writes = white + a beam shooting into the sky) and briefly name them.
  */
+import { GraphLabel } from "../shared/GraphLabel";
 import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
@@ -331,7 +332,7 @@ export function DataTower({ galaxy }: { galaxy: Galaxy }) {
       ))}
       <Html center position={[0, H + 8, 0]} style={{ pointerEvents: "none" }} zIndexRange={[7, 0]}>
         <div className="scene-label city-tower-label" style={{ ["--c" as string]: "#8b7dff" }}>
-          FalkorDB
+          <GraphLabel />
         </div>
       </Html>
     </group>

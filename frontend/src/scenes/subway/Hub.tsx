@@ -1,4 +1,5 @@
 /** Graph Central — the FalkorDB interchange in the middle of the map, plus flares / transfer beams to trains. */
+import { GraphLabel } from "../shared/GraphLabel";
 import { Html, Sparkles } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
@@ -138,7 +139,7 @@ export function GraphCentral({ galaxy }: { galaxy: Galaxy }) {
       <Sparkles count={reduced ? 20 : 60} scale={[7, 1.4, 7]} size={1.8} speed={0.25} color="#a5b4fc" opacity={0.55} />
       <Html center position={[0, 2.1, 0]} distanceFactor={34} style={{ pointerEvents: "none" }} zIndexRange={[5, 0]}>
         <div className="scene-label" style={{ ["--c" as string]: "#a5b4fc" }}>
-          FalkorDB · Graph Central
+          <GraphLabel suffix=" · Graph Central" />
         </div>
       </Html>
     </group>

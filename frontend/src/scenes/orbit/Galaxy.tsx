@@ -1,4 +1,5 @@
 /** FalkorDB as a spinning spiral-galaxy core: instanced nodes colored by kind, faint graph links, flares + write rings. */
+import { GraphLabel } from "../shared/GraphLabel";
 import { Html, Sparkles } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
@@ -205,7 +206,7 @@ export function GalaxyCore({ galaxy: full }: { galaxy: Galaxy }) {
       </instancedMesh>
       <Html center position={[0, -2.6, 0]} distanceFactor={26} style={{ pointerEvents: "none" }}>
         <div className="scene-label" style={{ ["--c" as string]: "#a5b4fc", fontSize: 15 }}>
-          FalkorDB · knowledge graph
+          <GraphLabel />
         </div>
       </Html>
     </>

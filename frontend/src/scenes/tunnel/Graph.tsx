@@ -1,4 +1,5 @@
 /** FalkorDB = a constellation of graph nodes lining the outer tunnel shell. Flares ignite nodes; a laser ties the ship to the node (writes = white starburst). */
+import { GraphLabel } from "../shared/GraphLabel";
 import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
@@ -265,7 +266,7 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
       <group position={[0, SHELL_R + 2.2, -30]}>
         <Html center style={{ pointerEvents: "none" }} zIndexRange={[4, 0]}>
           <div className="scene-label" style={{ ["--c" as string]: "#a5b4fc", fontSize: 13, letterSpacing: "0.04em" }}>
-            FalkorDB knowledge graph
+            <GraphLabel />
           </div>
         </Html>
       </group>

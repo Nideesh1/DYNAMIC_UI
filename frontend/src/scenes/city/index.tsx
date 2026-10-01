@@ -80,7 +80,7 @@ export default function Scene() {
   return (
     <div className="scene-root city-root">
       <City galaxy={galaxy} selectedRef={selectedRef} onSelect={select} />
-      <Hud title="city" subtitle="night city · agents rise as skyscrapers · districts = Hatchet runs · spire = FalkorDB · blimps = MCP" selected={selected} onClose={() => select(null)} />
+      <Hud title="city" subtitle="night city · agents rise as skyscrapers · districts = Hatchet runs · spire = knowledge graph · blimps = MCP" selected={selected} onClose={() => select(null)} />
     </div>
   );
 }

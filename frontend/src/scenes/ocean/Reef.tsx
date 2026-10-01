@@ -1,4 +1,5 @@
 /** FalkorDB as a bioluminescent coral reef: instanced polyps per graph node, ripples + bubbles on flares, light beams from jellies. */
+import { GraphLabel } from "../shared/GraphLabel";
 import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
@@ -340,7 +341,7 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
       </lineSegments>
       <Html center position={[0, FLOOR_Y + 0.2, 4.4]} distanceFactor={20} style={{ pointerEvents: "none" }}>
         <div className="scene-label" style={{ ["--c" as string]: "#2dd4bf" }}>
-          FalkorDB · knowledge graph
+          <GraphLabel />
         </div>
       </Html>
       {TAG_SLOTS.map((k) => (

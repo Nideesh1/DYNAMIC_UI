@@ -3,6 +3,7 @@
  * edges are faint great-circle arcs hugging it. Flares: touched nodes brighten + name label + soft beam to the
  * agent (reads in agent color, writes white with a ring ripple spreading across the sphere surface).
  */
+import { GraphLabel } from "../shared/GraphLabel";
 import { Html } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
@@ -331,7 +332,7 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
       ))}
       <Html center position={[0, -ORB_R - 0.9, 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
         <div className="scene-label" style={{ ["--c" as string]: "#a78bfa", opacity: 0.7, fontSize: 11 }}>
-          FalkorDB · memory
+          <GraphLabel />
         </div>
       </Html>
     </>

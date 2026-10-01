@@ -171,7 +171,7 @@ function RunLabel({ runId, color }: { runId: string; color: string }) {
     <Html center position={[R.END + 1.9, 0.2, 0]} distanceFactor={34} style={{ pointerEvents: "none" }} zIndexRange={[4, 0]}>
       <div className="scene-label subway-run" style={{ ["--c" as string]: color, opacity: run.status === "started" ? 1 : 0.55 }}>
         <span>
-          hatchet · {run.id.replace("run-", "")} · {run.topic}
+          {run.hasSteps ? "hatchet · " : ""}{run.topic}
         </span>
         <span className="subway-steps">
           {STEPS.map((s) => (
