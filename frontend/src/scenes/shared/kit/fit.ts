@@ -128,7 +128,10 @@ function fitCommit(now: number, durMs: number) {
 // ------------------------------------------------------------------ HUD insets
 
 type Rect = { left: number; top: number; right: number; bottom: number };
-const PANELS = [".hud-agents", ".hud-top", ".hud-ticker", ".hud-counts", ".hud-dock"];
+/** the HUD's footprint: top bar, the dock beside it (LOD chip + theme buttons), the right sidebar (or its icon rail) */
+const PANELS = [".hud-top", ".hud-dock", ".hud-side"];
+/** Hud dispatches this on `.scene-root` when its footprint changes (sidebar collapse, top bar wrap) */
+export const HUD_LAYOUT_EVENT = "agentglow:hud-layout";
 
 /**
  * Measure the HUD panels overlapping the canvas: each panel is excluded by cutting the free rect from whichever
@@ -239,7 +242,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
   const gl = useThree((s) => s.gl);
   const size = useThree((s) => s.size);
   const st = useRef({
-    base: 0, user: 1, userActive: false, userUntil: -1e9, want: 0, lastMeasure: -1e9, dir: new THREE.Vector3(), aspect: 1.6, refit: true,
+    base: 0, user: 1, userActive: false, userUntil: -1e9, want: 0, lastMeasure: -1e9, hudMoved: false, dir: new THREE.Vector3(), aspect: 1.6, refit: true,
     // committed move: fitted distance (before the user factor) + projection shift tween from -> to
     cur: 0, from: 0, t0: 0, dur: 0, sx: 0, sy: 0, fx: 0, fy: 0, tx: 0, ty: 0,
     // pending zoom-out (since, largest fit seen in the batch window) / zoom-in (since)
@@ -289,6 +292,18 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
 
   useEffect(() => () => camera.clearViewOffset(), [camera]);
 
+  // the HUD changed shape (sidebar collapsed / expanded, top bar wrapped): re-measure now
+  useEffect(() => {
+    const root = gl.domElement.closest(".scene-root");
+    if (!root) return;
+    const on = () => {
+      st.current.lastMeasure = -1e9;
+      st.current.hudMoved = true;
+    };
+    root.addEventListener(HUD_LAYOUT_EVENT, on);
+    return () => root.removeEventListener(HUD_LAYOUT_EVENT, on);
+  }, [gl]);
+
   useEffect(() => {
     if (!controls) return;
     const s = st.current;
@@ -322,7 +337,14 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     const H = Math.max(1, size.height);
     if (now - s.lastMeasure > 700) {
       s.lastMeasure = now;
+      const was = fit.insets;
       fit.insets = measureInsets(gl.domElement, s.aspect);
+      // the free area moved (sidebar collapsed / expanded): re-fit like a resize (quick, smooth), not per text tweak
+      if (s.hudMoved) {
+        const d = Math.max(Math.abs(was.top - fit.insets.top), Math.abs(was.right - fit.insets.right), Math.abs(was.bottom - fit.insets.bottom), Math.abs(was.left - fit.insets.left));
+        if (d > 12) s.refit = true;
+        s.hudMoved = false;
+      }
     }
     const ins = fit.insets;
     const freeW = Math.max(W * 0.3, W - ins.left - ins.right);

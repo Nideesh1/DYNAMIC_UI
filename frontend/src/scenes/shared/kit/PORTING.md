@@ -98,7 +98,7 @@ as `preset`; do not add per-theme placement code outside it.
 - **Run frame handedness.** `side` is flipped to read left->right; if you build a basis from side/up/axis,
   keep it right-handed (see `subway/Lines.tsx`).
 - **Agents always centred.** Do not offset the stage group or the orbit target to "make room" for HUD panels;
-  FitCamera already measures `.hud-agents/.hud-top/.hud-ticker/.hud-counts/.hud-dock` and shifts the projection.
+  FitCamera already measures `.hud-top/.hud-dock/.hud-side` (top bar, dock, sidebar or rail) and shifts the projection.
   Theme buttons go in `hudInset` (the dock beside the LOD chip); size HUD DOM with container queries / `cq*` units
   (`.scene-root` is the `agscene` container), never viewport media queries.
 - **Fog / LOD by camera distance:** read `fit.cam.dist` (camera distance to the orbit target).
