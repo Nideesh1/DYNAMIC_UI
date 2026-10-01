@@ -38,7 +38,7 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
   - `GET /live/graph` - optional graph sample `{nodes:[{id,name,kind}],links:[{source,target}]}`; FalkorDB provider when `AGENTGLOW_FALKOR_URL`/`--falkor` set, else 404 → UI uses its built-in sample.
   - `GET /live/health`; static UI at `/`, `/<theme>`, assets.
 - Span JSON (normalized): `{trace_id, span_id, parent_span_id, name, start_time_ms, end_time_ms|null, status: ok|error|unset, attributes:{}}`.
-- `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None)`:
+- `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None, api_key=None)`:
   uses the existing global TracerProvider if it's an SDK provider (keeps Langfuse etc.), else creates one;
   adds `LiveSpanProcessor(url)` (on_start + on_end → background-thread batched POST to `/v1/live`, ~50 ms,
   never blocks, drops on failure); if `instrument`, enables OpenInference LangChain instrumentation (covers
@@ -69,8 +69,8 @@ known (frontends may ignore it). Each SSE subscriber carries a filter `(scope?, 
 - `run=r`: only run `r` (plus `mcp_register`); both: both must match.
 Replay on connect uses the same filter. Events of a run emitted before its first scoped span are not sent to scoped
 viewers; when the scope becomes known they are delivered to the matching scoped viewers only (from the bounded event
-buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion stays unauthenticated (put it on a
-private network).
+buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion is open unless an ingest key is set
+(below).
 
 **Choosing the filter (viewer side).**
 - Dev (no secret): headers `X-AgentGlow-Scope` and `X-AgentGlow-Run`; `/live/stream` also accepts `?run=<id>`
@@ -86,6 +86,20 @@ private network).
 - `POST /live/run` `{topic, scope?}` forwards `{"topic", "scope"}` to the webhook (`scope` omitted when unknown).
   Secure: scope from the token (a different body `scope` is 403). Dev: `X-AgentGlow-Scope` header, else body `scope`.
 - Without a secret, `agentglow serve` logs a warning when bound to a non-localhost address.
+
+**Ingest key** (who may post spans; independent of the viewer secret).
+- Server: `AGENTGLOW_INGEST_KEY` env or `agentglow serve --ingest-key K`. Comma-separated keys are all valid (rotation:
+  add the new key, move producers over, drop the old one). Unset = open ingest (dev, unchanged).
+- When set, `POST /v1/live`, `/v1/traces` (OTLP JSON and protobuf), `/v1/claude-code` and `/live/topology` require
+  `x-api-key: <key>`; `Authorization: Bearer <key>` is also accepted for exporters that only send that. Compared in
+  constant time (`hmac.compare_digest`) against every key; never accepted as a query param. Missing or wrong = 401
+  (`/v1/claude-code` answers at once; Claude Code treats non-2xx as a non-blocking error and carries on).
+- Producers: `agentglow.watch(url, api_key=K)` / `LiveSpanProcessor(url, api_key=K)` / `register_mcp(..., api_key=K)`,
+  or env `AGENTGLOW_API_KEY` for all three; sent as `x-api-key` on every POST, never logged. OTel SDKs/Collectors:
+  `OTEL_EXPORTER_OTLP_HEADERS="x-api-key=K"`. Claude Code hooks: `"headers": {"x-api-key": "$AGENTGLOW_API_KEY"}`
+  plus `"allowedEnvVars": ["AGENTGLOW_API_KEY"]` (examples/claude-code).
+- `/live/health` reports `ingest_auth: true|false`. Bound to a non-localhost address without an ingest key,
+  `agentglow serve` logs a warning.
 
 **Token format** (mint it in your backend, any language; `agentglow.make_token(secret, scope=None, run=None,
 ttl_s=3600)` in Python):

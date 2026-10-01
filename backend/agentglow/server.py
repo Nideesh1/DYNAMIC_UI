@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gzip
+import hmac
 import json
 import os
 import time
@@ -121,18 +122,50 @@ def falkor_sample(url: str, limit: int = 220) -> dict:
     return {"nodes": nodes, "links": links}
 
 
+# ---------------------------------------------------------------------- ingest auth
+def parse_ingest_keys(keys: str | list[str] | tuple[str, ...] | None) -> tuple[bytes, ...]:
+    """Comma-separated string (or list) of ingest keys -> non-empty keys as bytes. Several keys = rotation."""
+    if not keys:
+        return ()
+    parts = keys.split(",") if isinstance(keys, str) else [p for k in keys for p in str(k).split(",")]
+    return tuple(p.strip().encode() for p in parts if p.strip())
+
+
+def ingest_key_ok(keys: tuple[bytes, ...], request: Request) -> bool:
+    """True when no keys are configured, or the request carries one of them in `x-api-key` (preferred) or
+    `Authorization: Bearer <key>`. Constant-time compare against every key; never read from the query string."""
+    if not keys:
+        return True
+    sent = request.headers.get("x-api-key") or ""
+    if not sent:
+        auth = request.headers.get("authorization") or ""
+        sent = auth[7:] if auth.lower().startswith("bearer ") else ""
+    sent_b = sent.strip().encode()
+    ok = False
+    for k in keys:  # no early exit: timing does not reveal which key matched
+        ok |= hmac.compare_digest(sent_b, k)
+    return bool(sent_b) and ok
+
+
 # ---------------------------------------------------------------------- app
 def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_webhook: str | None = None,
-               run_transport=None, secret: str | None = None) -> FastAPI:
+               run_transport=None, secret: str | None = None, ingest_key: str | list[str] | None = None) -> FastAPI:
     """`run_webhook` (or AGENTGLOW_RUN_WEBHOOK): URL that POST /live/run forwards `{topic, scope?}` to (your trigger
     endpoint); the UI shows "Run agents" only when it is set. `run_transport` is an optional httpx transport (tests).
     `secret` (or AGENTGLOW_SECRET): viewer endpoints require `Authorization: Bearer <token>` (agentglow.make_token)
     and the token alone decides what the viewer sees. Without it (dev), X-AgentGlow-Scope / X-AgentGlow-Run headers
-    (and `?run=` on /live/stream) pick the filter."""
+    (and `?run=` on /live/stream) pick the filter.
+    `ingest_key` (or AGENTGLOW_INGEST_KEY; comma-separated for rotation): POST /v1/live, /v1/traces, /v1/claude-code
+    and /live/topology require `x-api-key: <key>` (or `Authorization: Bearer <key>`), else 401. Unset (dev): open."""
     hub = hub or Hub()
     falkor_url = falkor_url or os.environ.get("AGENTGLOW_FALKOR_URL")
     run_webhook = run_webhook or os.environ.get("AGENTGLOW_RUN_WEBHOOK") or None
     secret = secret or os.environ.get("AGENTGLOW_SECRET") or None
+    ingest_keys = parse_ingest_keys(ingest_key or os.environ.get("AGENTGLOW_INGEST_KEY"))
+
+    def require_ingest_key(request: Request) -> None:
+        if not ingest_key_ok(ingest_keys, request):
+            raise HTTPException(401, "missing or invalid ingest key (x-api-key)")
 
     def viewer(request: Request, *, required: bool = True) -> Filter | None:
         """Filter for a viewer request. Secure mode: from the Bearer token only (401 missing/invalid/expired; 403
@@ -183,13 +216,17 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
 
     @app.post("/v1/live")
     async def live(request: Request):
+        require_ingest_key(request)
         items = json.loads(await body_of(request) or b"[]")
         return {"ok": True, "n": hub.ingest_live(items if isinstance(items, list) else [items], ingest_scope(request))}
 
     @app.post("/v1/claude-code")
     async def claude_code_hook(request: Request):
         """Claude Code `"type": "http"` hook target (examples/claude-code/). Always 200 with `{}` (= no decision), so a
-        bad payload or an unknown event never affects the Claude Code session."""
+        bad payload or an unknown event never affects the Claude Code session. A missing/wrong ingest key is a quick
+        401 (Claude Code treats non-2xx as a non-blocking error and carries on)."""
+        if not ingest_key_ok(ingest_keys, request):
+            return JSONResponse({"detail": "missing or invalid ingest key (x-api-key)"}, status_code=401)
         try:
             hub.ingest_hook(json.loads(await body_of(request) or b"{}"), now_ms(), ingest_scope(request))
         except Exception:
@@ -200,6 +237,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
 
     @app.post("/v1/traces")
     async def traces(request: Request):
+        require_ingest_key(request)
         body = await body_of(request)
         ctype = request.headers.get("content-type", "")
         try:
@@ -238,7 +276,8 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
         return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.post("/live/topology")
-    async def topology(body: dict):
+    async def topology(body: dict, request: Request):
+        require_ingest_key(request)
         if not body.get("server"):
             raise HTTPException(400, "server is required")
         res = [{"name": str(r["name"]), "kind": str(r.get("kind", "api"))} for r in body.get("resources", []) if r.get("name")]
@@ -257,7 +296,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
     @app.get("/live/health")
     def health(request: Request):
         base = {"ok": True, "version": __version__, "ui": (STATIC / "index.html").exists(), "run": bool(run_webhook),
-                "auth": bool(secret)}
+                "auth": bool(secret), "ingest_auth": bool(ingest_keys)}
         f = viewer(request, required=False)
         if f is None:  # secure mode without a token: liveness only
             return base

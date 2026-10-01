@@ -49,6 +49,21 @@ Traces alone also work (agents appear when spans are exported, subagents named f
 Claude Code only honours telemetry variables from `--settings`, `~/.claude/settings.json`, managed settings or your
 shell, not from a project's `.claude/settings.json`. To keep hooks only, delete the `"env"` block.
 
+## Ingest key (server started with `--ingest-key`)
+
+Every hook in [settings.json](settings.json) already sends `"headers": {"x-api-key": "$AGENTGLOW_API_KEY"}` with
+`"allowedEnvVars": ["AGENTGLOW_API_KEY"]`, so Claude Code fills the key from your shell (it only interpolates variables
+listed in `allowedEnvVars`). Unset, the header is empty and a server without a key ignores it. Never paste the key
+into the file. The OTel traces need the same key as an OTLP header; set both in your shell (the `"env"` block cannot
+read shell variables):
+
+```bash
+export AGENTGLOW_API_KEY=...                                   # same value as the server's AGENTGLOW_INGEST_KEY
+export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=$AGENTGLOW_API_KEY"
+claude --settings examples/claude-code/settings.json
+```
+With a wrong or missing key AgentGlow answers 401; Claude Code treats that as a non-blocking hook error and carries on.
+
 Privacy: AgentGlow drops identity attributes (email, account/org ids) and prompts and redacts secret-looking values
 from every payload before it reaches the stream (docs/SPEC.md, "Privacy").
 

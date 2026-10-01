@@ -57,12 +57,13 @@ Announce MCP servers before they are called: `agentglow.register_mcp("analytics"
 ## Options
 
 ```
-agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/<graph>] [--secret S]
+agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/<graph>] [--secret S] [--ingest-key K]
 ```
 
 | | |
 |---|---|
-| `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None)` | `url` also from `AGENTGLOW_URL` |
+| `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None, api_key=None)` | `url` also from `AGENTGLOW_URL`, `api_key` from `AGENTGLOW_API_KEY` (sent as `x-api-key`) |
+| `--ingest-key K` / `AGENTGLOW_INGEST_KEY` | ingest endpoints (`/v1/live`, `/v1/traces`, `/v1/claude-code`, `/live/topology`) require `x-api-key: K` (or `Authorization: Bearer K`), else 401; comma-separate keys to rotate; unset = open (dev). OTel exporters: `OTEL_EXPORTER_OTLP_HEADERS="x-api-key=K"` |
 | `POST /v1/live` | span start/end batches from `watch()` |
 | `POST /v1/traces` | standard OTLP/HTTP (protobuf or JSON) - point any OTel SDK or Collector here (ended spans only) |
 | `GET /live/stream` | SSE world events; new viewers get MCP topology + runs still in progress |

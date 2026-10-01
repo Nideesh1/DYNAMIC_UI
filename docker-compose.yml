@@ -19,6 +19,7 @@ services:
     environment:
       AGENTGLOW_FALKOR_URL: redis://falkordb:6379
       AGENTGLOW_RUN_WEBHOOK: http://trigger:8300/run   # "▶ Run agents" in the UI → the example's trigger service
+      AGENTGLOW_INGEST_KEY: ${AGENTGLOW_INGEST_KEY:-}  # empty (default) = open ingest; see .env.example
     depends_on: [falkordb]
     restart: unless-stopped
 
@@ -41,6 +42,7 @@ services:
     command: ["uv", "run", "python", "-m", "app.mcp_server"]
     environment:
       AGENTGLOW_URL: http://agentglow:8100
+      AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
     depends_on: [agentglow]
     restart: unless-stopped
 
@@ -50,6 +52,7 @@ services:
     command: ["uv", "run", "python", "-m", "app.worker"]
     environment:
       AGENTGLOW_URL: http://agentglow:8100
+      AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
       MCP_URL: http://mcp:8200/mcp
       FALKOR_HOST: falkordb
       AGENT_MODEL: ${AGENT_MODEL:-google_genai:gemini-3.8-flash}   # provider:model (google_genai / openai / anthropic)

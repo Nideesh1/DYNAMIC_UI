@@ -7,6 +7,7 @@ thread. If the server is down, batches are dropped silently - tracing must never
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
@@ -67,9 +68,18 @@ def _attrs(raw) -> dict:
     return out
 
 
+def ingest_headers(api_key: str | None = None) -> dict:
+    """JSON POST headers for the ingest endpoints, with `x-api-key` when a key is given or AGENTGLOW_API_KEY is set."""
+    key = api_key or os.environ.get("AGENTGLOW_API_KEY")
+    return {"Content-Type": "application/json", **({"x-api-key": key} if key else {})}
+
+
 class LiveSpanProcessor(SpanProcessor):
-    def __init__(self, url: str = "http://localhost:8100", *, interval: float = 0.05, timeout: float = 2.0) -> None:
+    def __init__(self, url: str = "http://localhost:8100", *, interval: float = 0.05, timeout: float = 2.0,
+                 api_key: str | None = None) -> None:
+        """`api_key` (or env AGENTGLOW_API_KEY): sent as `x-api-key` on every POST (server `--ingest-key`)."""
         self.url = url.rstrip("/")
+        self.api_key = api_key or os.environ.get("AGENTGLOW_API_KEY") or None
         self.endpoint = self.url + "/v1/live"
         self.interval = interval
         self.timeout = timeout
@@ -118,7 +128,7 @@ class LiveSpanProcessor(SpanProcessor):
             return  # nothing to send, or server recently unreachable: drop
         try:
             data = json.dumps(batch, default=str).encode()
-            req = urllib.request.Request(self.endpoint, data=data, headers={"Content-Type": "application/json"}, method="POST")
+            req = urllib.request.Request(self.endpoint, data=data, headers=ingest_headers(self.api_key), method="POST")
             urllib.request.urlopen(req, timeout=self.timeout).close()
         except Exception:
             self._down_until = time.monotonic() + 1.0  # server down: drop and back off 1s

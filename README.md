@@ -134,6 +134,7 @@ Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT
 
 Run **one** `agentglow serve` per environment (Docker image / k8s Deployment with `replicas: 1`) and point every app
 pod at it: `agentglow.watch("http://agentglow:8100")`. If it's down, your app is unaffected - spans are just dropped.
+Lock down ingestion with `AGENTGLOW_INGEST_KEY` on the server and `AGENTGLOW_API_KEY` (same value) on producers.
 
 ## Develop
 
