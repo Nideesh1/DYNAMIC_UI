@@ -75,6 +75,8 @@ export const TUBE_GEO = makeTubeGeometry();
 export const SPHERE_GEO = new THREE.SphereGeometry(1, 32, 24);
 export const SHELL_GEO = new THREE.SphereGeometry(1, 40, 28);
 export const ICO_GEO = new THREE.IcosahedronGeometry(1, 1);
+/** Closed cone pointing +Y, base at origin — used as the direction arrowhead on lineage edges. */
+export const ARROW_GEO = new THREE.ConeGeometry(1, 1, 14).translate(0, 0.5, 0);
 export const CONE_GEO = new THREE.ConeGeometry(1, 1, 6, 1, true).translate(0, 0.5, 0);
 
 const tubeVert = /* glsl */ `
@@ -95,7 +97,7 @@ void main(){
   gl_Position = projectionMatrix * mv;
 }`;
 const tubeFrag = /* glsl */ `
-uniform vec3 uColor; uniform float uOpacity; uniform float uGrow; uniform float uTime; uniform float uSpark;
+uniform vec3 uColor; uniform float uOpacity; uniform float uGrow; uniform float uTime; uniform float uSpark; uniform float uFlow;
 uniform float uHead; uniform float uTail; uniform vec3 uHeadColor;
 varying float vT; varying float vRim;
 void main(){
@@ -108,7 +110,9 @@ void main(){
     float d = vT - uHead;
     head = d > 0.0 ? exp(-d * d / 0.0006) : exp(d / max(uTail, 0.001));
   }
-  vec3 col = uColor * uOpacity * (core + spark * 3.5 + tip * 3.0) + uHeadColor * head * (0.6 + vRim);
+  // directional flow: soft dashes travelling from start (parent, vT=0) to end (child, vT=1)
+  float flow = uFlow * pow(max(0.0, sin((vT * 7.0 - uTime * 0.9) * 3.14159)), 6.0);
+  vec3 col = uColor * uOpacity * (core + spark * 3.5 + tip * 3.0 + flow * 2.2) + uHeadColor * head * (0.6 + vRim);
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -123,6 +127,7 @@ export type TubeMat = THREE.ShaderMaterial & {
     uOpacity: { value: number };
     uGrow: { value: number };
     uTime: { value: number };
+    uFlow: { value: number };
     uSpark: { value: number };
     uHead: { value: number };
     uTail: { value: number };
@@ -141,6 +146,7 @@ export function tubeMaterial(color: THREE.ColorRepresentation = "#fff", radius =
       uOpacity: { value: 1 },
       uGrow: { value: 1 },
       uTime: { value: 0 },
+      uFlow: { value: 0 },
       uSpark: { value: 0 },
       uHead: { value: -1 },
       uTail: { value: 0.12 },

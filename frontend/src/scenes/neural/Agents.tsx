@@ -18,6 +18,7 @@ import {
   TUBE_GEO,
   TYPE_C,
   additiveBasic,
+  ARROW_GEO,
   backOut,
   bezier,
   bowControl,
@@ -58,6 +59,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   const body = useRef<THREE.Group>(null);
   const spikesG = useRef<THREE.Group>(null);
   const ring = useRef<THREE.Mesh>(null);
+  const arrow = useRef<THREE.Mesh>(null);
   const halo = useRef<THREE.Sprite>(null);
   const label = useRef<HTMLDivElement>(null);
   const seed = useMemo(() => [...inst.id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 9973, 7) / 9973, [inst.id]);
@@ -71,6 +73,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       ring: additiveBasic(AMBER),
       halo: glowSpriteMaterial(color),
       syn: tubeMaterial(color, isScout(inst.type) ? 0.08 : 0.11, 0.8),
+      arrow: additiveBasic(color),
     }),
     [color, inst.type],
   );
@@ -170,6 +173,23 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     u.uTail.value = 0.1;
     u.uHeadColor.value.copy(color).multiplyScalar(1.5);
     u.uOpacity.value = (thinking ? 1.1 : 0.75) * Math.max(0.0, Math.min(s.parentK, pres > 0 ? 1 : 0)) + (grow < 1 ? 0.4 : 0);
+    u.uTime.value = reduced ? 0 : t;
+    u.uFlow.value = grow >= 1 ? s.parentK : 0;
+    // arrowhead near the child end, pointing parent → child
+    if (arrow.current) {
+      const vis = inst.parent && grow >= 1 && s.parentK > 0.05 && u.uGrow.value > 0.9;
+      arrow.current.visible = !!vis;
+      if (vis) {
+        bezier(s.p0, s.p1, s.live, 0.8, ARROW_A);
+        bezier(s.p0, s.p1, s.live, 0.86, ARROW_B);
+        arrow.current.position.copy(ARROW_A);
+        ARROW_DIR.subVectors(ARROW_B, ARROW_A).normalize();
+        arrow.current.quaternion.setFromUnitVectors(UP, ARROW_DIR);
+        const k = isScout(inst.type) ? 0.75 : 1;
+        arrow.current.scale.set(0.16 * k, 0.42 * k, 0.16 * k);
+        m.arrow.color.copy(color).multiplyScalar(1.6 * s.parentK);
+      }
+    }
   });
 
   const select = (ev: { stopPropagation: () => void }) => {
@@ -180,6 +200,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   return (
     <>
       <mesh geometry={TUBE_GEO} material={m.syn} frustumCulled={false} />
+      <mesh ref={arrow} geometry={ARROW_GEO} material={m.arrow} visible={false} />
       <group ref={root}>
         <group ref={body} scale={0.0001}>
           <mesh geometry={SPHERE_GEO} material={m.core} onClick={select} onPointerOver={() => (document.body.style.cursor = "pointer")} onPointerOut={() => (document.body.style.cursor = "")} />
@@ -202,6 +223,11 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     </>
   );
 }
+
+const ARROW_A = new THREE.Vector3();
+const ARROW_B = new THREE.Vector3();
+const ARROW_DIR = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
 
 export function Somas({ onSelect }: { onSelect: (id: string) => void }) {
   const [list, setList] = useState<Instance[]>([]);
