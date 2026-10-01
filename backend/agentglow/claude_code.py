@@ -289,9 +289,8 @@ class ClaudeCodeAdapter:
                     self._kill_sub(s, aid, now, out, "idle", revivable=True)
             self._refresh_title(s, now, out)
             t = s.turn
-            # If OTel traces are on and we're waiting for token spans, close the turn when timeout expires
+            # traces on: stop waiting for this turn's token spans (the main agent itself lives on with its session)
             if t and t.wait_until is not None and now >= t.wait_until:
-                self._stop_turn(s, t, t.final, now, out, status="ok")
                 t.wait_until = None
             # Safety net: don't let orphans pile up (a lost hook can't leak forever)
             while len(s.orphans) > MAX_ORPHANS:
@@ -762,7 +761,7 @@ class ClaudeCodeAdapter:
 
     def _stop_turn(self, s: _Session, turn: _Turn, text: str, now: int, out: list, status: str = "ok") -> None:
         """Really close a turn's main agent for good: end its thinking span, close tools and stand-in tasks.
-        Used only by _close_session and the trace-wait-timeout path."""
+        Used only by _close_session."""
         turn.stopped = True
         turn.wait_until = None  # clear any trace-wait deadline
         # Close stand-in task spans
@@ -887,7 +886,7 @@ class ClaudeCodeAdapter:
                 s.traced_agents.popitem(last=False)
             self._finish_sub(s, tid, now, out)
         elif kind == "interaction" and turn is not None and turn.wait_until is not None:
-            self._stop_turn(s, turn, turn.final, now, out)
+            turn.wait_until = None  # this turn's token spans are in; the main agent stays until SessionEnd / idle
         if s.ending is not None and not self._pending_traces(s):
             self._close_session(s, now, out)
             self.sessions.pop(s.id, None)
