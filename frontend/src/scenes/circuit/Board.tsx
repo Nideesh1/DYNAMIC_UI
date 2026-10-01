@@ -56,7 +56,7 @@ export const DECOR: DecorTrace[] = (() => {
   const out: DecorTrace[] = [];
   for (let k = 0; k < 170; k++) {
     let x = Math.round((-46 + r() * 96) * 2) / 2;
-    let z = Math.round((-50 + r() * 70) * 2) / 2;
+    let z = Math.round((-40 + r() * 76) * 2) / 2;
     const pts = [x, z];
     let d = Math.floor(r() * 4);
     const segs = 2 + Math.floor(r() * 3);
@@ -123,10 +123,10 @@ function DecorTraces() {
 }
 
 export function Board() {
-  const uniforms = useMemo(() => ({ uCenter: { value: new THREE.Vector2(2, -8) } }), []);
+  const uniforms = useMemo(() => ({ uCenter: { value: new THREE.Vector2(0, -2) } }), []);
   return (
     <group>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[2, 0, -10]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, -4]}>
         <planeGeometry args={[220, 220]} />
         <shaderMaterial vertexShader={gridVert} fragmentShader={gridFrag} uniforms={uniforms} toneMapped={false} />
       </mesh>

@@ -1,173 +1,82 @@
 /**
- * Factory floor layout (XZ ground plane, y up). Camera looks down from the front-right (iso-ish).
- *   - production lines (one per run) run along +x, stacked in z (lane 0 centre, then +1, -1, +2 …)
- *   - loading docks (MCP servers) line the left wall (x = DOCK_X), their trucks/silos park behind them
- *   - the warehouse rack (knowledge graph) is the back wall (z = RACK_Z)
- * Every position is deterministic per id (hash-seeded) and cached for the agent's lifetime.
+ * Factory skin helpers on top of the scene kit (`lanes` preset, XZ ground plane, y up). Runs are PRODUCTION LINES
+ * on the floor (the kit run frame: u along the line, v across it toward the camera), agents are machines at their
+ * kit home, MCP servers are loading docks on the outskirts (kit periphery) with their backends parked behind them,
+ * and the knowledge graph is a warehouse rack on a side wall (kit side graph, only with a graph).
  */
 import * as THREE from "three";
-import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
-import { hash01, world, type AgentType, type Instance } from "../shared/world";
-import { LOD_LANES, isRunExpanded, laneOfRun, laneRank, lod } from "../shared/lod";
+import { agentLive, fit, kit, kitRoleU, serverPos, type KitRun } from "../shared/kit";
+import { hash01, type StepName } from "../shared/world";
 
-export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+export { reduced } from "../shared/kit";
 
-// ---------------------------------------------------------------- floor plan
-export const LANE_GAP = 7;
-export const LANE_X0 = -15.5;
-export const LANE_X1 = 13.5;
-export const LANE_W = 5.8;
-export const RACK_Z = -21.5;
-export const RACK_X0 = -15;
-export const RACK_COLS = 31;
-export const RACK_LEVELS = 6;
+// ---------------------------------------------------------------- production lines (run-local)
+/** padding of a line around its machines (x fit.spread): along the line / across it */
+export const LANE_PAD_U = 1.6;
+export const LANE_PAD_V = 1.1;
+export type LaneSpan = { u0: number; u1: number; v0: number; v1: number };
+/** Line extent (run-local) from the run's footprint. */
+export function laneSpan(r: KitRun, out: LaneSpan): LaneSpan {
+  const sp = fit.spread;
+  out.u0 = r.cu - r.hu - LANE_PAD_U * sp;
+  out.u1 = r.cu + r.hu + LANE_PAD_U * sp;
+  out.v0 = r.cv - r.hv - LANE_PAD_V * sp;
+  out.v1 = r.cv + r.hv + LANE_PAD_V * sp;
+  return out;
+}
+const ROLE: Record<StepName, "planner" | "researcher" | "writer"> = { plan: "planner", research: "researcher", write: "writer" };
+/** Stage boundaries along a line (run-local u): plan | research at b1, research | write at b2 (scouts stay in research). */
+export function stageBounds(out: { b1: number; b2: number }) {
+  const p = kitRoleU(ROLE.plan);
+  const r = kitRoleU(ROLE.research);
+  const w = kitRoleU(ROLE.write);
+  out.b1 = (p + r) / 2;
+  out.b2 = r + (w - r) * 0.8;
+  return out;
+}
+/** Run-local u of the middle of a stage on a line. */
+export function stageMid(s: StepName, span: LaneSpan, b: { b1: number; b2: number }) {
+  return s === "plan" ? (span.u0 + b.b1) / 2 : s === "research" ? (b.b1 + b.b2) / 2 : (b.b2 + span.u1) / 2;
+}
+
+// ---------------------------------------------------------------- machines
+/** housing top (y) of a machine at scale 1 (local units, the machine is scaled by agent.scale) */
+export const TOP_Y = 1.55;
+/** Drawn machine top height (stage units, incl. the rise/sink) per agent id, written by each Machine every frame. */
+export const topH = new Map<string, number>();
+/** Live machine anchor = top-centre of the housing (undefined when the agent isn't drawn). */
+export function machineTop(id: string, out: THREE.Vector3): THREE.Vector3 | undefined {
+  const p = agentLive(id);
+  if (!p) return undefined;
+  return out.set(p.x, topH.get(id) ?? 0.5, p.z);
+}
+
+// ---------------------------------------------------------------- docks (MCP servers) and their backends
+/** Door of a dock (where tethers and pallets land): the dock faces the floor (toward the core). */
+export function dockDoor(name: string, out: THREE.Vector3): THREE.Vector3 | undefined {
+  const m = kit.mcp.get(name);
+  if (!m) return undefined;
+  return out.set(m.pos.x - m.out.x * 1.9, 1.3, m.pos.z);
+}
+/** Dock floor centre. */
+export function dockFloor(name: string, out: THREE.Vector3): THREE.Vector3 | undefined {
+  const p = serverPos(name);
+  if (!p) return undefined;
+  return out.set(p.x, 0.75, p.z);
+}
+
+// ---------------------------------------------------------------- rack bins (side graph, local frame)
+export const RACK_COLS = 16;
+export const RACK_LEVELS = 12;
 export const RACK_PX = 1.0;
 export const RACK_PY = 0.92;
 export const RACK_Y0 = 0.42;
+export const RACK_X0 = -((RACK_COLS - 1) * RACK_PX) / 2;
+export const RACK_Z = 0;
 export const BINS = RACK_COLS * RACK_LEVELS;
-export const DOCK_X = -23.5;
-
-/** Hatchet stage zones along a lane (x ranges, before the per-run shift). */
-export const STAGE_X: Record<"plan" | "research" | "write", [number, number]> = { plan: [-15.5, -5], research: [-5, 6], write: [6, 13.5] };
-
-// ---------------------------------------------------------------- lanes: lowest free lane per run, stable for its lifetime
-const laneOf = new Map<string, number>();
-export function laneIndex(run: string): number {
-  const have = laneOf.get(run);
-  if (have !== undefined) return have;
-  for (const id of laneOf.keys()) {
-    if (world.runs.has(id)) continue;
-    let used = false;
-    for (const i of world.instances.values()) if (i.run === id) used = true;
-    if (!used) laneOf.delete(id);
-  }
-  let k = 0;
-  for (let taken = true; taken; ) {
-    taken = false;
-    for (const l of laneOf.values()) if (l === k) (taken = true), k++;
-  }
-  laneOf.set(run, k);
-  return k;
-}
-export const laneZ = (lane: number) => alt(lane) * LANE_GAP;
-
-// ---------------------------------------------------------------- LOD rows while grouped
-/**
- * While grouped, the floor shows LOD_LANES fixed rows (row = lane, z = laneZ(lane)). An expanded run takes its
- * lane's row (laneRank 0); further expanded runs of the same lane (a clicked cluster) take the nearest free rows,
- * whose clusters then step aside to the end of their line (see Clusters.tsx). Recomputed when lod.version bumps.
- */
-let rowVer = -1;
-let rowGrouped = false;
-const rowOf = new Map<string, number>();
-const rowTaken = new Uint8Array(64);
-const extra: string[] = [];
-const byRank = (a: string, b: string) => laneRank(a) - laneRank(b) || (a < b ? -1 : 1);
-function refreshRows() {
-  if (rowVer === lod.version && rowGrouped === lod.grouped) return;
-  rowVer = lod.version;
-  rowGrouped = lod.grouped;
-  rowOf.clear();
-  rowTaken.fill(0);
-  if (!lod.grouped) return;
-  extra.length = 0;
-  for (const r of world.runs.values()) {
-    if (!isRunExpanded(r.id)) continue;
-    if (laneRank(r.id) === 0) {
-      const l = laneOfRun(r.id);
-      rowOf.set(r.id, l);
-      rowTaken[l] = 1;
-    } else extra.push(r.id);
-  }
-  extra.sort(byRank);
-  for (const id of extra) {
-    const l = laneOfRun(id);
-    let row = -1;
-    // nearest free row (by floor distance) among the fixed lanes, else beyond them
-    for (let k = 0; k < LOD_LANES; k++) if (!rowTaken[k] && (row < 0 || Math.abs(laneZ(k) - laneZ(l)) < Math.abs(laneZ(row) - laneZ(l)))) row = k;
-    if (row < 0) for (row = LOD_LANES; row < rowTaken.length - 1 && rowTaken[row]; ) row++;
-    rowOf.set(id, row);
-    rowTaken[row] = 1;
-  }
-  extra.length = 0;
-}
-/** Floor z of a display row: lanes are packed a little tighter while grouped so all six rows stay on screen. */
-export const rowZ = (row: number) => (lod.grouped ? alt(row) * GROUPED_GAP + GROUPED_Z : alt(row) * LANE_GAP);
-const GROUPED_GAP = 5.4;
-/** grouped rows sit a little further back so the front row clears the bottom HUD */
-const GROUPED_Z = -2.5;
-/** Row (→ rowZ) a run's line is drawn on: its own free lane normally, its LOD row while grouped. */
-export function displayRow(run: string): number {
-  if (!lod.grouped) return laneIndex(run);
-  refreshRows();
-  return rowOf.get(run) ?? laneOfRun(run);
-}
-/** Is this LOD lane's row occupied by an expanded run's line? (its cluster then sits at the end of the line) */
-export function rowBusy(lane: number): boolean {
-  refreshRows();
-  return lod.grouped && rowTaken[lane] === 1;
-}
-/** Per-run nudge of the whole line along x, so runs never look identical. */
-export const runShift = (run: string) => jit(run, 7) * 2.2;
-
-// ---------------------------------------------------------------- machines
-const ROLE_X: Record<AgentType, number> = { planner: -10, researcher: -3, writer: 8.5, graph_scout: 2, records_scout: 2, data_scout: 2 };
-const homes = new Map<string, THREE.Vector3>();
-/** row each cached home was laid out for (LOD can move a run to another row → fresh Vector3) */
-const homeRow = new Map<string, number>();
-
-/** Ground position of an agent's machine (cached; parents first so children fan out from them). */
-export function homeOf(inst: Instance): THREE.Vector3 {
-  const row = displayRow(inst.run);
-  const key = row * 2 + (lod.grouped ? 1 : 0); // rows are packed tighter while grouped
-  let h = homes.get(inst.id);
-  if (h && homeRow.get(inst.id) === key) return h;
-  if (homes.size > 400) for (const id of homes.keys()) if (!world.instances.has(id)) homes.delete(id), homeRow.delete(id);
-  h = new THREE.Vector3();
-  homeRow.set(inst.id, key);
-  const z0 = rowZ(row);
-  const sx = runShift(inst.run);
-  const k = roleIndex(inst);
-  const parent = inst.parent ? (world.instances.get(inst.parent) ?? world.archive.get(inst.parent)) : undefined;
-  if ((inst.subagent || isSubRole(inst.type)) && parent) {
-    // subagents fan out downstream of their parent: columns of 3 (centre, above, below)
-    const ph = homeOf(parent);
-    const col = Math.floor(k / 3);
-    const row = k % 3;
-    const lean = jit(inst.run, 9) * 0.8; // each run's fan tilts its own way
-    h.set(ph.x + 5.2 + col * 2.8 + jit(inst.id, 1) * 0.5, 0, z0 + alt(row) * 2.3 + lean * (row === 0 ? 1 : 0.3) + jit(inst.id, 2) * 0.3);
-  } else {
-    const bx = isSubRole(inst.type) ? ROLE_X.researcher + 5.2 : ROLE_X[inst.type];
-    h.set(bx + sx + jit(inst.id, 3) * 1.2 + (isSubRole(inst.type) ? Math.floor(k / 3) * 2.8 : 0), 0, z0 + alt(isSubRole(inst.type) ? k % 3 : k) * 2.4 + jit(inst.id, 4) * 0.4);
-  }
-  homes.set(inst.id, h);
-  return h;
-}
-
-/** Live (animated) machine anchor = top-centre of the housing, written by each Machine every frame. */
-export const machineTop = new Map<string, THREE.Vector3>();
-/** Ground centre of each mounted machine. */
-export const machineBase = new Map<string, THREE.Vector3>();
-
-// ---------------------------------------------------------------- docks (MCP servers) and their backends
-export function dockPos(slot: number, out: THREE.Vector3) {
-  return out.set(DOCK_X, 0, alt(slot) * 6.2 - 1);
-}
-/** Door of a dock (where tethers and pallets land). */
-export function dockDoor(slot: number, out: THREE.Vector3) {
-  dockPos(slot, out);
-  out.x += 1.9;
-  out.y = 1.3;
-  return out;
-}
-export function backendPos(slot: number, k: number, n: number, out: THREE.Vector3) {
-  dockPos(slot, out);
-  out.x -= 5.6 + (k % 2) * 0.6;
-  out.z += (k - (n - 1) / 2) * 2.35;
-  return out;
-}
-
-// ---------------------------------------------------------------- rack bins
+/** rack height (local) and the slot's natural radius */
+export const RACK_H = RACK_Y0 + RACK_LEVELS * RACK_PY + 0.1;
+export const RACK_NATURAL = (RACK_COLS * RACK_PX) / 2 + 0.6;
 export function binPos(i: number, out: THREE.Vector3) {
   const col = i % RACK_COLS;
   const lvl = Math.floor(i / RACK_COLS) % RACK_LEVELS;

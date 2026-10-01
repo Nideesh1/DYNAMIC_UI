@@ -1,5 +1,6 @@
 /**
- * Knowledge graph = the warehouse rack on the back wall. Every graph node has a bin (instanced crate,
+ * Graph resource slot: the knowledge graph = a warehouse rack standing at the side wall (only with a graph). Drawn
+ * in its own frame (centre 0, radius RACK_NATURAL); the kit places/scales/fades it. Every graph node has a bin (instanced crate,
  * tinted by entity kind).
  *   read  → bin lights in the reader's colour, a beam carries a pulse bin → machine
  *   write → bin flashes white-hot and pushes out of the shelf, a pulse rides machine → bin
@@ -9,8 +10,9 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
-import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
+import { nodeIndex } from "../shared/useSceneSetup";
 import { KIND_COLOR, TYPE_COLOR, world } from "../shared/world";
+import { stageToGraph, type GraphSlotProps } from "../shared/kit";
 import { ArcLines, BOX, CONE, crateTexture, Pool } from "./fx";
 import { AMBER, archControl, bezier, binPos, BINS, clamp01, machineTop, RACK_COLS, RACK_LEVELS, RACK_PX, RACK_PY, RACK_X0, RACK_Y0, RACK_Z, rgb, WHITE, YELLOW } from "./layout";
 
@@ -19,7 +21,7 @@ const FRAME = new THREE.MeshStandardMaterial({ color: "#c2560f", metalness: 0.6,
 const BEAM = new THREE.MeshStandardMaterial({ color: "#2b2420", metalness: 0.6, roughness: 0.5 });
 
 const MAX_FLARES = 64;
-export function Rack({ galaxy }: { galaxy: Galaxy }) {
+export function Rack({ galaxy }: GraphSlotProps) {
   const bins = useMemo(() => {
     const mat = new THREE.MeshBasicMaterial({ map: crateTexture(), toneMapped: false });
     const mesh = new THREE.InstancedMesh(BOX, mat, BINS);
@@ -68,6 +70,7 @@ export function Rack({ galaxy }: { galaxy: Galaxy }) {
       c: new THREE.Vector3(),
       p: new THREE.Vector3(),
       q: new THREE.Vector3(),
+      w: new THREE.Vector3(),
       col: new THREE.Color(),
     }),
     [],
@@ -101,12 +104,12 @@ export function Rack({ galaxy }: { galaxy: Galaxy }) {
       }
       if (isW) s.push[i] = Math.max(s.push[i], Math.sin(Math.PI * clamp01(age / 0.9)));
       s.dirty[i] = 1;
-      const top = machineTop.get(f.instance);
-      if (top && age < 2.2) {
+      // machine top in the rack's own frame (beams are drawn inside the kit-scaled group)
+      if (age < 2.2 && machineTop(f.instance, s.w)) {
         binPos(i, s.b);
         s.b.z += 0.4;
-        s.a.copy(top);
-        archControl(s.a, s.b, 1.6, s.c);
+        stageToGraph(s.w, s.a);
+        archControl(s.a, s.b, 4, s.c);
         const fade = Math.min(1, age / 0.25) * Math.pow(1 - age / 2.2, 1.4);
         const head = isW ? Math.min(1, age * 0.9) : 1 - Math.min(1, age * 0.9);
         s.col.copy(isW ? YELLOW : tc).lerp(WHITE, isW ? 0.5 : 0);
@@ -220,7 +223,7 @@ export function Rack({ galaxy }: { galaxy: Galaxy }) {
           <Label3D ref={(x) => void (nameRefs.current[k] = x)} text="" plate="box" size={0.22} opacity={0} fadeMs={250} pxRange={[7.5, 11.5]} />
         </group>
       ))}
-      <GraphLabel3D position={[cx, H + 1.0, RACK_Z]} suffix=" · rack" color="#ffab1a" plate="box" letterSpacing={0.04} size={0.3} opacity={0.85} pxRange={[9, 13]} />
+      <GraphLabel3D position={[cx, H + 1.6, RACK_Z]} suffix=" · rack" color="#ffab1a" plate="box" letterSpacing={0.04} size={0.7} opacity={0.85} pxRange={[9, 13]} />
     </group>
   );
 }

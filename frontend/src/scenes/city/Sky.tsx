@@ -4,8 +4,9 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D } from "../shared/Label3D";
-import { TYPE_COLOR, waitSeconds, world, type Comet, type McpCall, type McpServer } from "../shared/world";
-import { clamp01, easeInOut, reduced, roofs } from "./layout";
+import { TYPE_COLOR, waitSeconds, world, type Comet, type McpCall } from "../shared/world";
+import { type McpServerSlotProps } from "../shared/kit";
+import { blimpAlt, blimpOf, BLIMP_SCALE, clamp01, easeInOut, reduced, roofOf } from "./layout";
 import { isExpanded, lod } from "../shared/lod";
 
 const _mid = new THREE.Vector3();
@@ -41,16 +42,14 @@ function useLive<T extends { id: number }>(get: () => T[], keep: (x: T) => boole
 
 function CometTrail({ comet }: { comet: Comet }) {
   const ref = useRef<THREE.Mesh>(null);
-  const from = useMemo(() => (roofs.get(comet.from) ?? new THREE.Vector3()).clone(), [comet.from]);
-  const to = useMemo(() => (roofs.get(comet.to) ?? new THREE.Vector3()).clone(), [comet.to]);
+  const from = useMemo(() => roofOf(comet.from, new THREE.Vector3()) ?? new THREE.Vector3(), [comet.from]);
+  const to = useMemo(() => roofOf(comet.to, new THREE.Vector3()) ?? new THREE.Vector3(), [comet.to]);
   const inst = world.instances.get(comet.from);
   const color = inst ? TYPE_COLOR[inst.type] : "#ffffff";
   useFrame(() => {
     const t = clamp01((performance.now() - comet.start) / comet.dur);
-    const f = roofs.get(comet.from);
-    const g = roofs.get(comet.to);
-    if (f) from.copy(f);
-    if (g) to.copy(g);
+    roofOf(comet.from, from);
+    roofOf(comet.to, to);
     if (ref.current) {
       arc(from, to, easeInOut(t), 2.5 + from.distanceTo(to) * 0.25, ref.current.position);
       ref.current.scale.setScalar(t >= 1 ? 0.001 : 1);
@@ -79,8 +78,6 @@ export function Comets() {
 
 // ------------------------------------------------------------------ MCP servers = advertising blimps over the skyline
 
-export const blimps = new Map<string, THREE.Vector3>();
-const BLIMP_R = 27;
 
 function adTexture(name: string, color: string) {
   const cv = document.createElement("canvas");
@@ -106,7 +103,9 @@ function adTexture(name: string, color: string) {
   return tex;
 }
 
-function Blimp({ server }: { server: McpServer }) {
+/** MCP server slot: an advertising blimp cruising over the outskirts (above its kit spot). */
+export function Blimp({ mcp }: McpServerSlotProps) {
+  const server = mcp.srv;
   const group = useRef<THREE.Group>(null);
   const screenMat = useRef<THREE.MeshBasicMaterial>(null);
   const dish = useRef<THREE.Group>(null);
@@ -115,27 +114,20 @@ function Blimp({ server }: { server: McpServer }) {
   const tex = useMemo(() => adTexture(server.name, server.color), [server.name, server.color]);
   useEffect(() => () => tex.dispose(), [tex]);
   const col = useMemo(() => new THREE.Color(server.color), [server.color]);
-  const pos = useMemo(() => {
-    const v = new THREE.Vector3();
-    blimps.set(server.name, v);
-    return v;
-  }, [server.name]);
-  const base = (server.slot / 5) * Math.PI * 2 + 0.62;
   const born = useMemo(() => performance.now(), []);
   const spin = useRef(0);
 
   useFrame(({ clock }, dt) => {
     const now = performance.now();
     const t = clock.elapsedTime;
-    const a = base;
-    const y = 17 + (server.slot % 2) * 3 + 0;
+    const y = blimpAlt(server.name) + (reduced ? 0 : Math.sin(t * 0.5 + server.slot) * 0.15);
     const g = group.current;
     if (g) {
-      g.position.set(Math.sin(a) * BLIMP_R, y, Math.cos(a) * BLIMP_R);
-      g.rotation.y = a + Math.PI / 2; // nose along the orbit, ad screen faces the city
-      g.scale.setScalar(1.35 * easeInOut(clamp01((now - born) / 1200)));
+      g.position.set(mcp.pos.x, y, mcp.pos.z);
+      // broadside to the camera (ad screens face the city), nose pointing outward, a slow yaw sway
+      g.rotation.y = (mcp.out.x < 0 ? Math.PI : 0) + (reduced ? 0 : Math.sin(t * 0.23 + server.slot) * 0.08);
+      g.scale.setScalar(BLIMP_SCALE * easeInOut(clamp01((now - born) / 1200)));
     }
-    pos.set(Math.sin(a) * BLIMP_R, y - 1.1, Math.cos(a) * BLIMP_R);
     const busy = server.inflight > 0;
     const ping = Math.exp(-((now - server.activeAt) / 1000) * 3);
     spin.current += dt * (busy ? 6 : 0.6) * (reduced ? 0.2 : 1);
@@ -201,24 +193,6 @@ function Blimp({ server }: { server: McpServer }) {
   );
 }
 
-export function Blimps() {
-  const [list, setList] = useState<McpServer[]>([]);
-  const n = useRef(-1);
-  useFrame(() => {
-    if (world.mcpServers.size !== n.current) {
-      n.current = world.mcpServers.size;
-      setList([...world.mcpServers.values()]);
-    }
-  });
-  return (
-    <group>
-      {list.map((s) => (
-        <Blimp key={s.name} server={s} />
-      ))}
-    </group>
-  );
-}
-
 // ------------------------------------------------------------------ MCP call / result packets = drones with light trails
 
 function Drone({ call }: { call: McpCall }) {
@@ -227,14 +201,15 @@ function Drone({ call }: { call: McpCall }) {
   const b = useMemo(() => new THREE.Vector3(), []);
   const color = world.mcpServers.get(call.server)?.color ?? "#ffffff";
   const start = useMemo(() => {
-    const r = roofs.get(call.instance);
-    const s = blimps.get(call.server);
-    return (call.phase === "call" ? r : s)?.clone() ?? new THREE.Vector3(0, -50, 0);
+    const v = new THREE.Vector3(0, -50, 0);
+    return (call.phase === "call" ? roofOf(call.instance, v) : blimpOf(call.server, v)) ?? v.set(0, -50, 0);
   }, [call]);
+  const rr = useMemo(() => new THREE.Vector3(), []);
+  const ss = useMemo(() => new THREE.Vector3(), []);
   useFrame(() => {
     const t = clamp01((performance.now() - call.start) / call.dur);
-    const r = roofs.get(call.instance);
-    const s = blimps.get(call.server);
+    const r = roofOf(call.instance, rr);
+    const s = blimpOf(call.server, ss);
     if (!r || !s || !ref.current) return;
     if (call.phase === "call") (a.copy(r), b.copy(s));
     else (a.copy(s), b.copy(r));
@@ -298,12 +273,8 @@ export function Tethers() {
     const t = reduced ? 0 : clock.elapsedTime;
     let k = 0;
     const draw = (instance: string, server: string, mode: "pending" | "resolved", wait: number, since: number) => {
-      const r = roofs.get(instance);
-      const s = blimps.get(server);
       const srv = world.mcpServers.get(server);
-      if (!r || !s || !srv || k >= MAX * SEG) return;
-      A.copy(r);
-      B.copy(s);
+      if (!srv || k >= MAX * SEG || !roofOf(instance, A) || !blimpOf(server, B)) return;
       base.set(srv.color);
       if (wait > 0.8) base.lerp(AMBER, clamp01((wait - 0.8) / 1.0));
       if (wait > 1.8) base.lerp(RED, clamp01((wait - 1.8) / 0.8));

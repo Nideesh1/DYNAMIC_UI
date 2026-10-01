@@ -1,5 +1,6 @@
 /**
- * FalkorDB as a MEMORY BANK: a representative sample of graph nodes as instanced memory cells (colored by kind),
+ * Graph resource slot: FalkorDB as a MEMORY BANK, a small chip block at the side of the board (only with a graph),
+ * drawn in its own frame (centre 0, radius BANK_NATURAL; the kit places/scales/fades it): a representative sample of graph nodes as instanced memory cells (colored by kind),
  * graph edges as arcing traces between cells. Reads light a cell (+ its edges); writes flash white and ripple across the bank.
  */
 import { useFrame } from "@react-three/fiber";
@@ -8,6 +9,7 @@ import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, world } from "../shared/world";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
+import { type GraphSlotProps } from "../shared/kit";
 import { BANK_COLS, BANK_N, BANK_PX, BANK_PZ, BANK_SPINE_X, BANK_X0, BANK_Z0, bankCell, rgb } from "./layout";
 
 export const FLARE_TRAVEL = 650; // ms for the packet to reach the cell
@@ -26,7 +28,7 @@ const MAX_EDGES = 120;
 const ARC_SEG = 10;
 const LABELS = 2;
 
-export function Bank({ galaxy }: { galaxy: Galaxy }) {
+export function Bank({ galaxy }: GraphSlotProps) {
   const cells = useRef<THREE.InstancedMesh>(null);
   const leds = useRef<THREE.InstancedMesh>(null);
   const rings = useRef<THREE.InstancedMesh>(null);
@@ -174,7 +176,7 @@ export function Bank({ galaxy }: { galaxy: Galaxy }) {
       const d = labelDivs.current[li];
       if (g && d) {
         g.visible = true;
-        g.position.set(pos[i].x, 1.4, pos[i].z);
+        g.position.set(pos[i].x, 2.4, pos[i].z);
         if (labelKeys.current[li] !== i) {
           d.setText(`${f.op === "write" ? "WRITE" : "read"} · ${f.node}`);
           d.setColor(f.op === "write" ? "#ffffff" : KIND_COLOR[galaxy.nodes[i].kind] ?? "#22d3ee");
@@ -238,7 +240,7 @@ export function Bank({ galaxy }: { galaxy: Galaxy }) {
           <Label3D ref={(el) => void (labelDivs.current[k] = el)} text="" size={0.24} opacity={0} fadeMs={120} pxRange={[8, 12]} />
         </group>
       ))}
-      <GraphLabel3D position={[cx, 0.4, BANK_Z0 + d + 0.7]} suffix=" · memory bank" color="#22d3ee" letterSpacing={0.06} size={0.4} pxRange={[10, 15]} />
+      <GraphLabel3D position={[cx, 0.4, BANK_Z0 - 1.6]} suffix=" · memory bank" color="#22d3ee" letterSpacing={0.06} size={1} pxRange={[10, 15]} />
     </group>
   );
 }

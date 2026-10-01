@@ -1,15 +1,26 @@
-/** MCP servers as external I/O PORTS on the board's left edge: glowing PCIe-style sockets with spinning holo-icons. */
+/**
+ * MCP server slot: an external I/O PORT on the outskirts of the board (kit periphery): a glowing PCIe-style socket with
+ * a spinning holo-icon, contact fingers reaching in toward the board.
+ */
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D } from "../shared/Label3D";
-import { world, type McpServer } from "../shared/world";
-import { IO_SPINE_X, IO_X, getGlowTexture, portZ, reduced, rgb } from "./layout";
+import { world } from "../shared/world";
+import { type McpServerSlotProps } from "../shared/kit";
+import { getGlowTexture, reduced, rgb } from "./layout";
+
+/** distance from a port to its spine trace (inward, toward the board) */
+export const IO_SPINE = 2.1;
 
 const housing = new THREE.BoxGeometry(1.5, 0.7, 3.2);
 const housingEdges = new THREE.EdgesGeometry(housing);
 
-function Port({ srv }: { srv: McpServer }) {
+export function Port({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
+  const at = useRef<THREE.Group>(null);
+  // which side the port sits on is decided once (labels hang outward)
+  const left = useMemo(() => mcp.target.x <= 0, [mcp]);
   const icon = useRef<THREE.Group>(null);
   const slotMat = useRef<THREE.MeshBasicMaterial>(null);
   const edgeMat = useRef<THREE.LineBasicMaterial>(null);
@@ -20,6 +31,10 @@ function Port({ srv }: { srv: McpServer }) {
   const spin = useRef(0);
 
   useFrame(({ clock }, dt) => {
+    if (at.current) {
+      at.current.position.set(mcp.pos.x, 0, mcp.pos.z);
+      at.current.rotation.y = mcp.out.x < 0 ? 0 : Math.PI; // fingers (local +x) point into the board
+    }
     const now = performance.now();
     const s = world.mcpServers.get(srv.name) ?? srv;
     const busy = s.inflight > 0;
@@ -41,9 +56,8 @@ function Port({ srv }: { srv: McpServer }) {
     if (glowMat.current) glowMat.current.color.copy(col).multiplyScalar(0.15 + lvl * 0.35);
   });
 
-  const z = portZ(srv.slot);
   return (
-    <group position={[IO_X, 0, z]}>
+    <group ref={at}>
       <mesh geometry={housing} position={[0, 0.35, 0]}>
         <meshStandardMaterial color="#070b16" metalness={0.8} roughness={0.28} />
       </mesh>
@@ -57,8 +71,8 @@ function Port({ srv }: { srv: McpServer }) {
       </mesh>
       {/* contact fingers into the board */}
       {Array.from({ length: 7 }, (_, k) => (
-        <mesh key={k} position={[0.95 + (IO_SPINE_X - IO_X - 1) / 2, 0.02, -1.2 + k * 0.4]}>
-          <boxGeometry args={[IO_SPINE_X - IO_X - 1, 0.02, 0.06]} />
+        <mesh key={k} position={[0.95 + (IO_SPINE - 1) / 2, 0.02, -1.2 + k * 0.4]}>
+          <boxGeometry args={[IO_SPINE - 1, 0.02, 0.06]} />
           <meshBasicMaterial color={col.clone().multiplyScalar(0.55)} toneMapped={false} />
         </mesh>
       ))}
@@ -78,23 +92,8 @@ function Port({ srv }: { srv: McpServer }) {
           <octahedronGeometry args={[0.2, 0]} />
         </mesh>
       </group>
-      <Label3D position={[-1.1, 0.6, 0]} anchorX="right" text={`mcp · ${srv.name}`} color={srv.color} size={0.3} pxRange={[9, 13]} />
+      <Label3D position={[-1.1, 0.6, 0]} anchorX={left ? "right" : "left"} text={`mcp · ${srv.name}`} color={srv.color} size={0.3} pxRange={[9, 13]} />
     </group>
   );
 }
 
-export function Ports({ servers }: { servers: McpServer[] }) {
-  const z0 = portZ(4) - 2;
-  const z1 = portZ(0) + 2;
-  return (
-    <group>
-      <mesh position={[IO_SPINE_X, 0.02, (z0 + z1) / 2]}>
-        <boxGeometry args={[0.12, 0.03, z1 - z0]} />
-        <meshBasicMaterial color={rgb("#e879f9").clone().multiplyScalar(0.9)} toneMapped={false} />
-      </mesh>
-      {servers.map((s) => (
-        <Port key={s.name} srv={s} />
-      ))}
-    </group>
-  );
-}

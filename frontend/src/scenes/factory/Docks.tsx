@@ -1,5 +1,6 @@
 /**
- * MCP servers = loading docks on the left wall. The backends behind each server are parked behind its dock:
+ * MCP server slot = loading docks on the outskirts (kit periphery, door facing the floor); Backend slot = the
+ * backends parked behind each dock (kit backend positions). The backends behind each server are parked behind its dock:
  * databases / warehouses / storage / Spark as silos and tanks, APIs and queues as trucks.
  *   pending call → overhead cable machine → dock (marching dashes toward the dock, amber → red as it waits),
  *                  the dock door rolls up, the backend's light bands glow
@@ -7,12 +8,13 @@
  *   result       → pallet rides back backend → dock → machine; a flash snaps back along the cable
  */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpResource, type McpServer } from "../shared/world";
+import { waitSeconds, world, type McpServer } from "../shared/world";
+import { backendPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { additive, ArcLines, BOX, CONE, CYL, emissive, glowSprite, hazardTexture, Pool } from "./fx";
-import { AMBER, archControl, backendPos, bezier, clamp01, dockDoor, dockPos, easeInOut, machineTop, RED, reduced, rgb, WHITE } from "./layout";
+import { AMBER, archControl, bezier, clamp01, dockDoor, dockFloor, easeInOut, machineTop, RED, reduced, rgb, WHITE } from "./layout";
 
 const STEEL = new THREE.MeshStandardMaterial({ color: "#26201d", metalness: 0.65, roughness: 0.4 });
 const CONCRETE = new THREE.MeshStandardMaterial({ color: "#16120f", metalness: 0.2, roughness: 0.85 });
@@ -28,15 +30,24 @@ const doorMat = () => {
   return (DOOR = new THREE.MeshBasicMaterial({ map: t, color: new THREE.Color(0.55, 0.55, 0.55), toneMapped: false }));
 };
 
+const WALK = new THREE.MeshBasicMaterial({ color: new THREE.Color("#ffb020").multiplyScalar(0.32), toneMapped: false });
+
 const isActive = (activeAt: number, inflight: number, now: number) => (inflight > 0 ? 1 : clamp01(1 - (now - activeAt) / 1400));
 
-function Backend({ res, srv, k, n }: { res: McpResource; srv: McpServer; k: number; n: number }) {
-  const pos = useMemo(() => backendPos(srv.slot, k, n, new THREE.Vector3()), [srv.slot, k, n]);
+export function Backend({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const k = backend.k;
+  const at = useRef<THREE.Group>(null);
   const col = useMemo(() => rgb(srv.color), [srv.color]);
   const m = useMemo(() => ({ band: emissive(col), glow: glowSprite(col), flame: glowSprite("#ff7a1a"), lamp: glowSprite("#ffe2a8") }), [col]);
   useEffect(() => () => Object.values(m).forEach((x) => x.dispose()), [m]);
   const label = useRef<Label3DHandle>(null);
   useFrame(({ clock }) => {
+    if (at.current) {
+      at.current.position.copy(backend.pos);
+      at.current.rotation.y = mcp.out.x < 0 ? 0 : Math.PI; // the trailer backs up toward its dock
+    }
     const a = isActive(res.activeAt, res.inflight, performance.now());
     const t = reduced ? 0 : clock.elapsedTime;
     m.band.color.copy(col).multiplyScalar(0.22 + a * (1.3 + 0.3 * Math.sin(t * 8)));
@@ -48,7 +59,7 @@ function Backend({ res, srv, k, n }: { res: McpResource; srv: McpServer; k: numb
   const kind = res.kind;
   const truck = kind === "api" || kind === "queue";
   return (
-    <group position={pos}>
+    <group ref={at}>
       {truck ? (
         // trailer backed up toward the dock (+x), cab on the far side
         <group>
@@ -108,19 +119,20 @@ function Backend({ res, srv, k, n }: { res: McpResource; srv: McpServer; k: numb
   );
 }
 
-function Dock({ srv }: { srv: McpServer }) {
-  const pos = useMemo(() => dockPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+export function Dock({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
+  const at = useRef<THREE.Group>(null);
   const col = useMemo(() => rgb(srv.color), [srv.color]);
   const door = useRef<THREE.Mesh>(null);
   const label = useRef<Label3DHandle>(null);
   const m = useMemo(() => ({ strip: emissive(col), inner: glowSprite(col), spill: additive(col) }), [col]);
   useEffect(() => () => Object.values(m).forEach((x) => x.dispose()), [m]);
-  const [res, setRes] = useState<McpResource[]>([]);
-  const s = useMemo(() => ({ n: -1, open: 0 }), []);
+  const s = useMemo(() => ({ open: 0 }), []);
   useFrame(({ clock }) => {
-    if (srv.resources.size !== s.n) {
-      s.n = srv.resources.size;
-      setRes([...srv.resources.values()]);
+    if (at.current) {
+      at.current.position.copy(mcp.pos);
+      // the door (local +x) faces the floor: right column docks turn around
+      at.current.rotation.y = mcp.out.x < 0 ? 0 : Math.PI;
     }
     const now = performance.now();
     const a = isActive(srv.activeAt, srv.inflight, now);
@@ -138,7 +150,7 @@ function Dock({ srv }: { srv: McpServer }) {
   });
   return (
     <group>
-      <group position={pos}>
+      <group ref={at}>
         {/* platform */}
         <mesh geometry={BOX} material={CONCRETE} scale={[3.4, 0.7, 4.6]} position-y={0.35} />
         <mesh geometry={BOX} material={doorMat()} scale={[0.04, 0.22, 4.6]} position={[1.72, 0.55, 0]} />
@@ -155,17 +167,21 @@ function Dock({ srv }: { srv: McpServer }) {
         </mesh>
         {/* back wall */}
         <mesh geometry={BOX} material={STEEL} scale={[0.2, 3.3, 4.6]} position={[-1.6, 1.65, 0]} />
+        {/* walkway lines in front of the dock */}
+        <mesh rotation-x={-Math.PI / 2} position={[2.6, 0.006, 0]} material={WALK}>
+          <planeGeometry args={[0.09, 5.2]} />
+        </mesh>
+        <mesh rotation-x={-Math.PI / 2} position={[3.05, 0.006, 0]} material={WALK}>
+          <planeGeometry args={[0.09, 5.2]} />
+        </mesh>
         <Label3D ref={label} position={[0.4, 3.85, 0]} text={srv.name} color={srv.color} plate="box" size={0.26} pxRange={[8, 12.5]} />
       </group>
-      {res.map((r, k) => (
-        <Backend key={r.name} res={r} srv={srv} k={k} n={res.length} />
-      ))}
     </group>
   );
 }
 
 /** Cables machine → dock, dock → backend links, pallets for call/result packets, snap-back flashes. */
-function Traffic() {
+export function Traffic() {
   const cables = useMemo(() => new ArcLines(48, 32), []);
   const links = useMemo(() => new ArcLines(40, 16), []);
   const pallets = useMemo(() => new Pool(BOX, new THREE.MeshBasicMaterial({ toneMapped: false }), 64), []);
@@ -174,23 +190,15 @@ function Traffic() {
     () => ({ a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), d: new THREE.Vector3(), e: new THREE.Vector3(), f: new THREE.Vector3(), p: new THREE.Vector3(), q: new THREE.Vector3(), col: new THREE.Color(), tmp: new THREE.Color() }),
     [],
   );
-  const resIndex = (srv: McpServer, name: string | undefined) => {
-    if (!name) return -1;
-    let k = 0;
-    for (const r of srv.resources.keys()) {
-      if (r === name) return k;
-      k++;
-    }
-    return -1;
-  };
   /** dock floor point (d) + control (f) toward a backend (e) */
-  const backendLink = (srv: McpServer, k: number) => {
-    dockPos(srv.slot, t.d);
-    t.d.y = 0.75;
-    backendPos(srv.slot, k, srv.resources.size, t.e);
+  const backendLink = (srv: McpServer, res: string) => {
+    const bp = backendPos(srv.name, res);
+    if (!bp || !dockFloor(srv.name, t.d)) return false;
+    t.e.copy(bp);
     t.e.y = 0.9;
     t.f.addVectors(t.d, t.e).multiplyScalar(0.5);
     t.f.y = 1.9;
+    return true;
   };
   useFrame(({ clock }) => {
     const now = performance.now();
@@ -202,23 +210,18 @@ function Traffic() {
 
     // static dock → backend links (brighten + march toward the backend while busy)
     for (const srv of world.mcpServers.values()) {
-      let k = 0;
       for (const r of srv.resources.values()) {
-        backendLink(srv, k);
+        if (!backendLink(srv, r.name)) continue;
         const a = isActive(r.activeAt, r.inflight, now);
         t.col.copy(rgb(srv.color));
         links.add(t.d, t.f, t.e, t.col, 0.3 + a * 0.9, -1, a > 0.05 ? 5 : 0, time * 1.5);
-        k++;
       }
     }
 
     // pending calls: cable machine → dock, amber → red the longer it waits
     for (const p of world.mcpPending.values()) {
       const srv = world.mcpServers.get(p.server);
-      const top = machineTop.get(p.instance);
-      if (!srv || !top) continue;
-      t.a.copy(top);
-      dockDoor(srv.slot, t.b);
+      if (!srv || !machineTop(p.instance, t.a) || !dockDoor(srv.name, t.b)) continue;
       archControl(t.a, t.b, 2.6, t.c);
       const w = waitSeconds(p, now);
       t.col.copy(AMBER).lerp(RED, clamp01((w - 1) / 2));
@@ -232,10 +235,7 @@ function Traffic() {
     // just answered: a flash snaps back dock → machine
     for (const r of world.mcpResolved) {
       const srv = world.mcpServers.get(r.server);
-      const top = machineTop.get(r.instance);
-      if (!srv || !top) continue;
-      t.a.copy(top);
-      dockDoor(srv.slot, t.b);
+      if (!srv || !machineTop(r.instance, t.a) || !dockDoor(srv.name, t.b)) continue;
       archControl(t.a, t.b, 2.6, t.c);
       const age = clamp01((now - r.resolvedAt) / 700);
       cables.add(t.a, t.c, t.b, WHITE, (1 - age) * 0.9, 1 - age, 0, 0);
@@ -244,22 +244,20 @@ function Traffic() {
     // pallets: call = machine → dock → backend, result = backend → dock → machine
     for (const c of world.mcpCalls) {
       const srv = world.mcpServers.get(c.server);
-      const top = machineTop.get(c.instance);
-      if (!srv || !top) continue;
+      if (!srv || !machineTop(c.instance, t.q)) continue;
       const p = clamp01((now - c.start) / c.dur);
       if (p >= 1) continue;
       const prog = c.phase === "call" ? p : 1 - p;
-      const k = resIndex(srv, c.resource);
-      const split = k >= 0 ? 0.62 : 1;
+      const linked = !!c.resource && backendLink(srv, c.resource);
+      const split = linked ? 0.62 : 1;
       t.col.copy(rgb(srv.color));
       if (prog <= split) {
-        t.a.copy(top);
-        dockDoor(srv.slot, t.b);
+        t.a.copy(t.q);
+        dockDoor(srv.name, t.b);
         archControl(t.a, t.b, 2.6, t.c);
         bezier(t.a, t.c, t.b, easeInOut(prog / split), t.p);
         t.p.y -= 0.2;
       } else {
-        backendLink(srv, k);
         bezier(t.d, t.f, t.e, easeInOut((prog - split) / (1 - split)), t.p);
       }
       const fade = Math.min(1, p * 8, (1 - p) * 8);
@@ -283,21 +281,3 @@ function Traffic() {
   );
 }
 
-export function Docks() {
-  const [servers, setServers] = useState<McpServer[]>([]);
-  const n = useRef(-1);
-  useFrame(() => {
-    if (world.mcpServers.size !== n.current) {
-      n.current = world.mcpServers.size;
-      setServers([...world.mcpServers.values()]);
-    }
-  });
-  return (
-    <>
-      {servers.map((s) => (
-        <Dock key={s.name} srv={s} />
-      ))}
-      <Traffic />
-    </>
-  );
-}

@@ -1,5 +1,6 @@
 /**
- * FalkorDB = the central data spire. A representative sample of graph nodes is wrapped around a dark glass
+ * Graph resource slot: FalkorDB = the data spire, a small landmark in the side skyline (only with a graph).
+ * Drawn in its own frame (centre 0, radius ~TOWER_R + 1.3); the kit places/scales/fades it. A representative sample of graph nodes is wrapped around a dark glass
  * cylinder as glowing window-lights, with the graph's edges traced across the facade like circuitry.
  * Flares make nodes blaze (reads = agent colour, writes = white + a beam shooting into the sky) and briefly name them.
  */
@@ -7,15 +8,17 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
-import type { Galaxy } from "../shared/useSceneSetup";
 import { nodeIndex } from "../shared/useSceneSetup";
 import { KIND_COLOR, TYPE_COLOR, world } from "../shared/world";
-import { clamp01, easeOut, roofs, TOWER_R } from "./layout";
+import { stageToGraph, type GraphSlotProps } from "../shared/kit";
+import { clamp01, easeOut, roofOf, TOWER_R } from "./layout";
 
+/** natural radius of the slot (ground ring around the spire) */
+export const TOWER_NATURAL = TOWER_R + 1.3;
 const SAMPLE = 200;
-const PER_ROW = 25;
-const ROW_H = 1.45;
-const BASE_Y = 1.5;
+const PER_ROW = 34;
+const ROW_H = 1.2;
+const BASE_Y = 1.1;
 const FLARE_MS = 2600;
 const EDGE_SEG = 12;
 const LABELS = 4;
@@ -35,7 +38,10 @@ function layout(n: number) {
   return { list, height: BASE_Y + Math.ceil(n / PER_ROW) * ROW_H };
 }
 
-export function DataTower({ galaxy }: { galaxy: Galaxy }) {
+/** Spire height in local units (windows + crown + antenna), for framing. */
+export const towerTop = (n: number) => BASE_Y + Math.ceil(Math.min(SAMPLE, n) / PER_ROW) * ROW_H + 4.4;
+
+export function DataTower({ galaxy }: GraphSlotProps) {
   const n = Math.min(SAMPLE, galaxy.nodes.length);
   const nodes = useMemo(() => galaxy.nodes.slice(0, n), [galaxy, n]);
   const { list, height } = useMemo(() => layout(n), [n]);
@@ -102,6 +108,8 @@ export function DataTower({ galaxy }: { galaxy: Galaxy }) {
   const b = useMemo(() => new THREE.Vector3(), []);
   const d = useMemo(() => new THREE.Vector3(), []);
   const up = useMemo(() => new THREE.Vector3(0, 1, 0), []);
+  const roofW = useMemo(() => new THREE.Vector3(), []);
+  const roof = useMemo(() => new THREE.Vector3(), []);
   const hadFlare = useRef(true);
   const BEAMS = 72;
   const BEADS = 40;
@@ -141,11 +149,13 @@ export function DataTower({ galaxy }: { galaxy: Galaxy }) {
       if (f.op === "write") writeAmt[i] = Math.max(writeAmt[i], fade);
       else readAmt[i] = Math.max(readAmt[i], fade);
       const inst = world.instances.get(f.instance);
-      const roof = roofs.get(f.instance);
+      // the rooftop in the spire's own frame (beams are drawn inside the kit-scaled group)
+      const hasRoof = !!roofOf(f.instance, roofW);
+      if (hasRoof) stageToGraph(roofW, roof);
       const wp = list[i].p;
       if (!bm || !bd) continue;
       // beam from the building rooftop to the node, shooting out in the first 250ms
-      if (roof && kb < BEAMS) {
+      if (hasRoof && kb < BEAMS) {
         const grow = easeOut(clamp01((now - f.start) / 250));
         a.copy(roof);
         b.copy(roof).lerp(wp, grow);
@@ -173,7 +183,7 @@ export function DataTower({ galaxy }: { galaxy: Galaxy }) {
       if (f.op === "write" && kb < BEAMS) {
         const shoot = easeOut(clamp01((now - f.start) / 450));
         b.copy(wp);
-        b.y += 3 + 80 * shoot;
+        b.y += 3 + 40 * shoot;
         c.setRGB(1.6, 1.7, 2.2).multiplyScalar(fade * 1.6);
         if (setBeam(bm, kb, wp, b, 0.13, c)) kb++;
       }
@@ -293,19 +303,19 @@ export function DataTower({ galaxy }: { galaxy: Galaxy }) {
         <circleGeometry args={[0.13, 16]} />
         <meshBasicMaterial toneMapped={false} />
       </instancedMesh>
-      <mesh position={[0, H + 1.4, 0]}>
-        <cylinderGeometry args={[0.15, TOWER_R * 0.85, 2.8, 24]} />
+      <mesh position={[0, H + 1.0, 0]}>
+        <cylinderGeometry args={[0.15, TOWER_R * 0.85, 2.0, 24]} />
         <meshStandardMaterial color="#090b16" roughness={0.3} metalness={0.9} />
       </mesh>
       <mesh ref={crown} position={[0, H + 0.6, 0]} rotation={[Math.PI / 2, 0, 0]}>
         <torusGeometry args={[TOWER_R * 0.95, 0.08, 8, 64]} />
         <meshBasicMaterial toneMapped={false} />
       </mesh>
-      <mesh position={[0, H + 4.6, 0]}>
-        <cylinderGeometry args={[0.03, 0.06, 4, 6]} />
+      <mesh position={[0, H + 2.9, 0]}>
+        <cylinderGeometry args={[0.03, 0.06, 2, 6]} />
         <meshBasicMaterial color="#4c4a7a" />
       </mesh>
-      <mesh ref={core} position={[0, H + 6.7, 0]}>
+      <mesh ref={core} position={[0, H + 4.1, 0]}>
         <sphereGeometry args={[0.28, 20, 20]} />
         <meshBasicMaterial toneMapped={false} />
       </mesh>
@@ -326,7 +336,7 @@ export function DataTower({ galaxy }: { galaxy: Galaxy }) {
           <Label3D ref={(el) => void (labelEls.current[k] = el)} text="" size={0.3} opacity={0} pxRange={[8, 12]} renderOrder={22} />
         </group>
       ))}
-      <GraphLabel3D position={[0, H + 8, 0]} color="#8b7dff" letterSpacing={0.06} glow={1.1} size={0.6} pxRange={[11, 16]} />
+      <GraphLabel3D position={[0, H + 5.2, 0]} color="#8b7dff" letterSpacing={0.06} glow={1.1} size={0.6} pxRange={[11, 16]} />
     </group>
   );
 }

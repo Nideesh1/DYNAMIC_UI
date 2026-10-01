@@ -9,13 +9,14 @@
  *   exit     → powers down, sinks back through the hatch (failed: red flash + sparks first)
  */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, roleScale, world, type Instance } from "../shared/world";
-import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
+import { TYPE_COLOR, world } from "../shared/world";
+import { showLabel } from "../shared/lod";
+import { type AgentSlotProps } from "../shared/kit";
 import { additive, BOX, BOX_EDGES, CYL, emitSparks, emissive, glowSprite, hazardTexture, RING } from "./fx";
-import { AMBER, clamp01, displayRow, easeIn, easeInOut, easeOut, homeOf, machineBase, machineTop, RED, reduced, rgb, seedOf, YELLOW } from "./layout";
+import { AMBER, clamp01, easeIn, easeInOut, easeOut, RED, reduced, rgb, seedOf, TOP_Y, topH, YELLOW } from "./layout";
 
 // shared (non-animated) materials
 const BODY = new THREE.MeshStandardMaterial({ color: "#1c1714", metalness: 0.55, roughness: 0.42 });
@@ -34,15 +35,15 @@ const hazard = () => {
 const HATCH = new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2));
 const GREY = new THREE.Color("#2a2627");
 
-function Machine({ inst, selected, onSelect }: { inst: Instance; selected: boolean; onSelect: (id: string) => void }) {
-  const S = roleScale(inst);
+/** Agent slot: a machine at the agent's kit home, sized by agent.scale (roleScale x fit). */
+export function Machine({ agent, selected, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
   const big = !inst.subagent;
   const color = useMemo(() => rgb(TYPE_COLOR[inst.type]), [inst.type]);
   const seed = useMemo(() => seedOf(inst.id), [inst.id]);
-  const row = displayRow(inst.run); // re-evaluated on each list refresh (lod.version) → re-home when LOD moves the run
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const home = useMemo(() => homeOf(inst), [inst, row, lod.grouped]);
   const root = useRef<THREE.Group>(null);
+  const body = useRef<THREE.Group>(null);
+  const labelG = useRef<THREE.Group>(null);
   const yaw = useMemo(() => (seed - 0.5) * 0.35, [seed]); // small stable per-agent rotation
 
   const lift = useRef<THREE.Group>(null);
@@ -78,7 +79,6 @@ function Machine({ inst, selected, onSelect }: { inst: Instance; selected: boole
   const s = useMemo(
     () => ({
       top: new THREE.Vector3(),
-      base: new THREE.Vector3(),
       tmp: new THREE.Vector3(),
       c: new THREE.Color(),
       llm: inst.llmCalls,
@@ -96,15 +96,7 @@ function Machine({ inst, selected, onSelect }: { inst: Instance; selected: boole
     [],
   );
 
-  useEffect(() => {
-    s.base.copy(home);
-    machineTop.set(inst.id, s.top);
-    machineBase.set(inst.id, s.base);
-    return () => {
-      if (machineTop.get(inst.id) === s.top) machineTop.delete(inst.id);
-      if (machineBase.get(inst.id) === s.base) machineBase.delete(inst.id);
-    };
-  }, [inst.id, s, home]);
+  useEffect(() => () => void topH.delete(inst.id), [inst.id]);
 
   useFrame(({ clock }, dt) => {
     const now = performance.now();
@@ -147,9 +139,13 @@ function Machine({ inst, selected, onSelect }: { inst: Instance; selected: boole
     // ---- lift
     const y = -2.3 * (1 - rise) - 2.4 * sink;
     if (lift.current) lift.current.position.y = y;
-    const L = lodScale();
-    root.current?.scale.setScalar(L);
-    s.top.set(home.x, (y + 1.55) * S * L, home.z);
+    const S = agent.scale;
+    root.current?.position.copy(agent.live);
+    body.current?.scale.setScalar(S);
+    labelG.current?.position.set(0, 2.95 * S + (big ? 0.15 : 0.05), 0);
+    const th = Math.max(0.2, (y + TOP_Y) * S);
+    topH.set(inst.id, th);
+    s.top.set(agent.live.x, th, agent.live.z);
 
     // ---- screen / vents / trim
     const llmAge = (now - s.llmAt) / 1000;
@@ -224,8 +220,8 @@ function Machine({ inst, selected, onSelect }: { inst: Instance; selected: boole
   const k = inst.id.split(":")[2];
 
   return (
-    <group ref={root} position={home}>
-      <group rotation-y={yaw} scale={S}>
+    <group ref={root}>
+      <group ref={body} rotation-y={yaw}>
         {/* floor hatch the machine rises out of */}
         <lineSegments ref={hatch} geometry={HATCH} material={m.hatch} scale={[2.5, 1, 2.3]} position-y={0.012} />
         <mesh ref={selRing} geometry={RING} material={m.sel} scale={1.85} position-y={0.02} visible={false} />
@@ -280,39 +276,18 @@ function Machine({ inst, selected, onSelect }: { inst: Instance; selected: boole
           </group>
         </group>
       </group>
+      <group ref={labelG}>
       <Label3D
         ref={label}
-        position={[0, 2.95 * S + (big ? 0.15 : 0.05), 0]}
+        fit
         text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
         color={TYPE_COLOR[inst.type]}
         size={big ? 0.3 : 0.22}
         opacity={0}
         pxRange={big ? [9, 13.5] : [8, 11.5]}
       />
+      </group>
     </group>
   );
 }
 
-export function Machines({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.instances;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // parents first so homeOf() can fan children out from them; collapsed runs → their lane's cluster
-      setList([...m.values()].filter(isExpanded).sort((a, b) => a.bornAt - b.bornAt));
-    }
-  });
-  return (
-    <>
-      {list.map((i) => (
-        <Machine key={i.id} inst={i} selected={selected === i.id} onSelect={onSelect} />
-      ))}
-    </>
-  );
-}

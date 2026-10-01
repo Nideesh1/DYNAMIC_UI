@@ -1,7 +1,8 @@
-/** The factory floor: dark polished slab with an amber grid, walkway markings, and the building's lights. */
+/** The factory floor: dark polished slab with an amber grid lit around the production lines, and the building's lights. */
+import { useFrame } from "@react-three/fiber";
 import { useMemo } from "react";
 import * as THREE from "three";
-import { DOCK_X, RACK_Z } from "./layout";
+import { kit } from "../shared/kit";
 
 const vert = /* glsl */ `
 varying vec3 vW;
@@ -15,6 +16,7 @@ varying vec3 vW;
 uniform vec3 uBase;
 uniform vec3 uGrid;
 uniform vec3 uMajor;
+uniform float uR;
 float line(float x, float w) {
   float d = abs(fract(x - 0.5) - 0.5) / fwidth(x);
   return 1.0 - min(d / w, 1.0);
@@ -24,7 +26,7 @@ void main() {
   float minor = max(line(p.x, 0.8), line(p.y, 0.8));
   float major = max(line(p.x / 4.0, 1.1), line(p.y / 4.0, 1.1));
   // spotlight pools: brighter in the middle of the hall, falling off to the walls
-  float r = length((p - vec2(-3.0, -3.0)) * vec2(0.85, 1.1));
+  float r = length(p * vec2(0.85, 1.1)) * (30.0 / uR);
   float pool = exp(-r * r / 900.0);
   float edge = smoothstep(46.0, 30.0, r);
   vec3 c = uBase * (0.55 + 0.9 * pool);
@@ -44,30 +46,20 @@ export function Floor() {
           uBase: { value: new THREE.Color("#0b0809") },
           uGrid: { value: new THREE.Color("#ff8a1f") },
           uMajor: { value: new THREE.Color("#ffb347") },
+          uR: { value: 30 },
         },
       }),
     [],
   );
-  const walk = useMemo(() => new THREE.MeshBasicMaterial({ color: new THREE.Color("#ffb020").multiplyScalar(0.32), toneMapped: false }), []);
+  // the lit hall follows the content (lines + docks + rack)
+  useFrame(() => {
+    const want = Math.max(30, (kit.core.r + 10) * 1.3);
+    mat.uniforms.uR.value += (want - mat.uniforms.uR.value) * 0.05;
+  });
   return (
-    <group>
-      <mesh rotation-x={-Math.PI / 2} position={[-4, 0, -2]} material={mat}>
-        <planeGeometry args={[110, 90]} />
-      </mesh>
-      {/* walkway lines: in front of the docks and in front of the rack */}
-      <mesh rotation-x={-Math.PI / 2} position={[DOCK_X + 4.2, 0.006, -1]} material={walk}>
-        <planeGeometry args={[0.09, 40]} />
-      </mesh>
-      <mesh rotation-x={-Math.PI / 2} position={[DOCK_X + 4.65, 0.006, -1]} material={walk}>
-        <planeGeometry args={[0.09, 40]} />
-      </mesh>
-      <mesh rotation-x={-Math.PI / 2} position={[0, 0.006, RACK_Z + 2.4]} material={walk}>
-        <planeGeometry args={[34, 0.09]} />
-      </mesh>
-      <mesh rotation-x={-Math.PI / 2} position={[0, 0.006, RACK_Z + 2.85]} material={walk}>
-        <planeGeometry args={[34, 0.09]} />
-      </mesh>
-    </group>
+    <mesh rotation-x={-Math.PI / 2} position={[0, 0, 0]} material={mat}>
+      <planeGeometry args={[260, 220]} />
+    </mesh>
   );
 }
 

@@ -1,61 +1,65 @@
-/** Board layout for the /circuit scene: lanes (Hatchet runs), gates, chip homes, memory bank, I/O ports, path helpers. */
+/**
+ * Circuit skin helpers on top of the scene kit (`lanes` preset, XZ board plane). Runs are BUS lanes (the kit run
+ * frame: u along the bus, v across it toward the camera): the bus trace runs just behind the run's chips with the
+ * plan / research / write gates at the role slots. The memory bank (knowledge graph) is a small chip block on the
+ * side (kit side graph, its own frame), MCP servers are I/O ports on the outskirts (kit periphery).
+ */
 import * as THREE from "three";
-import { hash01, world, type Instance, type StepName } from "../shared/world";
-import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
-import { laneOfSlot, laneRank, lod } from "../shared/lod";
+import { fit, graphToStage, runLocal, type KitRun } from "../shared/kit";
+import { isSubRole } from "../shared/spread";
+import type { Instance } from "../shared/world";
 
-export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+export { reduced } from "../shared/kit";
 
-// ---- Hatchet bus lanes (run along +x), one per run.slot
-export const BUS_X0 = -13;
-export const GATE_X: Record<StepName, number> = { plan: -9.5, research: -1, write: 9 };
-export const LANE_GAP = 8.5;
-export const laneZ = (slot: number) => 3 - slot * LANE_GAP;
-/** Lane a run is drawn in: its slot, or (while LOD groups a crowd) slot % 6 so 200 runs never march off the board. */
-export const laneSlot = (slot: number) => (lod.grouped ? laneOfSlot(slot) : slot);
-/** Bus z of a run: its lane, fanned ±2.4 per extra expanded run sharing that lane (LOD laneRank; 0 when not grouped). */
-export const runZ = (runId: string, slot: number) => laneZ(laneSlot(slot)) + alt(laneRank(runId)) * 2.4;
-export const CHIP_DZ = 2.2; // chips sit in front of their gate
+// ---- Hatchet bus lanes (run-local)
+/** v of the bus centre line (behind the top-level chips), x fit.spread */
+export const BUS_V = -1.9;
+export const busV = () => BUS_V * fit.spread;
+export type BusSpan = { u0: number; u1: number };
+/** Bus extent (run-local u): the run's footprint plus a terminal pad before the first chip. */
+export function busSpan(r: KitRun, out: BusSpan): BusSpan {
+  out.u0 = r.cu - r.hu - 1.2 * fit.spread;
+  out.u1 = r.cu + r.hu + 1.0 * fit.spread;
+  return out;
+}
+/** Stage point on a run's bus at run-local u (y = 0). */
+export function busPoint(r: KitRun, u: number, out: THREE.Vector3) {
+  runLocal(r, u, busV(), out);
+  out.y = 0;
+  return out;
+}
 
-// ---- FalkorDB memory bank (right side)
+// ---- FalkorDB memory bank (side graph, local frame centred at 0)
 export const BANK_N = 200; // representative FalkorDB sample shown on the board
-export const BANK_X0 = 14.6;
-export const BANK_COLS = 14;
+export const BANK_COLS = 16;
 export const BANK_PX = 1.0;
-export const BANK_PZ = 1.75;
-export const BANK_Z0 = -23;
-export const BANK_SPINE_X = BANK_X0 - 1.3; // vertical controller trace the read/write packets ride
+export const BANK_PZ = 1.3;
+export const BANK_ROWS = Math.ceil(BANK_N / BANK_COLS);
+export const BANK_X0 = -((BANK_COLS - 1) * BANK_PX) / 2;
+export const BANK_Z0 = -((BANK_ROWS - 1) * BANK_PZ) / 2;
+/** controller trace the read/write packets ride (local x, on the bank's right edge) */
+export const BANK_SPINE_X = -BANK_X0 + 1.3;
+/** slot's natural radius */
+export const BANK_NATURAL = 10.5;
 export const bankCell = (i: number, out: { x: number; z: number }) => {
   out.x = BANK_X0 + (i % BANK_COLS) * BANK_PX;
   out.z = BANK_Z0 + Math.floor(i / BANK_COLS) * BANK_PZ;
   return out;
 };
-
-// ---- MCP I/O ports (left edge)
-export const IO_X = -17.8;
-export const IO_SPINE_X = IO_X + 2.1;
-export const portZ = (slot: number) => 6 - slot * 6.6;
-
-// ---- chips: where each instance wants to sit
-export const isScout = (i: Instance) => isSubRole(i.type);
-
-export function homeOf(i: Instance, out: THREE.Vector3) {
-  const cz = runZ(i.run, world.runs.get(i.run)?.slot ?? 0) + CHIP_DZ;
-  const k = roleIndex(i); // stable slot among same-role agents of this run
-  const id = i.id;
-  if (!isScout(i)) {
-    // seeded nudge (stays in front of its gate); extra same-role chips sit beside it, never on top
-    const gx = i.type === "planner" ? GATE_X.plan : i.type === "writer" ? GATE_X.write : GATE_X.research;
-    return out.set(gx + jit(id, 51) * 0.7 + alt(k) * 2.6, 0, cz + jit(id, 52) * 0.5);
-  }
-  // scouts: fan out from the researcher; each run's fan leans its own way, each chip sits at its own reach
-  const a = 0.3 + jit(i.run, 53) * 0.5 + alt(k) * 0.6;
-  const R = 4.6 + hash01(i.run, 54) * 0.6 + jit(id, 55) * 0.4;
-  return out.set(GATE_X.research + 0.4 + Math.cos(a) * R, 0, cz + 0.4 + Math.sin(a) * R * 0.62);
+const _l = new THREE.Vector3();
+const _w = new THREE.Vector3();
+/** Stage x/z of a bank point given in local (x, z). */
+export function bankStage(x: number, z: number, out: { x: number; z: number }) {
+  graphToStage(_l.set(x, 0, z), _w);
+  out.x = _w.x;
+  out.z = _w.z;
+  return out;
 }
 
-/** Current ground position of each mounted chip (written by Chip each frame). */
-export const livePos = new Map<string, THREE.Vector3>();
+// ---- chips
+export const isScout = (i: Instance) => isSubRole(i.type) || i.subagent;
+/** chip size relative to fit.scale (the theme's own parent/sub ratio) */
+export const chipScale = (i: Instance) => fit.scale * (isScout(i) ? 1 : 1.45);
 
 // ---- colors
 const cache = new Map<string, THREE.Color>();

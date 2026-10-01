@@ -4,12 +4,12 @@
  * overhead on a gantry arc. Crates take the sender's role colour.
  */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { TYPE_COLOR, world, type Instance } from "../shared/world";
+import { TYPE_COLOR, world } from "../shared/world";
+import { agentLive, fit, type EdgeSlotProps } from "../shared/kit";
 import { ArcLines, BOX, crateTexture, Pool } from "./fx";
-import { AMBER, archControl, bezier, clamp01, easeInOut, easeOut, homeOf, machineTop, reduced, rgb } from "./layout";
-import { isExpanded, lod } from "../shared/lod";
+import { AMBER, archControl, bezier, clamp01, easeInOut, easeOut, machineTop, reduced, rgb } from "./layout";
 
 const BELT_Y = 0.3;
 const beltVert = /* glsl */ `
@@ -38,7 +38,9 @@ void main() {
 }`;
 const BELT_PLANE = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2); // uv.x along +x
 
-function Belt({ inst }: { inst: Instance }) {
+/** Edge slot: the conveyor from the parent machine to this child (both read from the kit's live positions). */
+export function Belt({ child }: EdgeSlotProps) {
+  const inst = child.inst;
   const mesh = useRef<THREE.Mesh>(null);
   const base = useRef<THREE.Mesh>(null);
   const mat = useMemo(
@@ -72,10 +74,15 @@ function Belt({ inst }: { inst: Instance }) {
 
   useFrame((_, dt) => {
     const parent = inst.parent ? (world.instances.get(inst.parent) ?? world.archive.get(inst.parent)) : undefined;
-    if (!parent || !mesh.current || !base.current) return;
+    const pl = inst.parent ? agentLive(inst.parent) : undefined;
+    if (!mesh.current || !base.current) return;
+    if (!parent || !pl) {
+      mesh.current.visible = base.current.visible = false; // parent collapsed / gone
+      return;
+    }
     const now = performance.now();
-    s.a.copy(homeOf(parent));
-    s.b.copy(homeOf(inst));
+    s.a.copy(pl);
+    s.b.copy(child.live);
     const dx = s.b.x - s.a.x;
     const dz = s.b.z - s.a.z;
     const len = Math.hypot(dx, dz);
@@ -92,7 +99,8 @@ function Belt({ inst }: { inst: Instance }) {
     mesh.current.rotation.y = ang;
     base.current.rotation.y = ang;
     mesh.current.position.y = BELT_Y;
-    mesh.current.scale.set(len, 1, 0.62);
+    const bw = Math.max(0.5, fit.scale * 0.62);
+    mesh.current.scale.set(len, 1, bw);
     const u = mat.uniforms;
     u.uLen.value = len;
     u.uGrow.value = grow * (1 - retract);
@@ -102,7 +110,7 @@ function Belt({ inst }: { inst: Instance }) {
     u.uHot.value.copy(AMBER).multiplyScalar(0.6 + (working ? 0.4 : 0));
     // belt body: grows with the belt from the parent end
     const g = Math.max(0.001, grow * (1 - retract));
-    base.current.scale.set(len * g, BELT_Y - 0.02, 0.7);
+    base.current.scale.set(len * g, BELT_Y - 0.02, bw * 1.13);
     base.current.position.x = s.a.x + (dx * g) / 2;
     base.current.position.z = s.a.z + (dz * g) / 2;
     base.current.position.y = (BELT_Y - 0.02) / 2;
@@ -117,32 +125,8 @@ function Belt({ inst }: { inst: Instance }) {
   );
 }
 
-export function Belts() {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.instances;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      setList([...m.values()].filter((i) => i.parent && isExpanded(i)));
-    }
-  });
-  return (
-    <>
-      {list.map((i) => (
-        <Belt key={i.id} inst={i} />
-      ))}
-      <Crates />
-    </>
-  );
-}
-
 /** Message crates (instanced): ride the belt for parent→child, otherwise fly an overhead gantry arc. */
-function Crates() {
+export function Crates() {
   const pool = useMemo(() => {
     const mat = new THREE.MeshBasicMaterial({ map: crateTexture(), toneMapped: false });
     return new Pool(BOX, mat, 64);
@@ -156,24 +140,23 @@ function Crates() {
     for (const cm of world.comets) {
       const from = world.instances.get(cm.from) ?? world.archive.get(cm.from);
       const to = world.instances.get(cm.to) ?? world.archive.get(cm.to);
-      if (!from || !to || !isExpanded(from.id) || !isExpanded(to.id)) continue;
+      if (!from || !to) continue;
+      const la = agentLive(cm.from);
+      const lb = agentLive(cm.to);
+      if (!la || !lb) continue; // collapsed into a cluster
       const p = clamp01((now - cm.start) / cm.dur);
       if (p >= 1) continue;
       t.col.copy(rgb(TYPE_COLOR[from.type]));
       const onBelt = to.parent === from.id;
       if (onBelt) {
-        t.a.copy(homeOf(from));
-        t.b.copy(homeOf(to));
+        t.a.copy(la);
+        t.b.copy(lb);
         t.p.lerpVectors(t.a, t.b, 0.12 + 0.76 * easeInOut(p));
         t.p.y = BELT_Y + 0.21;
         const yaw = Math.atan2(-(t.b.z - t.a.z), t.b.x - t.a.x);
         pool.add(t.p, null, 0.42, 0.42, 0.42, t.col, 1.5, yaw);
       } else {
-        const ta = machineTop.get(cm.from);
-        const tb = machineTop.get(cm.to);
-        if (!ta || !tb) continue;
-        t.a.copy(ta);
-        t.b.copy(tb);
+        if (!machineTop(cm.from, t.a) || !machineTop(cm.to, t.b)) continue;
         archControl(t.a, t.b, 2.2, t.c);
         const e = easeInOut(p);
         bezier(t.a, t.c, t.b, e, t.p);
