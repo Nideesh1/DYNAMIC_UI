@@ -45,7 +45,9 @@ async def ingest(request: Request):
 @app.get("/live/stream")
 async def stream(request: Request):
     q: asyncio.Queue = asyncio.Queue()
-    replay = list(BUFFER)
+    # replay only runs still in progress (finished runs would just re-draw and fade on every page load)
+    done = {e["run_id"] for e in BUFFER if e.get("type") == "run" and e.get("status") in ("completed", "failed")}
+    replay = [e for e in BUFFER if e.get("run_id") not in done]
 
     async def gen():
         SUBS.add(q)
