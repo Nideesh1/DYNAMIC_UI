@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { fetchText, probe } from "./lib/net.mjs";
 import {
-  baseUrl, claudeSettings, installSettingsFile, isOurHook, readState, startHookCommand, uninstallSettingsFile,
+  baseUrl, claudeSettings, installSettingsFile, isOurHook, pluginIdsIn, readState, startHookCommand, uninstallSettingsFile,
 } from "./lib/settings.mjs";
 import {
   clearLock, installCliCopy, localBase, readLock, readPid, removeCliCopies, serveForeground, spawnStarter,
@@ -141,16 +141,23 @@ async function cmdSetup(o) {
   const remote = remoteUrl();
   const port = o.port;
   const base = remote || baseUrl({ port });
+  // The AgentGlow Claude Code plugin brings the same hooks + server start; adding ours too would post every event twice.
+  const plugin = pluginIdsIn(file);
+  if (plugin.length) {
+    console.log(`The AgentGlow Claude Code plugin is enabled (${plugin.join(", ")}): it already provides the hooks, so setup`);
+    console.log(`skips them and only adds the traces env (token counts). Use one or the other: plugin, or setup's hooks.`);
+  }
   let startCommand = null;
-  if (!remote) {
+  if (!remote && !plugin.length) {
     const script = installCliCopy({ srcCliDir: here, version: VERSION });
     startCommand = startHookCommand({
       port, version: VERSION, node: nodeForHook(), script, cacheDir: process.env.AGENTGLOW_CACHE_DIR,
     });
   }
-  const r = installSettingsFile(file, base, { startCommand, extra: remote ? {} : { port } });
-  if (!r.changed) console.log(`AgentGlow hooks are already in ${file} (${base}).`);
-  else console.log(`Added AgentGlow hooks + traces env to ${file}${r.backup ? ` (backup: ${r.backup})` : ""}.`);
+  const r = installSettingsFile(file, base, { startCommand, hooks: !plugin.length, extra: remote ? {} : { port } });
+  const what = plugin.length ? "traces env" : "hooks + traces env";
+  if (!r.changed) console.log(`AgentGlow ${what} already in ${file} (${base}).`);
+  else console.log(`Added AgentGlow ${what} to ${file}${r.backup ? ` (backup: ${r.backup})` : ""}.`);
   if (r.skipped.length) console.log(`Left your own values for: ${r.skipped.join(", ")}`);
   if (process.env.AGENTGLOW_API_KEY) console.log('For traces with an ingest key also export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=$AGENTGLOW_API_KEY".');
 
@@ -317,7 +324,12 @@ async function cmdStatus(o) {
   console.log(`agentglow CLI ${VERSION}`);
   console.log(`server:  ${health?.ok ? `healthy at ${base} (server ${health.version || "?"})` : starting ? `starting on port ${port}` : `not running at ${base}`}`);
   if (!remote) console.log(`port:    ${port}${pid ? `  pid ${pid} (started by this CLI)` : ""}`);
-  console.log(`hooks:   ${installed ? `installed in ${file}${startHook ? " (server auto-starts with claude)" : ""}` : "not installed (run: npx agentglow setup)"}`);
+  const plugin = pluginIdsIn(file);
+  const hooksLine = installed ? `installed in ${file}${startHook ? " (server auto-starts with claude)" : ""}`
+    : plugin.length ? `from the Claude Code plugin ${plugin.join(", ")} (server auto-starts with claude)`
+    : "not installed (run: npx agentglow setup, or install the Claude Code plugin)";
+  console.log(`hooks:   ${hooksLine}`);
+  if (installed && plugin.length) console.log(`warning: hooks are in ${file} AND the plugin is enabled, so events post twice. Run \`npx agentglow remove\` or disable the plugin.`);
   if (hasAutostart()) console.log(`login:   server starts at login and restarts on crash`);
   if (health?.ok) console.log(`view:    ${base}/neural`);
   return 0;

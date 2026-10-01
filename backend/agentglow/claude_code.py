@@ -3,9 +3,12 @@
 Point Claude Code's `"type": "http"` hooks at `POST /v1/claude-code` (see examples/claude-code/). Each hook payload
 becomes `{"kind": "start"|"end", "span": {...}}` items (the `/v1/live` shape), shaped to hit the mapper's rules:
 
-- One user prompt = one run (`agentglow.run.id` = `<session>:<n>`, workflow `claude-code`). The topic is the neutral
-  label `Claude Code · <cwd basename> · <session id> · <HH:MM>`, never the prompt: payloads go through `scrub.scrub_hook` first (no prompt,
-  no identity keys, secrets redacted).
+- One session = one run (`agentglow.run.id` = `<session>:<n>`, workflow `claude-code`). The topic is the session
+  title `<title> · <session id4> · <HH:MM>` (latest `custom-title` record = /rename, else latest `ai-title`, read from
+  the tail of `transcript_path`, scrubbed, max 60 chars), else `Claude Code · <cwd basename> · <session id4> · <HH:MM>`;
+  never the prompt: payloads go through `scrub.scrub_hook` first (no prompt, no identity keys, secrets redacted). The
+  title is re-read on each prompt and at most every TITLE_EVERY_MS; a change emits `{"type": "run", "status":
+  "renamed", "topic"}`.
 - Main agent = agent span `claude` (`agentglow.agent`), opened on UserPromptSubmit, closed on Stop
   (`last_assistant_message` → `agentglow.final`).
 - Agent/Task tool call = TOOL span named `task` under the calling agent; SubagentStart opens an agent span named
@@ -29,6 +32,13 @@ whose llm calls sit under the launching `Agent` tool's `tool.execution` span. Tw
 - traces only: the spans are translated into synthetic live spans (run + `claude` + one subagent per `agent_id`, named
   from `query_source_safe` = `agent.builtin.<type>`, else `subagent <id>`; tools; LLM spans with tokens).
 
+Stopped subagents (Esc fires no Stop / SubagentStop; "All background agents stopped" fires no SubagentStop): closed
+with status error (`exit` failed) on PostToolUseFailure of their Agent call (`is_interrupt`), a TaskStop of their id, or
+leaving Stop's `background_tasks`; a returned (non-`async_launched`) Agent call closes it as done after SUB_GRACE_MS
+unless SubagentStop lands. Fallbacks: on main Stop / StopFailure / prompt / SessionEnd a subagent silent >=
+SUB_SILENT_MS closes, and tick() closes one silent SUB_IDLE_MS (SUB_IDLE_TOOL_MS with a tool open). Agents closed by a
+silence rule are revived (new agent span, same name and parent) if a later event for their agent_id arrives.
+
 Hooks may be async (delivered out of order): a PostToolUse seen before its PreToolUse is remembered and the late
 start is emitted already ended; events for an unknown/closed turn are dropped. State is per session, bounded, and
 dangling spans are ended on SessionEnd or after `idle_ms` without events.
@@ -43,9 +53,18 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
-from .scrub import SKILL_KEY, scrub_hook, skill_name
+from .scrub import SKILL_KEY, scrub_hook, session_title, skill_name
 
 AGENT_TOOLS = {"Agent", "Task"}
+STOP_TOOLS = {"TaskStop", "KillShell"}  # the main agent stopping a background task (`task_id` = the agent id)
+TITLE_EVERY_MS = 15_000  # re-read the session title from the transcript at most this often (and on each prompt)
+TITLE_FIRST_MS = 2_000  # same while no title is known yet (Claude Code writes it shortly after the first prompt)
+TITLE_TAIL = 256 * 1024  # only the transcript's tail is scanned for title records
+SUB_SILENT_MS = 30_000  # main Stop / prompt / SessionEnd: a subagent silent this long is gone (interrupted/stopped)
+SUB_IDLE_MS = 180_000  # safety net: a subagent with no hook/trace activity this long is closed as stopped
+SUB_IDLE_TOOL_MS = 600_000  # same, while it has a tool call open (a long Bash run sends no hooks meanwhile)
+MAX_REVIVABLE = 64  # per session: subagents closed by a silence rule, revived if they turn out to be alive
+SUB_GRACE_MS = 2_000  # its Agent call returned / it left `background_tasks`: wait this long for a late SubagentStop
 SKILL_TOOL = "Skill"
 SKILL_FIELDS = ("skill", "skill_name", "command", "name")  # Skill tool_input key holding the name (`skill` today)
 MAX_SESSIONS = 64
@@ -58,12 +77,13 @@ MAX_ORPHANS = 16  # cap on orphaned agents per session: a lost hook can't leak s
 SOURCE_RE = re.compile(r"^agent\.(?:builtin|custom|plugin)\.(.+)$")
 
 
-def run_label(cwd: Any, session: Any = "", ts_ms: int = 0) -> str:
-    """Neutral run topic, never the prompt: `Claude Code · <cwd basename> · <session short id> · <HH:MM>`, so several
-    concurrent sessions in the same folder stay distinguishable."""
+def run_label(cwd: Any, session: Any = "", ts_ms: int = 0, title: str = "") -> str:
+    """Run topic, never the prompt: `<session title> · <session short id> · <HH:MM>` when the session has a title
+    (/rename, else Claude Code's auto title), else `Claude Code · <cwd basename> · <session short id> · <HH:MM>`, so
+    several concurrent sessions in the same folder stay distinguishable."""
     base = os.path.basename(str(cwd or "").rstrip("/\\"))
-    parts = ["Claude Code"]
-    if base:
+    parts = [title] if title else ["Claude Code"]
+    if base and not title:
         parts.append(base)
     sid = re.sub(r"[^0-9A-Za-z]", "", str(session or ""))[:4]
     if sid:
@@ -90,6 +110,42 @@ def _meta(path: Any) -> dict:
         return {}
 
 
+def read_titles(path: Any) -> tuple[str, str]:
+    """(latest customTitle, latest aiTitle) in the last TITLE_TAIL bytes of a session transcript, scanning backwards;
+    '' where absent. Claude Code appends `{"type": "custom-title", "customTitle": ...}` on /rename and
+    `{"type": "ai-title", "aiTitle": ...}` for its auto title (undocumented records: missing/odd ones are ignored)."""
+    custom = ai = ""
+    if not isinstance(path, str) or not path:
+        return custom, ai
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - TITLE_TAIL))
+            lines = f.read(TITLE_TAIL).split(b"\n")
+    except Exception:
+        return custom, ai
+    for line in reversed(lines):
+        if custom:
+            break
+        if b"-title" not in line:
+            continue
+        kind = "custom" if b'"custom-title"' in line else "ai" if (not ai and b'"ai-title"' in line) else ""
+        if not kind:
+            continue
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        if kind == "custom" and d.get("type") == "custom-title":
+            custom = session_title(d.get("customTitle"))
+        elif kind == "ai" and d.get("type") == "ai-title":
+            ai = session_title(d.get("aiTitle"))
+    return custom, ai
+
+
 def _preview(v: Any) -> str:
     s = v if isinstance(v, str) else json.dumps(v, default=str)
     return s if len(s) <= PREVIEW else s[:PREVIEW] + " …"
@@ -104,6 +160,8 @@ class _Agent:
     tools: dict = field(default_factory=dict)  # tool_use_id -> span
     closed: bool = False
     tool_use_id: str | None = None  # the Agent tool call that launched this subagent
+    last: int = 0  # last hook/trace activity (subagents: the stopped-agent rules)
+    background: bool = False  # its Agent call returned `async_launched` / asked run_in_background
 
 
 @dataclass
@@ -137,12 +195,20 @@ class _Session:
     named: OrderedDict = field(default_factory=OrderedDict)  # agent_id -> _Agent (kept after SubagentStop)
     stopping: dict = field(default_factory=dict)  # Agent tool_use_id -> (_Agent, exit attrs, deadline)
     traced_agents: OrderedDict = field(default_factory=OrderedDict)  # Agent tool_use_ids whose trace span came
+    bg_calls: OrderedDict = field(default_factory=OrderedDict)  # Agent tool_use_ids asking run_in_background
     ending: int | None = None  # SessionEnd seen: close once traces are in, or at this deadline
     tool_owner: dict = field(default_factory=dict)  # tool_use_id -> _Agent, regardless of whose turn is current:
     # routes a late PostToolUse (e.g. a backgrounded Bash call) back to the agent that started it, even if that
     # agent's turn has since been superseded by a newer one continuing the same run (see _maybe_close_orphan)
     orphans: list = field(default_factory=list)  # _Agent mains left open/superseded, awaiting _maybe_close_orphan;
     # swept on session end/idle so an abandoned background item (hook never arrives) can't leak forever
+    closing: dict = field(default_factory=dict)  # agent_id -> (deadline, status, reason): close unless SubagentStop
+    revivable: OrderedDict = field(default_factory=OrderedDict)  # agent_id -> _Agent closed by a silence rule
+    transcript: str = ""  # main session transcript (title records)
+    custom_title: str = ""  # latest /rename title seen
+    ai_title: str = ""  # latest auto title seen
+    title_at: int | None = None  # last title check
+    title_sig: tuple = ()  # (size, mtime) of the transcript at that check
 
 
 @dataclass
@@ -185,12 +251,24 @@ class ClaudeCodeAdapter:
         s.last = now
         if p.get("cwd"):
             s.cwd = str(p["cwd"])
+        if isinstance(p.get("transcript_path"), str) and p["transcript_path"]:
+            s.transcript = p["transcript_path"]
         aid = p.get("agent_id")
         if aid and str(aid) in s.held and ev != "SubagentStart":  # the subagent is active: show it now
             self._spawn_sub(s, *s.held.pop(str(aid)), now, out)
+        if aid and str(aid) in s.revivable and ev != "SubagentStart":  # closed on silence but alive after all
+            self._revive(s, str(aid), now, out)
+        if aid and str(aid) in s.agents:
+            s.agents[str(aid)].last = now
+        if ev == "UserPromptSubmit":  # a /rename shows on the next prompt; the first run gets the title too
+            self._refresh_title(s, now, out, force=True)
+        if ev in ("Stop", "StopFailure", "UserPromptSubmit", "SessionEnd"):
+            self._sweep_silent(s, now, out, self._bg_running(s, p.get("background_tasks")))
         fn = getattr(self, f"_on_{ev}", None)
         if fn:
             fn(s, p, now, out)
+        if ev != "UserPromptSubmit" and s.id in self.sessions:
+            self._refresh_title(s, now, out)
         return out
 
     def tick(self, now: int) -> list[dict]:
@@ -203,10 +281,16 @@ class ClaudeCodeAdapter:
             for tid, (ag, extra, deadline) in list(s.stopping.items()):
                 if now >= deadline:
                     self._finish_sub(s, tid, now, out)
+            for aid, (deadline, status, reason) in list(s.closing.items()):
+                if now >= deadline:
+                    self._kill_sub(s, aid, now, out, reason, status)
+            for aid, ag in list(s.agents.items()):  # idle safety net: a lost SubagentStop can't leave it forever
+                if now - ag.last >= (SUB_IDLE_TOOL_MS if ag.tools else SUB_IDLE_MS):
+                    self._kill_sub(s, aid, now, out, "idle", revivable=True)
+            self._refresh_title(s, now, out)
             t = s.turn
-            # If OTel traces are on and we're waiting for token spans, close the turn when timeout expires
+            # traces on: stop waiting for this turn's token spans (the main agent itself lives on with its session)
             if t and t.wait_until is not None and now >= t.wait_until:
-                self._stop_turn(s, t, t.final, now, out, status="ok")
                 t.wait_until = None
             # Safety net: don't let orphans pile up (a lost hook can't leak forever)
             while len(s.orphans) > MAX_ORPHANS:
@@ -268,6 +352,10 @@ class ClaudeCodeAdapter:
                     s.tool_owner[tid] = ag
                     return
             ag.turn.tasks.append([tid, sub, span, False])
+            if tin.get("run_in_background") is True:
+                s.bg_calls[tid] = None
+                while len(s.bg_calls) > MAX_DONE_IDS:
+                    s.bg_calls.popitem(last=False)
             out.append({"kind": "start", "span": span})
             ag.tools[tid] = span
             s.tool_owner[tid] = ag
@@ -302,6 +390,8 @@ class ClaudeCodeAdapter:
 
     def _on_PostToolUse(self, s: _Session, p: dict, now: int, out: list, status: str = "ok") -> None:
         tid = str(p.get("tool_use_id") or "")
+        if tid and str(p.get("tool_name") or "") in AGENT_TOOLS:
+            self._agent_returned(s, tid, p, status, now, out)
         ag = s.tool_owner.pop(tid, None) or self._agent_for(s, p, now, out, open_turn=False)
         if ag is None or tid not in ag.tools:
             if tid:
@@ -313,8 +403,15 @@ class ClaudeCodeAdapter:
         if status == "error" and p.get("error"):
             extra["exception.message"] = _preview(str(p["error"]))
         self._end_tool(ag, tid, now, out, status, extra)
+        if str(p.get("tool_name") or "") in STOP_TOOLS and status == "ok":
+            tin = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
+            target = str(tin.get("task_id") or tin.get("shell_id") or "")
+            if target in s.agents:  # the main agent stopped this background subagent (TaskStop)
+                self._kill_sub(s, target, now, out, "stopped")
         if not ag.tools and not ag.closed and not (ag is ag.turn.main and ag.turn.stopped):
             self._start_llm(ag, now, out)
+        elif str(p.get("tool_name") or "") in AGENT_TOOLS:
+            self._unwait(ag, now, out)
         self._maybe_close_orphan(s, ag, now, out)
 
     def _on_PostToolUseFailure(self, s: _Session, p: dict, now: int, out: list) -> None:
@@ -356,7 +453,8 @@ class ClaudeCodeAdapter:
         span = self._span(turn, task[2], typ, now, {"agentglow.agent": typ, "input.value": str(desc),
                                                     "agentglow.claude_code.agent_id": aid})
         out.append({"kind": "start", "span": span})
-        ag = s.agents[aid] = _Agent(typ, span, turn, tool_use_id=task[0] or tid)
+        ag = s.agents[aid] = _Agent(typ, span, turn, tool_use_id=task[0] or tid, last=now)
+        ag.background = (ag.tool_use_id or "") in s.bg_calls
         s.named[aid] = ag
         self.names[aid] = typ
         while len(self.names) > MAX_DONE_IDS:
@@ -369,6 +467,7 @@ class ClaudeCodeAdapter:
     def _on_SubagentStop(self, s: _Session, p: dict, now: int, out: list) -> None:
         aid = str(p.get("agent_id") or "")
         ag = s.agents.pop(aid, None)
+        s.closing.pop(aid, None)
         if ag is None:
             return
         text = str(p.get("last_assistant_message") or "").strip()
@@ -397,6 +496,11 @@ class ClaudeCodeAdapter:
                 if t_span[0] is None:
                     t_span[0] = "standin"
                     self._end(t_span[2], now, out, "unset")
+        self._gone_from_background(s, p.get("background_tasks"), now)
+
+    def _on_StopFailure(self, s: _Session, p: dict, now: int, out: list) -> None:
+        """The turn ended on an API error (Stop does not fire): same as Stop."""
+        self._on_Stop(s, p, now, out)
 
     def _on_SessionEnd(self, s: _Session, p: dict, now: int, out: list) -> None:
         if s.traces and self._pending_traces(s):  # trace spans still on the way: tick() / traces() close it
@@ -405,6 +509,134 @@ class ClaudeCodeAdapter:
         self._close_session(s, now, out)
         self.sessions.pop(s.id, None)
         self._ended(s.id)
+
+    # ------------------------------------------------------------------ stopped / interrupted subagents
+    def _agent_returned(self, s: _Session, tid: str, p: dict, status: str, now: int, out: list) -> None:
+        """PostToolUse(Failure) of the Agent call that launched a subagent. `async_launched` (or run_in_background)
+        = it moved to the background and keeps running; a failure (Esc / abort: `is_interrupt`) = it was stopped:
+        close it now; any other return = it finished: close it unless its SubagentStop lands within SUB_GRACE_MS."""
+        ag = next((a for a in s.agents.values() if a.tool_use_id == tid), None)
+        resp = p.get("tool_response")
+        rstat = resp.get("status") if isinstance(resp, dict) else None
+        if rstat == "async_launched" or (ag is not None and ag.background and status == "ok"):
+            if ag is not None:
+                ag.background = True
+            else:
+                s.bg_calls[tid] = None
+            return
+        if ag is None:
+            return
+        aid = next(k for k, v in s.agents.items() if v is ag)
+        if status == "error":
+            self._kill_sub(s, aid, now, out, "interrupted" if p.get("is_interrupt") else "failed", end_task=False)
+        elif "interrupted by user" in json.dumps(resp, default=str)[:4000]:
+            self._kill_sub(s, aid, now, out, "interrupted", end_task=False)
+        else:
+            s.closing.setdefault(aid, (now + SUB_GRACE_MS, "ok", "returned"))
+
+    @staticmethod
+    def _bg_running(s: _Session, tasks: Any) -> set | None:
+        """Agent ids Stop's `background_tasks` lists as still in flight, or None when it can't tell (field absent, or
+        its subagent entry ids match no known agent id). No `subagent` entry at all = none running."""
+        if not isinstance(tasks, list):
+            return None
+        subs = [t for t in tasks if isinstance(t, dict) and str(t.get("type") or "") in ("subagent", "local_agent")]
+        ids = {str(t.get("id") or "") for t in subs}
+        return ids if not subs or ids & set(s.agents) else None
+
+    def _gone_from_background(self, s: _Session, tasks: Any, now: int) -> None:
+        """A background subagent missing from Stop's `background_tasks` was stopped (e.g. "All background agents
+        stopped") or just finished: close it unless its SubagentStop lands within SUB_GRACE_MS."""
+        running = self._bg_running(s, tasks)
+        if running is None:
+            return
+        for aid, ag in s.agents.items():
+            if ag.background and aid not in running:
+                s.closing.setdefault(aid, (now + SUB_GRACE_MS, "error", "stopped"))
+
+    def _sweep_silent(self, s: _Session, now: int, out: list, running: set | None = None) -> None:
+        """Main Stop / prompt / SessionEnd: a subagent silent for SUB_SILENT_MS was interrupted or stopped (Claude
+        Code fires no SubagentStop then), unless `background_tasks` says it is still running."""
+        for aid, ag in list(s.agents.items()):
+            if now - ag.last >= SUB_SILENT_MS and not (running and aid in running):
+                self._kill_sub(s, aid, now, out, "stopped", revivable=True)
+
+    def _kill_sub(self, s: _Session, aid: str, now: int, out: list, reason: str, status: str = "error",
+                  end_task: bool = True, revivable: bool = False) -> None:
+        """Close a subagent that will get no SubagentStop (status error → `exit` failed), and end its parent's
+        still-open Agent tool call so the parent stops waiting on it."""
+        s.closing.pop(aid, None)
+        ag = s.agents.pop(aid, None)
+        if ag is None or ag.closed:
+            return
+        ag.turn.subs.pop(aid, None)
+        self._close_agent(ag, now, out, {"agentglow.claude_code.stopped": reason} if status != "ok" else {}, status)
+        if revivable:  # only a guess (silence): a later event for this agent id brings it back
+            s.revivable[aid] = ag
+            while len(s.revivable) > MAX_REVIVABLE:
+                s.revivable.popitem(last=False)
+        tid = ag.tool_use_id
+        owner = s.tool_owner.get(tid) if tid and end_task else None
+        if owner is not None and tid in owner.tools:
+            s.tool_owner.pop(tid, None)
+            self._end_tool(owner, tid, now, out, status)
+            self._unwait(owner, now, out)
+        self._maybe_close_orphan(s, ag.turn.main, now, out)
+
+    def _unwait(self, ag: _Agent, now: int, out: list) -> None:
+        """Its Agent call ended: the parent leaves "waiting" (thinking, as after a normal return). If its turn is
+        already over, the thinking span is closed right away (no pulse)."""
+        if ag.tools or ag.closed:
+            return
+        self._start_llm(ag, now, out)
+        if ag is ag.turn.main and ag.turn.stopped and ag.llm is not None:
+            self._end(ag.llm, now, out, extra={"agentglow.llm.pulse": False})
+            ag.llm = None
+
+    def _revive(self, s: _Session, aid: str, now: int, out: list) -> None:
+        """A subagent closed by a silence rule sent another event: it was alive. Re-open it as a new agent span (same
+        name, same parent task span → same parent agent) so the event lands on it; its run must still be open."""
+        old = s.revivable.pop(aid)
+        main = old.turn.main
+        if main is None or main.closed:
+            return
+        turn = main.turn
+        attrs = {k: v for k, v in old.span["attributes"].items() if k != "agentglow.claude_code.stopped"}
+        span = self._span(turn, {"span_id": old.span["parent_span_id"]}, old.name, now, attrs)
+        out.append({"kind": "start", "span": span})
+        ag = s.agents[aid] = _Agent(old.name, span, turn, tool_use_id=old.tool_use_id, last=now, background=old.background)
+        s.named[aid] = ag
+        turn.subs[aid] = ag
+        self._start_llm(ag, now, out)
+
+    # ------------------------------------------------------------------ session title (run label)
+    def _refresh_title(self, s: _Session, now: int, out: list, force: bool = False) -> None:
+        """Re-read the session title from the transcript tail (cheap: at most every TITLE_EVERY_MS unless forced,
+        skipped when the file is unchanged). A new title relabels the live run: `run` event status `renamed`."""
+        every = TITLE_EVERY_MS if (s.custom_title or s.ai_title) else TITLE_FIRST_MS
+        if not s.transcript or (not force and s.title_at is not None and now - s.title_at < every):
+            return
+        s.title_at = now
+        try:
+            st = os.stat(s.transcript)
+        except OSError:
+            return
+        sig = (st.st_size, st.st_mtime_ns)
+        if sig == s.title_sig:
+            return
+        s.title_sig = sig
+        old = s.custom_title or s.ai_title
+        custom, ai = read_titles(s.transcript)
+        s.custom_title = custom or s.custom_title  # a /rename older than the tail window still wins over ai titles
+        s.ai_title = ai or s.ai_title
+        new = s.custom_title or s.ai_title
+        main = s.turn.main if s.turn else None
+        if new == old or main is None or main.closed:
+            return
+        topic = run_label(s.cwd, s.id, main.span["start_time_ms"], new)
+        main.span["attributes"]["agentglow.run.topic"] = topic  # its end (run completed) carries it too
+        out.append({"type": "run", "run_id": main.turn.run_id, "status": "renamed", "topic": topic,
+                    "workflow": "claude-code", "ts": now})
 
     @staticmethod
     def _pending_traces(s: _Session) -> bool:
@@ -465,7 +697,7 @@ class ClaudeCodeAdapter:
         trace_id = _hex(16)
         turn = s.turn = _Turn(run_id, trace_id, start=now, traced=s.traces)
         s.turns = (s.turns + [turn])[-8:]
-        topic = run_label(s.cwd, s.id, now)
+        topic = run_label(s.cwd, s.id, now, s.custom_title or s.ai_title)
         span = self._span(turn, None, "claude", now, {
             "agentglow.agent": "claude", "agentglow.run.id": turn.run_id, "agentglow.run.topic": topic,
             "agentglow.run.workflow": "claude-code", "agentglow.claude_code.session": s.id})
@@ -529,7 +761,7 @@ class ClaudeCodeAdapter:
 
     def _stop_turn(self, s: _Session, turn: _Turn, text: str, now: int, out: list, status: str = "ok") -> None:
         """Really close a turn's main agent for good: end its thinking span, close tools and stand-in tasks.
-        Used only by _close_session and the trace-wait-timeout path."""
+        Used only by _close_session."""
         turn.stopped = True
         turn.wait_until = None  # clear any trace-wait deadline
         # Close stand-in task spans
@@ -639,8 +871,12 @@ class ClaudeCodeAdapter:
         turn = self._turn_for(s, sp)
         if kind == "llm_request":
             aid = a.get("agent_id")
+            if aid and str(aid) in s.revivable and (sp.get("end_time_ms") or 0) > s.revivable[str(aid)].last:
+                self._revive(s, str(aid), now, out)  # it was busy after its last hook: alive after all
             ag = s.named.get(str(aid)) if aid else None
             ag = ag or (turn.main if turn else None)
+            if ag is not None:
+                ag.last = now
             if ag is not None and not ag.closed:
                 out.append(self._llm_event(ag.turn.run_id, ag.span["span_id"], sp))
         elif kind == "tool" and a.get("tool_name") in AGENT_TOOLS:
@@ -650,7 +886,7 @@ class ClaudeCodeAdapter:
                 s.traced_agents.popitem(last=False)
             self._finish_sub(s, tid, now, out)
         elif kind == "interaction" and turn is not None and turn.wait_until is not None:
-            self._stop_turn(s, turn, turn.final, now, out)
+            turn.wait_until = None  # this turn's token spans are in; the main agent stays until SessionEnd / idle
         if s.ending is not None and not self._pending_traces(s):
             self._close_session(s, now, out)
             self.sessions.pop(s.id, None)

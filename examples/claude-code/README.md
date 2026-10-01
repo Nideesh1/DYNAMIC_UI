@@ -15,6 +15,34 @@ session that was already open. Undo everything with `npx agentglow remove`.
 
 Just trying it? `npx agentglow claude` runs one Claude Code session with temporary settings and installs nothing.
 
+## Claude Code plugin
+
+Instead of `setup`, install AgentGlow as a [plugin](https://code.claude.com/docs/en/plugins) from this repo's
+marketplace. Inside Claude Code:
+```
+/plugin marketplace add Nideesh1/agentglow
+/plugin install agentglow@agentglow
+```
+(or from a shell: `claude plugin marketplace add Nideesh1/agentglow && claude plugin install agentglow@agentglow`).
+Restart Claude Code once. The plugin ([plugin/](../../plugin)) brings:
+
+- the same async HTTP hooks as [settings.json](settings.json), posting to `http://localhost:8100/v1/claude-code`
+  (with `x-api-key: $AGENTGLOW_API_KEY` when set)
+- a `SessionStart` hook ([ensure-server.mjs](../../plugin/scripts/ensure-server.mjs)) that probes `/live/health`
+  (about 50 ms when the server is up) and otherwise starts `npx -y agentglow@latest start --background --quiet`
+  in the background. It prints nothing and never blocks. The very first start downloads Python + the server
+  (30-60 s), so the first session's events can be missed
+- the [agentglow skill](../../skills/agentglow) and `/agentglow:open` (status + open the 3D view)
+
+Limits: plugins cannot set environment variables, so the OTel traces env (token-sized pulses) is not included and
+LLM pulses show `0→0 tok`. For token counts run `npx agentglow setup` too: it detects the enabled plugin, skips its
+own hooks and adds only the traces env. The plugin is fixed to port 8100 and a local server; for another port or a
+remote `AGENTGLOW_URL` use `setup` instead.
+
+**Use one or the other** for hooks. With both setup's hooks and the plugin, every event posts twice;
+`npx agentglow status` warns about it, and `npx agentglow remove` (or `/plugin` to disable the plugin) fixes it.
+Try the plugin for one session without installing: `claude --plugin-dir ./plugin` from a clone.
+
 ## CLI
 
 | Command | What it does |
@@ -58,7 +86,7 @@ start the server yourself.
 
 | Claude Code | AgentGlow |
 |---|---|
-| each prompt you submit | a run (topic = `Claude Code · <folder>`, never your prompt) |
+| your session | one run (topic = the session title from /rename or Claude Code's auto title, else `Claude Code · <folder>`; never your prompt) |
 | main session | agent `claude`: thinking between tool calls, waiting while subagents work |
 | `Agent` tool call → subagent | `task` tool + spawned subagent (named after its type) with the delegation text |
 | any tool (`Bash`, `Read`, `Glob`, …) | tool event on the agent that called it |

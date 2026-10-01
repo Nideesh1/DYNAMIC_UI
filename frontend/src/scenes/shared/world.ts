@@ -21,7 +21,7 @@ export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "fai
 
 // ------------------------------------------------------------------ event contract (v2)
 export type WorldEvent =
-  | { type: "run"; run_id: string; status: "started" | "completed" | "failed"; topic: string; workflow: string; ts: number }
+  | { type: "run"; run_id: string; status: "started" | "renamed" | "completed" | "failed"; topic: string; workflow: string; ts: number }
   | { type: "step"; run_id: string; step: StepName; status: "running" | "done" | "failed"; ts: number }
   | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; ts: number }
   | { type: "exit"; run_id: string; id: string; status: "done" | "failed"; ts: number }
@@ -224,6 +224,10 @@ export const world = {
   hasGraph: false,
   /** performance.now() when hasGraph flipped true (drives the fade-in / layout ease) */
   hasGraphAt: 0,
+  /** runs that touched the graph; the side graph shows while one of them is live (see graphShown) */
+  graphRuns: new Set<string>(),
+  /** performance.now() of the last graph event */
+  graphAt: 0,
   focus: null as string | null, // instance id most recently active
   focusAt: 0,
   /** last `task` / `Agent` tool call (performance.now()): a subagent is about to spawn (FitCamera batches it) */
@@ -274,7 +278,10 @@ export function apply(ev: WorldEvent) {
   if (ev.type !== "mcp_register") world.ticker = [ev, ...world.ticker].slice(0, 60);
   switch (ev.type) {
     case "run": {
-      if (ev.status === "started") {
+      if (ev.status === "renamed") {
+        const r = world.runs.get(ev.run_id);
+        if (r) r.topic = ev.topic; // e.g. a Claude Code session /rename: label only, run state untouched
+      } else if (ev.status === "started") {
         const slot = freeSlot();
         world.runs.set(ev.run_id, {
           id: ev.run_id,
@@ -434,7 +441,11 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "graph":
+      // coming back after it faded with its run: fade in again instead of popping
+      if (world.hasGraph && !graphShown(now)) world.hasGraphAt = now;
       setHasGraph(true, false);
+      world.graphAt = now;
+      if (ev.run_id) world.graphRuns.add(ev.run_id);
       world.instances.get(ev.id)?.nodes && ev.nodes.forEach((n) => world.instances.get(ev.id)!.nodes.add(n));
       for (const n of ev.nodes.slice(0, 20)) world.flares.push({ id: ++seq, run: ev.run_id, instance: ev.id, node: n, op: ev.op, start: now });
       if (ev.op === "read") world.stats.graphReads += ev.nodes.length;
@@ -646,6 +657,8 @@ export function resetWorld() {
   world.unauthorized = false;
   world.hasGraph = false;
   world.hasGraphAt = 0;
+  world.graphRuns.clear();
+  world.graphAt = 0;
   notify();
 }
 
@@ -670,6 +683,21 @@ export const MCP_IDLE_MS = 90_000;
 /** Should this MCP server (and its used backends) be drawn now? Shared "only show resources while used" rule. */
 export function mcpWanted(srv: McpServer, now = performance.now()): boolean {
   return srv.calls > 0 && (srv.inflight > 0 || now - srv.activeAt < MCP_IDLE_MS);
+}
+
+/**
+ * Is the side graph shown now? Like MCP servers it is a resource shown while used: from the first graph event
+ * until every run that touched it has ended (+ RUN_LINGER_MS), so it fades out with its run. Sim keeps it.
+ */
+export function graphShown(now = performance.now()): boolean {
+  if (!world.hasGraph) return false;
+  if (world.mode === "sim" || now - world.graphAt < RUN_LINGER_MS) return true;
+  for (const id of world.graphRuns) {
+    const r = world.runs.get(id);
+    if (r && (!r.endedAt || now - r.endedAt < RUN_LINGER_MS)) return true;
+    if (!r || r.endedAt) world.graphRuns.delete(id);
+  }
+  return false;
 }
 
 /** How long the side graph fades in after hasGraph flips true (ms). */

@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
-  baseUrl, claudeSettings, installSettingsFile, isOurHook, mergeSettings, readState, START_MARK, startHookCommand,
+  baseUrl, claudeSettings, enabledAgentglowPlugins, installSettingsFile, isOurHook, mergeSettings, readState, START_MARK, startHookCommand,
   statePath, uninstallSettingsFile, unmergeSettings,
 } from "../lib/settings.mjs";
 import { cacheDir, uvAsset, uvAssetUrl, UV_VERSION } from "../lib/uv.mjs";
@@ -16,6 +16,8 @@ import { pySpecs, serveArgv } from "../lib/server.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(here, "..", "agentglow.mjs");
 const example = path.join(here, "..", "..", "..", "examples", "claude-code", "settings.json");
+const repo = path.join(here, "..", "..", "..");
+const pluginHooks = path.join(repo, "plugin", "hooks", "hooks.json");
 
 const FOREIGN = {
   model: "opus",
@@ -40,7 +42,7 @@ test("temp settings substitute the port / remote URL everywhere", () => {
   const s = claudeSettings(baseUrl({ port: 8165 }));
   assert.equal(s.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, "http://localhost:8165/v1/traces");
   const urls = Object.values(s.hooks).flat().flatMap((g) => g.hooks.map((h) => h.url));
-  assert.equal(urls.length, 9);
+  assert.equal(urls.length, 10);
   assert.ok(urls.every((u) => u === "http://localhost:8165/v1/claude-code"));
   assert.ok(!JSON.stringify(s).includes("8100"));
   const r = claudeSettings(baseUrl({ url: "https://glow.example.com/" }));
@@ -71,7 +73,7 @@ test("merge is idempotent and re-install on another port replaces our entries", 
   assert.deepEqual(b.state, a.state);
   const c = mergeSettings(a.settings, "http://localhost:8165", a.state);
   const urls = Object.values(c.settings.hooks).flat().flatMap((g) => g.hooks).filter(isOurHook).map((h) => h.url);
-  assert.equal(urls.length, 9);
+  assert.equal(urls.length, 10);
   assert.ok(urls.every((u) => u.includes(":8165/")));
   assert.equal(c.settings.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, "http://localhost:8165/v1/traces");
 });
@@ -263,7 +265,7 @@ test("AGENTGLOW_URL: setup points hooks at the remote server and adds no Session
   assert.ok(r.out.includes("Done. Just run `claude` as usual. View: http://127.0.0.1:9/neural  Undo: npx agentglow remove"));
   const s = JSON.parse(fs.readFileSync(file, "utf8"));
   const hooks = Object.values(s.hooks).flat().flatMap((g) => g.hooks);
-  assert.equal(hooks.length, 9);
+  assert.equal(hooks.length, 10);
   assert.ok(hooks.every((h) => h.type === "http" && h.url === "http://127.0.0.1:9/v1/claude-code"));
   assert.equal(s.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, "http://127.0.0.1:9/v1/traces");
   assert.ok(!fs.existsSync(path.join(home, "cache", "cli")));
@@ -315,5 +317,46 @@ test("start --quiet (the SessionStart hook) prints nothing and exits 0 fast", as
   const q = runCli(["start", "--background", "--quiet", "--port", "8167"], home, REMOTE);
   assert.equal(q.code, 0);
   assert.equal(q.out, "");
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ---------- Claude Code plugin (plugin/ at the repo root) ----------
+
+test("plugin hooks.json = the generated http hooks on 8100 + the ensure-server SessionStart command", { skip: !fs.existsSync(pluginHooks) }, () => {
+  const { hooks } = JSON.parse(fs.readFileSync(pluginHooks, "utf8"));
+  const start = hooks.SessionStart[0].hooks[0];
+  assert.equal(start.type, "command");
+  assert.deepEqual(start.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/ensure-server.mjs", "--port", "8100"]);
+  const rest = { ...hooks, SessionStart: hooks.SessionStart.slice(1) };
+  assert.deepEqual(rest, claudeSettings(baseUrl({ port: 8100 })).hooks);
+});
+
+test("plugin skill is a copy of skills/agentglow/SKILL.md", { skip: !fs.existsSync(path.join(repo, "plugin")) }, () => {
+  const a = fs.readFileSync(path.join(repo, "skills", "agentglow", "SKILL.md"), "utf8");
+  const b = fs.readFileSync(path.join(repo, "plugin", "skills", "agentglow", "SKILL.md"), "utf8");
+  assert.equal(b, a, "run: cp skills/agentglow/SKILL.md plugin/skills/agentglow/SKILL.md");
+});
+
+test("enabledAgentglowPlugins finds only enabled agentglow@* ids", () => {
+  assert.deepEqual(enabledAgentglowPlugins({ enabledPlugins: { "agentglow@agentglow": true, "x@agentglow": true, "agentglow@m2": false } }), ["agentglow@agentglow"]);
+  assert.deepEqual(enabledAgentglowPlugins({}), []);
+});
+
+test("setup with the plugin enabled adds only the traces env and drops earlier setup hooks", () => {
+  const home = tmpdir();
+  const file = path.join(home, ".claude", "settings.json");
+  fs.mkdirSync(path.dirname(file));
+  // an earlier setup (hooks present), then the plugin got enabled
+  const prior = mergeSettings({ enabledPlugins: { "agentglow@agentglow": true } }, "http://127.0.0.1:9").settings;
+  fs.writeFileSync(file, JSON.stringify(prior, null, 2) + "\n");
+  const r = runCli(["setup", "--no-open"], home, REMOTE);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /plugin is enabled \(agentglow@agentglow\)/);
+  const s = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(s.hooks, undefined);
+  assert.equal(s.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, "http://127.0.0.1:9/v1/traces");
+  assert.deepEqual(s.enabledPlugins, { "agentglow@agentglow": true });
+  const st = runCli(["status"], home, REMOTE);
+  assert.match(st.out, /hooks: +from the Claude Code plugin agentglow@agentglow/);
   fs.rmSync(home, { recursive: true, force: true });
 });

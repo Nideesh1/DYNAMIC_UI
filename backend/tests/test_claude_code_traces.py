@@ -132,3 +132,21 @@ def test_merged_agents_exit_after_trace_wait_without_traces():
     # After TRACE_WAIT_MS deadline, tick should close the agents and session
     hub.tick(t + TRACE_WAIT_MS + 1)
     assert not hub.mapper.runs and [e["type"] for e in hub.buffer].count("exit") == 2
+
+
+def test_traced_session_main_agent_outlives_its_turns():
+    """Traces on: a turn's Stop + trace wait must not close the main agent; the next prompt reuses it."""
+    hub = Hub()
+    t = T0
+    hub.ingest_hook(hook("UserPromptSubmit", prompt="x"), t)
+    hub.claude_code.sessions[SID].traces = True
+    hub.claude_code.sessions[SID].turn.traced = True
+    hub.ingest_hook(hook("Stop", last_assistant_message="ok"), t + 100)
+    hub.tick(t + 100 + TRACE_WAIT_MS + 1)
+    hub.ingest_hook(hook("UserPromptSubmit", prompt="y"), t + 60_000)
+    hub.ingest_hook(hook("Stop", last_assistant_message="ok"), t + 61_000)
+    hub.tick(t + 61_000 + TRACE_WAIT_MS + 1)
+    evs = list(hub.buffer)
+    assert [e["agent"] for e in evs if e["type"] == "spawn"] == ["claude"]
+    assert [e["status"] for e in evs if e["type"] == "run"] == ["started"]
+    assert not [e for e in evs if e["type"] == "exit"]

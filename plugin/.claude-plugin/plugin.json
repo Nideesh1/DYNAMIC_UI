@@ -1,0 +1,20 @@
+{
+  "name": "agentglow",
+  "displayName": "AgentGlow",
+  "version": "0.2.8",
+  "description": "Watch Claude Code, its subagents and tool calls live in 3D. Async HTTP hooks post to a local AgentGlow server (port 8100), which starts with each session.",
+  "author": {
+    "name": "Nideesh1",
+    "url": "https://github.com/Nideesh1"
+  },
+  "homepage": "https://github.com/Nideesh1/agentglow#readme",
+  "repository": "https://github.com/Nideesh1/agentglow",
+  "license": "MIT",
+  "keywords": [
+    "observability",
+    "subagents",
+    "hooks",
+    "3d",
+    "visualization"
+  ]
+}

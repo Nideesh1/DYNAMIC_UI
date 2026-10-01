@@ -1,0 +1,15 @@
+{
+  "name": "agentglow",
+  "description": "AgentGlow: watch Claude Code, its subagents and tool calls live in 3D",
+  "owner": {
+    "name": "Nideesh1",
+    "url": "https://github.com/Nideesh1"
+  },
+  "plugins": [
+    {
+      "name": "agentglow",
+      "source": "./plugin",
+      "description": "Live 3D view of Claude Code sessions, subagents and tool calls (local server on port 8100)"
+    }
+  ]
+}

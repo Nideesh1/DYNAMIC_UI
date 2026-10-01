@@ -606,7 +606,7 @@ function AgentDetail({ i }: { i: Instance }) {
       <section>
         <h4>Run</h4>
         <p>{run ? run.topic : i.run}</p>
-        {run && (
+        {run?.hasSteps && (
           <div className="ap-steps">
             {STEPS.map((s) => (
               <span key={s} data-status={run.steps[s]}>
