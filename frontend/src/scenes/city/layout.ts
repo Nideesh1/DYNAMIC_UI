@@ -4,8 +4,7 @@
  * Pure + allocation-free hot paths.
  */
 import * as THREE from "three";
-import { agentLive, fit, serverPos, type LayoutPreset } from "../shared/kit";
-import { bestCols } from "../shared/kit/presets";
+import { agentLive, bestCols, clusterRows, fit, serverPos, type LayoutPreset } from "../shared/kit";
 import { hash01, world, type AgentType, type Instance } from "../shared/world";
 import { isSubRole } from "../shared/spread";
 
@@ -44,9 +43,8 @@ export const cityGrid: LayoutPreset = {
     out.angle = -Math.PI / 2; // subagents fan toward the camera, the avenue runs in front
   },
   cluster(_lane, k, m, ctx, out) {
-    // drone swarms hover in a row over the lots in front of the districts
-    out.a = (k - (m - 1) / 2) * 7;
-    out.b = -(ctx.hh + STREET * fit.spread + 6);
+    // drone swarms hover in rows over the lots in front of the districts
+    clusterRows(k, m, ctx, -(ctx.hh + STREET * fit.spread + 6), out);
   },
   periphery: "sides",
 };

@@ -56,6 +56,8 @@ export const fit = {
   cam: { want: 0, dist: 0, user: 1, points: 0 },
   /** how much of the free area the content's screen bounds fill [x, y] (debug / verification) */
   fill: [0, 0] as [number, number],
+  /** world units per css px at the fitted camera distance (px-clamped labels: world size = px * wpp) */
+  wpp: 0.05,
   /** screen shrink of a stage "up" (b) step: 1 for xy stages, |sin(elevation)| for a tilted xz ground plane */
   foreshorten: 1,
 };
@@ -171,6 +173,8 @@ const _c = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const _q = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+/** max shift of the projection centre (fraction of the free half extent): the orbit target stays in the free area */
+const SHIFT = 0.85;
 /** floats per framed point (see FitCamera's buffer) */
 const S = 8;
 
@@ -252,6 +256,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
   useFrame((_, dtRaw) => {
     const s = st.current;
     const B = buf.current;
+    lastBuf = B;
     const dt = Math.min(0.1, dtRaw);
     const now = performance.now();
     const W = Math.max(1, size.width);
@@ -308,6 +313,9 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
       s.lastFit = now;
     }
     s.desired = s.want;
+    // world per px at the fitted distance (hysteresis: cluster spacing follows it, then the fit follows that)
+    const wpp = (2 * tanH * s.want * s.user) / H;
+    if (Math.abs(wpp - fit.wpp) / fit.wpp > 0.1) fit.wpp = wpp;
     fit.cam.want = s.want;
     fit.cam.dist = cur;
     fit.cam.user = s.user;
@@ -319,8 +327,8 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     let shy = 0;
     if (n) {
       bounds(B.a, n, cur);
-      shx = THREE.MathUtils.clamp((BX[0] + BX[1]) / 2, -hx * 0.55, hx * 0.55);
-      shy = THREE.MathUtils.clamp((BX[2] + BX[3]) / 2, -hy * 0.55, hy * 0.55);
+      shx = THREE.MathUtils.clamp((BX[0] + BX[1]) / 2, -hx * SHIFT, hx * SHIFT);
+      shy = THREE.MathUtils.clamp((BX[2] + BX[3]) / 2, -hy * SHIFT, hy * SHIFT);
       s.aspect += (THREE.MathUtils.clamp((BX[1] - BX[0]) / Math.max(1e-4, BX[3] - BX[2]), 0.5, 4) - s.aspect) * 0.1;
       fit.fill[0] = (BX[1] - BX[0]) / (2 * hx);
       fit.fill[1] = (BX[3] - BX[2]) / (2 * hy);
@@ -372,10 +380,24 @@ function bounds(a: Float64Array, n: number, d: number) {
 function spans(a: Float64Array, n: number, d: number, m: number, hx: number, hy: number) {
   for (let i = 0; i < n; i++) if (d - a[i * S + 2] - a[i * S + 3] <= 0.05) return false; // a point behind the camera
   bounds(a, n, d);
-  // the centring shift is clamped (bounds(...) centre within 0.55 of the half extent): account for the remainder
+  // the centring shift is clamped (to SHIFT of the half extent): account for the remainder
   const cx = (BX[0] + BX[1]) / 2, cy = (BX[2] + BX[3]) / 2;
-  const ex = Math.max(0, Math.abs(cx) - hx * 0.55), ey = Math.max(0, Math.abs(cy) - hy * 0.55);
+  const ex = Math.max(0, Math.abs(cx) - hx * SHIFT), ey = Math.max(0, Math.abs(cy) - hy * SHIFT);
   return ((BX[1] - BX[0]) / 2 + ex) * m <= hx && ((BX[3] - BX[2]) / 2 + ey) * m <= hy;
 }
 
-if (typeof window !== "undefined") (window as unknown as { __agentglowFit?: typeof fit }).__agentglowFit = fit;
+let lastBuf: { a: Float64Array; n: number } | null = null;
+/** debug: the points framed last frame, as [screen x, screen y] in view-angle units at the current distance */
+function framedPoints() {
+  const B = lastBuf;
+  if (!B) return [];
+  const out: number[][] = [];
+  for (let i = 0; i < B.n; i++) {
+    const k = i * S;
+    const depth = fit.cam.dist - B.a[k + 2];
+    out.push([+(B.a[k] / depth).toFixed(3), +(B.a[k + 1] / depth).toFixed(3), +B.a[k + 3].toFixed(2), +B.a[k + 4].toFixed(3), +B.a[k + 5].toFixed(3)]);
+  }
+  return out;
+}
+
+if (typeof window !== "undefined") (window as unknown as { __agentglowFit?: typeof fit & { framedPoints: typeof framedPoints } }).__agentglowFit = Object.assign(fit, { framedPoints });

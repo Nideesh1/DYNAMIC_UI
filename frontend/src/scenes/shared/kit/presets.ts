@@ -11,7 +11,12 @@
  *           parent. subway, tunnel, factory, circuit.
  *   grid    runs fill a grid of districts sized to the aspect. city.
  *   drift   radial with looser spacing (themes add their own drift to `live`). ocean, flow.
+ *
+ * Cluster balls (grouped mode) are spaced by the on-screen size of their count badge (clusterCell): badges are
+ * px-clamped labels, so their world size follows the camera distance (fit.wpp).
  */
+import { labels } from "./labels";
+import { fit } from "./fit";
 
 export type LocalStyle = {
   /** spacing between top-level agents of a run along its side line (planner | researcher | writer) */
@@ -83,11 +88,52 @@ function ring(i: number, ctx: PresetCtx, out: Slot2, doStretch: boolean, gap: nu
   out.angle = Math.atan2(out.b, out.a);
 }
 
+// ------------------------------------------------------------------ cluster spacing
+
+/** on-screen size of a cluster badge ("38 runs · 101 agents" + a stats line) and a run label line, css px */
+const BADGE_PX_W = 186;
+const BADGE_PX_H = 46;
+const RUN_LABEL_PX = 34;
+/**
+ * World size of one cluster cell (ball + its badge) at the current camera distance. The px size is capped to what
+ * the free canvas area can hold (`ring` = clusters on a ring of that many, else rows of >= 2), so the spacing
+ * never feeds back into an ever-wider fit; on a tiny canvas the declutter pass hides the badges that still collide.
+ */
+export const clusterCellSize = { w: 7, h: 6.5 };
+function cell(ring = 0) {
+  const k = labels.pxk;
+  const fw = Math.max(120, fit.w - fit.insets.left - fit.insets.right);
+  const fh = Math.max(100, fit.h - fit.insets.top - fit.insets.bottom);
+  let wpx = BADGE_PX_W * k * 1.08;
+  wpx = ring > 1 ? Math.min(wpx, (0.85 * Math.min(fw, fh * 1.3)) / (1 / Math.sin(PI / ring) + 1)) : Math.min(wpx, (0.85 * fw) / 2);
+  const hpx = Math.min(BADGE_PX_H * k, 0.22 * fh);
+  clusterCellSize.w = Math.max(7, wpx * fit.wpp);
+  clusterCellSize.h = Math.max(6.5, 5 + hpx * fit.wpp);
+  return clusterCellSize;
+}
+
+/**
+ * Cluster balls in rows below the runs (lanes / grid presets): as many per row as fit under the core's width
+ * (at least 2), rows spaced by the badge height. `b0` = layout b of the first row.
+ */
+export function clusterRows(k: number, m: number, ctx: PresetCtx & { hw: number; hh: number }, b0: number, out: Point2) {
+  const c = cell();
+  const cols = Math.min(m, Math.max(2, Math.floor(Math.max(2 * ctx.hw + c.w * 0.6, c.w * 2) / c.w)));
+  const row = Math.floor(k / cols);
+  const inRow = Math.min(cols, m - row * cols);
+  // rows on a tilted ground plane are foreshortened on screen: stretch b so badges keep their screen gap
+  const fb = Math.min(1.7, 1 / Math.max(0.35, fit.foreshorten));
+  out.a = ((k % cols) - (inRow - 1) / 2) * c.w;
+  out.b = b0 - row * c.h * fb;
+}
+
 function ringCluster(k: number, m: number, ctx: PresetCtx & { hw: number; hh: number }, out: Point2, doStretch: boolean) {
-  // compact ring just outside the runs, evenly spread over the active clusters
+  // compact ring just outside the runs (and the run labels above them), evenly spread over the active clusters;
+  // neighbours sit at least one badge width apart
+  const c = cell(m);
   const th = PI / 2 + PI / Math.max(1, m) - (k * TAU) / Math.max(1, m);
-  const core = Math.max(ctx.hw, ctx.hh);
-  const R = Math.max(core + 3.6, m > 1 ? 3.6 / Math.sin(PI / m) : 0);
+  const core = Math.max(ctx.hw, ctx.hh) + RUN_LABEL_PX * fit.wpp * labels.pxk;
+  const R = Math.max(core + 3.6, m > 1 ? c.w / (2 * Math.sin(PI / m)) : 0);
   const { sx, sy } = doStretch ? stretch(ctx.aspect) : { sx: 1, sy: 1 };
   out.a = Math.cos(th) * R * sx;
   out.b = Math.sin(th) * R * sy;
@@ -149,9 +195,8 @@ export const lanes: LayoutPreset = {
     out.angle = -PI / 2;
   },
   cluster(_lane, k, m, ctx, out) {
-    // a row of interchanges under the lines
-    out.a = (k - (m - 1) / 2) * 7;
-    out.b = -(ctx.hh + 4);
+    // rows of interchanges under the lines
+    clusterRows(k, m, ctx, -(ctx.hh + 4), out);
   },
   periphery: "sides",
 };
@@ -173,8 +218,7 @@ export const grid: LayoutPreset = {
     out.angle = -PI / 2;
   },
   cluster(_lane, k, m, ctx, out) {
-    out.a = (k - (m - 1) / 2) * 6.5;
-    out.b = -(ctx.hh + 4);
+    clusterRows(k, m, ctx, -(ctx.hh + 4), out);
   },
   periphery: "sides",
 };

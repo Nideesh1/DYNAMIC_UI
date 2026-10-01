@@ -44,7 +44,7 @@
  */
 export { kit, reduced, agentLive, serverPos, backendPos, runLocal, graphToStage, stageToGraph, planePoint, planeA, planeB } from "./state";
 export type { Plane, KitAgent, KitRun, KitMcp, KitBackend, KitGraph } from "./state";
-export { PRESETS, radial, radar, lanes, grid, drift } from "./presets";
+export { PRESETS, radial, radar, lanes, grid, drift, bestCols, clusterRows, clusterCellSize } from "./presets";
 export type { LayoutPreset, LocalStyle, PresetCtx, PresetName } from "./presets";
 export { kitTick, kitExtents, kitActiveLanes, kitRoleU, config as kitConfig } from "./layout";
 export { fit, fitTick, setFitProfile, FitCamera, measureInsets, DEFAULT_FIT } from "./fit";
