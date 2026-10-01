@@ -31,6 +31,13 @@ Span JSON shape used by `/v1/live` (and the internal normalized form of OTLP spa
 thread, drops on failure — never slows or breaks the app). Add it next to any other exporter
 (e.g. Langfuse) on the same `TracerProvider`.
 
+### Deployment modes (same package)
+- `agentvision serve --port 8100` — standalone server (also serves the bundled 3D UI at `/` and `/<theme>`).
+- `mount_agentvision(app, path="/agentvision", redis_url=None)` — mount into an existing FastAPI app.
+- `redis_url=...` — shared state backend for multi-process / multi-container deployments: every process
+  publishes ingested events to a Redis stream and streams to its SSE clients from it; replay + topology
+  are kept in Redis. Without it, state is in-memory (single process).
+
 ## 2. Span → world mapping (server)
 
 Recognize spans by **standard semantic conventions first**, then optional `agentvision.*` hints:
