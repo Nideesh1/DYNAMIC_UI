@@ -9,3 +9,17 @@ graph
 blockparty
 cb6
 ref
+# secrets in any folder (only the example is safe to send)
+**/.env
+**/.env.*
+!.env.example
+# logs, caches and repo-only folders the images never use
+**/*.log
+**/.ruff_cache
+**/.pytest_cache
+.github
+docs
+plugin
+.claude-plugin
+skills
+**/dist
