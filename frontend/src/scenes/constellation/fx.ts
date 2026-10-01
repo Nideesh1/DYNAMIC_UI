@@ -1,7 +1,6 @@
-/** Constellation scene: textures, easing, pooled line/arrow helpers and the sky layout (runs, stars, planets, nebula). */
+/** Constellation scene: textures, easing, pooled line/arrow/spark helpers and the nebula constants (placement is the scene kit's). */
 import * as THREE from "three";
-import { TYPE_COLOR, hash01, world, type AgentType, type Instance } from "../shared/world";
-import { isRunExpanded, laneOfRun, laneRank, lod } from "../shared/lod";
+import { TYPE_COLOR, type AgentType } from "../shared/world";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -218,137 +217,7 @@ export class CurvePool {
   }
 }
 
-// ------------------------------------------------------------------ layout (stage space; camera looks down -z)
-/** Each run gets a patch of sky; positions vary per run (seeded), slots keep concurrent runs apart. */
-const REGIONS: [number, number][] = [
-  [-13.5, 2.0],
-  [10.5, 2.6],
-  [-11.5, -4.8],
-  [10, -5.4],
-  [-3.5, 3.6],
-  [2.5, -6.8],
-];
-export function regionCenter(slot: number, runId: string, out: THREE.Vector3) {
-  const r = REGIONS[slot % REGIONS.length];
-  const ring = Math.floor(slot / REGIONS.length);
-  return out.set(r[0] + (hash01(runId, 11) - 0.5) * 2.6, r[1] + (hash01(runId, 12) - 0.5) * 1.8, -ring * 4 + (hash01(runId, 13) - 0.5) * 1.5);
-}
-
-/**
- * Where a run's patch of sky is drawn: its own slot normally; while grouped (LOD) its lane's region, with extra
- * expanded runs of the same lane fanned above/below it (laneRank).
- */
-export function runRegion(runId: string, out: THREE.Vector3) {
-  if (lod.grouped) {
-    const k = laneRank(runId);
-    regionCenter(laneOfRun(runId), runId, out);
-    out.y += alt(k) * 4.6;
-    out.z -= k * 1.2;
-    return out;
-  }
-  const run = world.runs.get(runId);
-  return regionCenter(run ? run.slot : 0, runId, out);
-}
-/** Layout key of a run's region (targets are re-laid out when it changes). */
-function regionKey(runId: string) {
-  if (lod.grouped) return 1000 + laneOfRun(runId) * 64 + laneRank(runId);
-  return world.runs.get(runId)?.slot ?? 0;
-}
-
-/** Stable star positions (computed once per instance and layout, kept for its lifetime). */
-const targets = new Map<string, THREE.Vector3>();
-const targetKey = new Map<string, number>();
-const sibIdx = new Map<string, number>();
-const alt = (k: number) => (k === 0 ? 0 : k % 2 ? (k + 1) / 2 : -k / 2);
-
-function siblingIndex(inst: Instance): number {
-  const have = sibIdx.get(inst.id);
-  if (have !== undefined) return have;
-  const taken = new Set<number>();
-  for (const o of world.instances.values()) {
-    if (o.id === inst.id || o.run !== inst.run || o.parent !== inst.parent) continue;
-    const k = sibIdx.get(o.id);
-    if (k !== undefined && !o.exitAt) taken.add(k);
-  }
-  let k = 0;
-  while (taken.has(k)) k++;
-  sibIdx.set(inst.id, k);
-  return k;
-}
-
-const _o = new THREE.Vector3();
-export function starTarget(inst: Instance): THREE.Vector3 {
-  const have = targets.get(inst.id);
-  const key = regionKey(inst.run);
-  if (have && targetKey.get(inst.id) === key) return have;
-  // prune entries for long-gone instances
-  if (targets.size > 400) for (const id of targets.keys()) if (!world.instances.has(id)) targets.delete(id), sibIdx.delete(id), targetKey.delete(id);
-  const out = have ?? new THREE.Vector3();
-  const parent = inst.parent ? (world.instances.get(inst.parent) ?? world.archive.get(inst.parent)) : undefined;
-  const k = siblingIndex(inst);
-  const j = (s: number) => hash01(inst.id, s) - 0.5;
-  if (!parent || parent.run !== inst.run) {
-    runRegion(inst.run, out);
-    if (k) {
-      // several top-level agents in one run: spread along a seeded axis
-      const a = hash01(inst.run, 14) * Math.PI;
-      out.x += Math.cos(a) * alt(k) * 4.2;
-      out.y += Math.sin(a) * alt(k) * 3.0;
-    }
-  } else {
-    const pp = starTarget(parent);
-    const gp = parent.parent ? targets.get(parent.parent) : undefined;
-    let ang: number;
-    if (!gp) {
-      // first child heads into open sky: away from other live runs, gently pulled off the HUD-covered edges
-      // (seeded per run); further children step round the root by the golden angle so siblings never stack
-      let vx = (-0.5 - pp.x) * 0.06;
-      let vy = (-0.8 - pp.y) * 0.09;
-      for (const r of world.runs.values()) {
-        if (r.id === inst.run || r.status !== "started" || !isRunExpanded(r.id)) continue;
-        runRegion(r.id, _o);
-        const dx = pp.x - _o.x;
-        const dy = pp.y - _o.y;
-        const d2 = Math.max(4, dx * dx + dy * dy);
-        vx += (dx / d2) * 6;
-        vy += (dy / d2) * 6;
-      }
-      ang = Math.atan2(vy, vx) + (hash01(inst.run, 15) - 0.5) * 1.0 + k * 2.39996;
-    }
-    else ang = Math.atan2(pp.y - gp.y, pp.x - gp.x) + alt(k) * 0.78; // deeper levels keep branching outward
-    ang += j(16) * 0.35;
-    const len = (inst.subagent ? 2.6 : 3.3) * (0.9 + 0.25 * hash01(inst.id, 17)) * (gp ? 0.9 + 0.45 * (k % 2) : 1); // stagger alternate siblings so labels don't collide
-    out.set(pp.x + Math.cos(ang) * len, pp.y + Math.sin(ang) * len * 0.82, pp.z + j(18) * 2.2);
-  }
-  out.x += j(19) * 0.5;
-  out.y += j(20) * 0.5;
-  targets.set(inst.id, out);
-  targetKey.set(inst.id, key);
-  return out;
-}
-
-/** Live star positions (stage space), written by each star every frame. */
-export const starPos = new Map<string, THREE.Vector3>();
-
-// MCP planets along the lower rim / flanks, behind the constellations
-const PLANET_SPOTS: [number, number, number][] = [
-  [-24, 6, -9],
-  [17, -10.6, -4],
-  [-25, -0.5, -8],
-  [26, -2.5, -8],
-  [-3.5, -12.2, -5],
-  [5.5, 11.5, -10],
-];
-export function planetPos(slot: number, out: THREE.Vector3) {
-  const s = PLANET_SPOTS[slot % PLANET_SPOTS.length];
-  const ring = Math.floor(slot / PLANET_SPOTS.length);
-  return out.set(s[0] * (1 + ring * 0.12), s[1] * (1 + ring * 0.12), s[2] - ring * 4);
-}
-/** Live moon (backend) positions keyed `${server}|${resource}`. */
-export const moonPos = new Map<string, THREE.Vector3>();
-
-// knowledge-graph nebula: far behind, centered
-export const NEBULA_C = new THREE.Vector3(1.5, 0.8, -15);
+// ------------------------------------------------------------------ knowledge-graph nebula (its own local frame, centre 0)
 export const NEBULA_RX = 15;
 export const NEBULA_RY = 7.5;
 

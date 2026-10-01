@@ -1,19 +1,21 @@
 /**
- * Agents are stars. Parents (roleScale) are bright first-magnitude stars, subagents smaller ones.
- *   spawn    → a child star ignites at the end of a constellation line drawn out from its parent
- *   thinking → scintillates, diffraction spikes bright; waiting → steady and dimmer
- *   LLM call → the star flares: spikes stretch and a thin shock-ring expands, both sized by tokens
- *   MCP wait → a slow amber corona ring
- *   exit     → the star collapses to a faint remnant (slate; red if failed) which then fades out
- * Delegation (parent → child) = thin constellation lines with a drawing head and an arrowhead at the child;
+ * Agents are stars (scene-kit Agent slot). Parents are bright first-magnitude stars, subagents smaller ones; the kit
+ * decides where each star sits (`agent.pos`) and how big it is (`agent.scale`), the star adds a slow drift on `live`.
+ *   spawn    -> a child star ignites at the end of a constellation line drawn out from its parent
+ *   thinking -> scintillates, diffraction spikes bright; waiting -> steady and dimmer
+ *   LLM call -> the star flares: spikes stretch and a thin shock-ring expands, both sized by tokens
+ *   MCP wait -> a slow amber corona ring
+ *   exit     -> the star collapses to a faint remnant (slate; red if failed) which then fades out
+ * Delegation (parent -> child) = thin constellation lines with a drawing head and an arrowhead at the child;
  * messages = small comets gliding along the lines (or a soft arc between unrelated stars).
  */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, energy, roleScale, world, type Instance } from "../shared/world";
-import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
+import { TYPE_COLOR, energy, world } from "../shared/world";
+import { showLabel } from "../shared/lod";
+import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
   AMBER,
   ArrowPool,
@@ -34,8 +36,6 @@ import {
   ringTexture,
   spikeTexture,
   spriteMat,
-  starPos,
-  starTarget,
 } from "./fx";
 
 const REMNANT = new THREE.Color("#6f7fb8");
@@ -44,14 +44,16 @@ const REMNANT_FAIL = new THREE.Color("#ff6b7a");
 export const DRAW_S = 0.95;
 const hitMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, transparent: true, opacity: 0 });
 
-function Star({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => void }) {
-  const root = useRef<THREE.Group>(null);
+export function Star({ agent, selected, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
+  const body = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
   const spikes = useRef<THREE.Sprite>(null);
   const core = useRef<THREE.Sprite>(null);
   const flare = useRef<THREE.Sprite>(null);
   const corona = useRef<THREE.Mesh>(null);
   const sel = useRef<THREE.Mesh>(null);
+  const labelG = useRef<THREE.Group>(null);
   const label = useRef<Label3DHandle>(null);
   const seed = useMemo(() => [...inst.id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 9973, 7) / 9973, [inst.id]);
   const color = STAR_C[inst.type];
@@ -66,18 +68,10 @@ function Star({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     }),
     [color],
   );
-  const s = useMemo(() => ({ pos: new THREE.Vector3(), live: new THREE.Vector3(), init: false, calls: inst.llmCalls, flareAt: -1e9, flareK: 1, coronaK: 0, selK: 0, c: new THREE.Color() }),
+  const s = useMemo(() => ({ calls: inst.llmCalls, flareAt: -1e9, flareK: 1, coronaK: 0, selK: 0, c: new THREE.Color() }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
-  const rs = roleScale(inst);
-
-  useEffect(() => {
-    starPos.set(inst.id, s.live);
-    return () => {
-      if (starPos.get(inst.id) === s.live) starPos.delete(inst.id);
-    };
-  }, [inst.id, s]);
 
   useEffect(() => {
     m.spikes.rotation = (seed - 0.5) * 0.5;
@@ -86,13 +80,15 @@ function Star({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   useFrame(({ clock }) => {
     const now = performance.now();
     const t = clock.elapsedTime;
-    const target = starTarget(inst);
-    if (!s.init) s.pos.copy(target), (s.init = true);
-    else s.pos.lerp(target, 0.05);
-    const drift = reduced ? 0 : 0.05;
-    s.live.set(s.pos.x + Math.sin(t * 0.21 + seed * 20) * drift, s.pos.y + Math.cos(t * 0.17 + seed * 13) * drift, s.pos.z);
-    root.current?.position.copy(s.live);
-    root.current?.scale.setScalar(lodScale());
+    // kit home + a slow drift (lines, beams and tethers read it via agentLive)
+    const drift = reduced ? 0 : 0.05 * fit.spread;
+    agent.live.set(agent.pos.x + Math.sin(t * 0.21 + seed * 20) * drift, agent.pos.y + Math.cos(t * 0.17 + seed * 13) * drift, agent.pos.z);
+    const sc = agent.scale;
+    if (body.current) {
+      body.current.position.copy(agent.live);
+      body.current.scale.setScalar(Math.max(1e-4, sc));
+    }
+    labelG.current?.position.set(agent.live.x, agent.live.y - 0.95 * sc - 0.35, agent.live.z);
 
     // ---- lifecycle
     const tb = (now - inst.bornAt) / 1000;
@@ -101,8 +97,8 @@ function Star({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     const ignite = easeOut(ign);
     const birthFlash = ign > 0 ? Math.exp(-(tb - delay) * 3.2) : 0;
     const te = inst.exitAt ? (now - inst.exitAt) / 1000 : -1;
-    const collapse = te >= 0 ? easeInOut(te / 0.7) : 0; // star → remnant
-    const vanish = te >= 0 ? clamp01((te - 0.7) / 1.7) : 0; // remnant → gone
+    const collapse = te >= 0 ? easeInOut(te / 0.7) : 0; // star -> remnant
+    const vanish = te >= 0 ? clamp01((te - 0.7) / 1.7) : 0; // remnant -> gone
     const alive = te < 0;
 
     // LLM flare: triggered on each new call, size by tokens (inst.pulse is token-scaled 0.6..2.5)
@@ -117,15 +113,16 @@ function Star({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     let pending = false;
     for (const p of world.mcpPending.values()) if (p.instance === inst.id) pending = true;
     const thinking = alive && (inst.status === "thinking" || inst.status === "spawning");
-    const sc = reduced ? 0 : 1;
-    // scintillation: two incommensurate sines → organic twinkle
-    const twk = 1 + (thinking ? 0.16 : 0.05) * Math.sin(t * 3.3 + seed * 40) * Math.sin(t * 1.9 + seed * 17) * sc;
+    const mo = reduced ? 0 : 1;
+    // scintillation: two incommensurate sines -> organic twinkle
+    const twk = 1 + (thinking ? 0.16 : 0.05) * Math.sin(t * 3.3 + seed * 40) * Math.sin(t * 1.9 + seed * 17) * mo;
     const lvl = (thinking ? 1 : 0.62) * twk + e * 0.25 + birthFlash * 1.2;
 
     s.c.copy(color);
     if (!alive) s.c.lerp(inst.status === "failed" ? REMNANT_FAIL : REMNANT, collapse);
     const dim = (1 - collapse * 0.8) * (1 - vanish);
-    const size = rs * ignite * (1 - collapse * 0.62);
+    // sizes below are in the body group's units (scaled by agent.scale)
+    const size = ignite * (1 - collapse * 0.62);
 
     if (core.current) {
       core.current.scale.setScalar(Math.max(1e-4, size * (0.95 + e * 0.12)));
@@ -146,22 +143,22 @@ function Star({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       flare.current.visible = on;
       if (on) {
         const k = easeOut(fa / 1.1);
-        flare.current.scale.setScalar(rs * (0.8 + k * (1.6 + s.flareK * 1.4)));
+        flare.current.scale.setScalar(0.8 + k * (1.6 + s.flareK * 1.4));
         m.flare.color.copy(s.c).lerp(WHITE, 0.4).multiplyScalar((1 - k) * (1 - k) * (0.35 + s.flareK * 0.3));
       }
     }
     s.coronaK += ((pending && alive ? 1 : 0) - s.coronaK) * 0.08;
     if (corona.current) {
       corona.current.visible = s.coronaK > 0.02;
-      const br = 0.75 + 0.25 * Math.sin(t * 2.4) * sc;
-      corona.current.scale.setScalar(rs * (0.95 + 0.06 * br));
-      corona.current.rotation.z = t * 0.6 * sc;
+      const br = 0.75 + 0.25 * Math.sin(t * 2.4) * mo;
+      corona.current.scale.setScalar(0.95 + 0.06 * br);
+      corona.current.rotation.z = t * 0.6 * mo;
       m.corona.color.copy(AMBER).multiplyScalar(1.4 * s.coronaK * br);
     }
-    s.selK += ((world.selected === inst.id ? 1 : 0) - s.selK) * 0.12;
+    s.selK += ((selected ? 1 : 0) - s.selK) * 0.12;
     if (sel.current) {
       sel.current.visible = s.selK > 0.02;
-      sel.current.scale.setScalar(rs * (1.1 + (1 - s.selK) * 0.5));
+      sel.current.scale.setScalar(1.1 + (1 - s.selK) * 0.5);
       m.sel.color.setScalar(0.9 * s.selK * dim);
     }
     label.current?.setOpacity(showLabel(inst.id) ? ignite * (alive ? 0.95 : 0.6 * (1 - vanish)) : 0);
@@ -173,48 +170,28 @@ function Star({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   };
   const k = inst.id.split(":")[2];
   return (
-    <group ref={root}>
-      <mesh geometry={SPHERE_GEO} material={hitMat} scale={0.75 * rs} onClick={select} onPointerOver={() => (document.body.style.cursor = "pointer")} onPointerOut={() => (document.body.style.cursor = "")} />
-      <sprite ref={halo} material={m.halo} scale={1e-4} />
-      <sprite ref={spikes} material={m.spikes} scale={1e-4} />
-      <sprite ref={core} material={m.core} scale={1e-4} />
-      <sprite ref={flare} material={m.flare} visible={false} />
-      <mesh ref={corona} geometry={THIN_RING} material={m.corona} visible={false} />
-      <mesh ref={sel} geometry={THIN_RING} material={m.sel} visible={false} />
-      <Label3D
-        ref={label}
-        position={[0, -0.95 * rs - 0.35, 0]}
-        text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
-        color={TYPE_COLOR[inst.type]}
-        size={inst.subagent ? 0.22 : 0.28}
-        letterSpacing={0.02}
-        opacity={0}
-        pxRange={inst.subagent ? [8, 11.5] : [9, 13.5]}
-      />
-    </group>
-  );
-}
-
-export function Stars({ onSelect }: { onSelect: (id: string) => void }) {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.instances;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      // collapsed runs are drawn by their lane's star cluster (Clusters.tsx)
-      setList([...m.values()].filter(isExpanded));
-    }
-  });
-  return (
     <>
-      {list.map((i) => (
-        <Star key={i.id} inst={i} onSelect={onSelect} />
-      ))}
+      <group ref={body} scale={1e-4}>
+        <mesh geometry={SPHERE_GEO} material={hitMat} scale={0.75} onClick={select} onPointerOver={() => (document.body.style.cursor = "pointer")} onPointerOut={() => (document.body.style.cursor = "")} />
+        <sprite ref={halo} material={m.halo} scale={1e-4} />
+        <sprite ref={spikes} material={m.spikes} scale={1e-4} />
+        <sprite ref={core} material={m.core} scale={1e-4} />
+        <sprite ref={flare} material={m.flare} visible={false} />
+        <mesh ref={corona} geometry={THIN_RING} material={m.corona} visible={false} />
+        <mesh ref={sel} geometry={THIN_RING} material={m.sel} visible={false} />
+      </group>
+      <group ref={labelG}>
+        <Label3D
+          ref={label}
+          text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
+          color={TYPE_COLOR[inst.type]}
+          size={inst.subagent ? 0.22 : 0.28}
+          letterSpacing={0.02}
+          opacity={0}
+          fit
+          pxRange={inst.subagent ? [8, 11.5] : [9, 13.5]}
+        />
+      </group>
     </>
   );
 }
@@ -243,8 +220,8 @@ export function Lines() {
     for (const id of linkK.keys()) if (!world.instances.has(id)) linkK.delete(id);
     for (const inst of world.instances.values()) {
       if (!inst.parent) continue;
-      const pa = starPos.get(inst.parent);
-      const pb = starPos.get(inst.id);
+      const pa = agentLive(inst.parent);
+      const pb = agentLive(inst.id);
       const parent = world.instances.get(inst.parent);
       if (!pa || !pb) continue;
       // lineage lives while both stars shine; fades out once either exits
@@ -256,8 +233,8 @@ export function Lines() {
       linkK.set(inst.id, k);
       if (k < 0.01) continue;
       const len = pa.distanceTo(pb) || 1;
-      const ta = Math.min(0.3, (0.55 * (parent ? 1.35 : 1)) / len);
-      const tbTrim = Math.min(0.3, 0.5 / len);
+      const ta = Math.min(0.3, (0.55 * fit.scale * (parent ? 1.35 : 1)) / len);
+      const tbTrim = Math.min(0.3, (0.5 * fit.scale) / len);
       const grow = easeInOut(tb / DRAW_S);
       ctrl.copy(pa).add(pb).multiplyScalar(0.5); // constellation lines are straight
       const t1 = ta + (1 - tbTrim - ta) * grow;
@@ -267,13 +244,13 @@ export function Lines() {
       if (drawing) {
         bezier(pa, ctrl, pb, t1, h);
         sparks.add(h, 0.55, WHITE, 1.3);
-      } else arrows.add(pa, ctrl, pb, 1 - tbTrim - 0.04, 1, inst.subagent ? 0.32 : 0.4, col, 0.95 * k);
+      } else arrows.add(pa, ctrl, pb, 1 - tbTrim - 0.04, 1, (inst.subagent ? 0.32 : 0.4) * Math.min(1.3, fit.scale), col, 0.95 * k);
     }
 
     // message comets: ride the lineage line if parent/child, else a soft arc
     for (const c of world.comets) {
-      const pa = starPos.get(c.from);
-      const pb = starPos.get(c.to);
+      const pa = agentLive(c.from);
+      const pb = agentLive(c.to);
       if (!pa || !pb) continue;
       const u = clamp01((now - c.start) / c.dur);
       if (u >= 1) continue;
