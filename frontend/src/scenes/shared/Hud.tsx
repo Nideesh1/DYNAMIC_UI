@@ -509,7 +509,7 @@ function AgentList() {
   return (
     <>
       <div className="ap-searchrow">
-        <input className="ap-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agent, run topic, graph node…" aria-label="Search agents" />
+        <input className="ap-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agent or run topic…" aria-label="Search agents" />
         <span className="ap-count" title="matching / all agents">
           {rows.length}
           {rows.length !== all.length ? ` / ${all.length}` : ""}
@@ -602,10 +602,6 @@ function AgentDetail({ i }: { i: Instance }) {
           <dt>MCP calls</dt>
           <dd>{i.mcpCalls}</dd>
         </div>
-        <div>
-          <dt>graph nodes</dt>
-          <dd>{i.nodes.size}</dd>
-        </div>
       </dl>
       <section>
         <h4>Run</h4>
@@ -656,12 +652,6 @@ function AgentDetail({ i }: { i: Instance }) {
               {p.server}.{p.tool}() · {waitSeconds(p).toFixed(1)}s
             </p>
           ))}
-        </section>
-      )}
-      {i.nodes.size > 0 && (
-        <section>
-          <h4>Graph nodes touched</h4>
-          <p className="ap-nodes">{[...i.nodes].slice(0, 24).join(" · ")}</p>
         </section>
       )}
       <section>
