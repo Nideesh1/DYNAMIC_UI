@@ -38,6 +38,7 @@ call_model, should_continue): only spans whose kind is LLM (or unknown) produce 
 from __future__ import annotations
 
 import json
+import os
 import logging
 import re
 from dataclasses import dataclass, field
@@ -51,7 +52,10 @@ RESOURCE_KINDS = {"db", "warehouse", "spark", "api", "storage", "queue"}
 WRITE_RE = re.compile(r"\b(CREATE|MERGE|SET|DELETE|INSERT|UPDATE|REMOVE|DROP)\b", re.I)
 TEXT_RE = re.compile(r'"(?:content|text)":\s*"((?:[^"\\]|\\.)+)"')
 log = logging.getLogger("agentglow")
-HATCHET_GRACE_MS = 5000  # Hatchet runs have idle gaps between steps; complete after this much quiet
+# Hatchet runs have idle gaps between steps (the next step sits in Hatchet's queue), so a quiet gap does NOT mean the
+# run is over. Complete quickly once the run has produced its final answer, otherwise only after a long quiet period.
+HATCHET_GRACE_MS = int(os.environ.get("AGENTGLOW_HATCHET_IDLE_MS", "60000"))
+HATCHET_FINAL_GRACE_MS = 3000
 
 
 def is_lg_node(name: str) -> bool:
@@ -344,7 +348,7 @@ class Mapper:
                 run.failed = True
             if run.open == 0:
                 if run.hatchet:
-                    run.done_at = ts + HATCHET_GRACE_MS
+                    run.done_at = ts + (HATCHET_FINAL_GRACE_MS if run.final else HATCHET_GRACE_MS)
                 else:
                     self._complete(run, ts, out)
 
