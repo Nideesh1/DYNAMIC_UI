@@ -53,8 +53,18 @@ import { AgentScene } from "agentglow";
   <AgentScene theme="neural" source="http://localhost:8100" />
 </div>
 ```
-`source` is your `agentglow serve` URL (default port 8100). In a deployed app, use a URL your users' browsers can reach,
-e.g. `https://agentglow.yourco.com`. Other props: `hud`, `sim`, `style`, `className`.
+| Prop | Default | |
+|---|---|---|
+| `theme` | `"neural"` | one of the 15 themes |
+| `source` | `""` (same origin) | your `agentglow serve` URL (default port 8100). In a deployed app, use a URL your users' browsers can reach, e.g. `https://agentglow.yourco.com` |
+| `hud` | `true` | overlay panels (title, agent list, event log, stats); `hud={false}` = just the 3D scene |
+| `sim` | `false` | built-in fake agents, no server needed (also kicks in automatically if `source` is unreachable) |
+| `style` | — | inline styles for the container, e.g. `{{ height: "80vh" }}` |
+| `className` | — | CSS class for the container |
+
+```tsx
+<AgentScene theme="hive" sim hud={false} style={{ height: 400 }} />   // demo background, no server
+```
 Works in Next.js App Router out of the box (the package is `"use client"`). See [examples/react-embed](examples/react-embed).
 
 ## What shows up
