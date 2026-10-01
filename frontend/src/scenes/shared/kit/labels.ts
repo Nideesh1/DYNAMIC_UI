@@ -71,6 +71,8 @@ export const labels = {
   last: -1e9,
   /** last pass stats (debug / verification) */
   stats: { shown: 0, hidden: 0, dropped: 0, off: 0 },
+  /** measured on-screen size of the largest cluster badge (css px; 0 = none seen yet): presets space clusters by it */
+  badge: { w: 0, h: 0 },
 };
 
 export function newLabelEntry(kind: LabelKind, agent: KitAgent | undefined, size: number): LabelEntry {
@@ -162,6 +164,15 @@ function pass(now: number) {
       hidden++;
     }
   }
+  // largest cluster badge on screen (eased so a changing count doesn't jiggle the spacing)
+  let bw = 0;
+  let bh = 0;
+  for (const e of order) if (e.kind === "cluster") (bw = Math.max(bw, e.w)), (bh = Math.max(bh, e.h));
+  const B = labels.badge;
+  if (bw > 0) {
+    if (!B.w || Math.abs(bw - B.w) / B.w > 0.12) B.w = bw;
+    if (!B.h || Math.abs(bh - B.h) / B.h > 0.12) B.h = bh;
+  }
   const st = labels.stats;
   st.shown = n;
   st.hidden = hidden;
@@ -191,7 +202,8 @@ const FRAMED: Record<LabelKind, boolean> = { agent: false, sub: false, run: true
  * (FitCamera converts px to view angles: a px-clamped label keeps its screen size at any camera distance).
  */
 export function visitLabelRects(now: number, visit: (e: LabelEntry) => void) {
-  for (const e of labels.entries) if (FRAMED[e.kind] && now - e.seen < 600) visit(e);
+  // only labels the declutter pass lets through: a hidden label needs no room
+  for (const e of labels.entries) if (FRAMED[e.kind] && now - e.seen < 600 && (e.show > 0 || !labels.active)) visit(e);
 }
 
 /** Overlapping pairs among the labels drawn right now (verification; allocates, call rarely). */

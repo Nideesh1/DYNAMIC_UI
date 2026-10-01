@@ -104,9 +104,10 @@ function cell(ring = 0) {
   const k = labels.pxk;
   const fw = Math.max(120, fit.w - fit.insets.left - fit.insets.right);
   const fh = Math.max(100, fit.h - fit.insets.top - fit.insets.bottom);
-  let wpx = BADGE_PX_W * k * 1.08;
+  // badge size: measured on screen once a badge was drawn, else the estimate
+  let wpx = (labels.badge.w || BADGE_PX_W * k) * 1.12;
   wpx = ring > 1 ? Math.min(wpx, (0.85 * Math.min(fw, fh * 1.3)) / (1 / Math.sin(PI / ring) + 1)) : Math.min(wpx, (0.85 * fw) / 2);
-  const hpx = Math.min(BADGE_PX_H * k, 0.22 * fh);
+  const hpx = Math.min((labels.badge.h || BADGE_PX_H * k) * 1.15, 0.22 * fh);
   clusterCellSize.w = Math.max(7, wpx * fit.wpp);
   clusterCellSize.h = Math.max(6.5, 5 + hpx * fit.wpp);
   return clusterCellSize;

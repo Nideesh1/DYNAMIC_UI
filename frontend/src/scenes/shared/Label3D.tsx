@@ -148,9 +148,10 @@ const clip = (s: string, n: number) => (n > 0 && s.length > n ? s.slice(0, Math.
 // ------------------------------------------------------------------ shared GPU resources
 const PLANE = new THREE.PlaneGeometry(1, 1);
 const noRaycast = () => {};
+// labels are read like HUD text: never fogged (scene fog would erase far labels on a crowded, zoomed-out stage)
 const TEXT_MAT = {
-  top: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }),
-  depth: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: true, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }),
+  top: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, fog: false, side: THREE.DoubleSide }),
+  depth: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: true, depthWrite: false, toneMapped: false, fog: false, side: THREE.DoubleSide }),
 };
 const PLATE_VERT = /* glsl */ `
 varying vec2 vUv;
@@ -348,7 +349,7 @@ function Label3DInner(props: Label3DProps) {
           uOpacity: { value: 1 },
         },
       }),
-      leader: new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false }),
+      leader: new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false, fog: false }),
     }),
     [],
   );
