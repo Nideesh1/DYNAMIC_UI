@@ -18,7 +18,10 @@
  *  4. Existing behavior is kept: auto-grouping (lod.ts) with one ClusterBall per active lane, Label3D labels
  *     (showLabel), seeded spawn variation and stable sibling slots, subagents fanned from their parent with
  *     directional edges, MCP servers/backends on the outskirts, exit fades (lingerMs), reduced motion,
- *     no autoRotate, no per-frame allocations.
+ *     no autoRotate, no per-frame allocations. Exiting agents never expand out of a cluster; slot mounts are
+ *     capped per frame.
+ *  5. Labels never pile up: every Label3D takes part in a screen-space declutter pass (labels.ts, ~10Hz) that
+ *     ranks it by the slot it renders in and hides / shortens the losers.
  *
  * ---------------------------------------------------------------------------------------------- pieces
  *  state.ts     `kit` singleton: agents (KitAgent), runs (KitRun), mcp (KitMcp + KitBackend), clusterPos[lane],
@@ -27,8 +30,11 @@
  *  presets.ts   LayoutPreset = run anchor + fan angle for run i of n, local agent style, cluster ring/row,
  *               periphery style. Built in: radial, radar, lanes, grid, drift.
  *  layout.ts    kitTick(): membership -> run-local coords -> run anchors -> clusters/core/periphery -> easing.
- *  fit.ts       fit (scale/spread/label/aspect/insets), fitTick(), <FitCamera>, measureInsets().
- *  KitScene.tsx <KitScene> + slot prop types + useKitAgents / useKitRuns / useKitMcp / useKitList.
+ *  fit.ts       fit (scale/spread/label/aspect/insets/cam/wpp), fitTick(), <FitCamera> (frames the content's
+ *               screen bounds, labels included, and centres them in the free area), measureInsets().
+ *  labels.ts    label registry + declutter pass (LabelScope context, priorities, framed label rects).
+ *  KitScene.tsx <KitScene> + slot prop types + useKitAgents / useKitRuns / useKitMcp / useKitList,
+ *               <GraphStageSpace> (stage-space drawing inside the side graph), `hudInset` (HUD dock).
  *
  * ---------------------------------------------------------------------------------------------- coordinates
  *  Layout is 2D (a = screen-right, b = screen-up, world units) mapped onto the stage plane: "xy" -> (a, b, 0),
@@ -48,6 +54,8 @@ export { PRESETS, radial, radar, lanes, grid, drift, bestCols, clusterRows, clus
 export type { LayoutPreset, LocalStyle, PresetCtx, PresetName } from "./presets";
 export { kitTick, kitExtents, kitActiveLanes, kitRoleU, config as kitConfig } from "./layout";
 export { fit, fitTick, setFitProfile, FitCamera, measureInsets, DEFAULT_FIT } from "./fit";
+export { labels, LabelScope } from "./labels";
+export type { LabelKind, LabelScopeValue } from "./labels";
 export type { FitProfile } from "./fit";
 export { KitScene, GraphStageSpace, useKitAgents, useKitRuns, useKitMcp, useKitList, useKitGalaxy } from "./KitScene";
 export type { KitSceneProps, AgentSlotProps, EdgeSlotProps, RunSlotProps, McpServerSlotProps, BackendSlotProps, GraphSlotProps, ClusterSlotProps } from "./KitScene";

@@ -155,8 +155,6 @@ export type Kit = typeof kit;
 export function planePoint(a: number, b: number, out: THREE.Vector3) {
   return kit.plane === "xy" ? out.set(a, b, 0) : out.set(a, 0, -b);
 }
-/** 2D layout direction to a stage-space unit vector. */
-export const planeDir = planePoint;
 /** Stage point to 2D layout coords (a, b). */
 export function planeA(p: THREE.Vector3) {
   return p.x;

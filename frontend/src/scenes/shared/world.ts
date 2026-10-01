@@ -496,22 +496,17 @@ export function setHasGraph(v: boolean, doNotify = true) {
   if (doNotify) notify();
 }
 
-/** How long the graph fades in / agents ease outward after hasGraph flips true (ms). */
+/** How long the side graph fades in after hasGraph flips true (ms). */
 export const GRAPH_FADE_MS = 1800;
 
 /**
  * 0..1 graph presence for useFrame: 0 = no graph (agents take the center), 1 = graph fully shown.
- * Eases (smoothstep) over GRAPH_FADE_MS after hasGraph flips, so layouts can lerp `noGraph -> withGraph` with it.
+ * Eases (smoothstep) over GRAPH_FADE_MS after hasGraph flips (the kit fades the side graph in with it).
  */
 export function graphMix(now = performance.now()): number {
   if (!world.hasGraph) return 0;
   const t = Math.min(1, Math.max(0, (now - world.hasGraphAt) / GRAPH_FADE_MS));
   return t * t * (3 - 2 * t);
-}
-
-/** Lerp helper for layouts: value when there is no graph -> value with the graph, by graphMix(). */
-export function byGraph(noGraph: number, withGraph: number, now = performance.now()): number {
-  return noGraph + (withGraph - noGraph) * graphMix(now);
 }
 
 /** React hook: does this session have a knowledge graph? (re-renders when it flips true) */
@@ -521,12 +516,4 @@ export function useHasGraph(): boolean {
     () => world.hasGraph,
     () => false,
   );
-}
-
-/**
- * Agent size boost while there is no graph: agents take the center and read bigger (k, e.g. 1.5), easing back
- * to 1 as the graph fades in. Multiply on top of roleScale()/lodScale.
- */
-export function agentBoost(k = 1.5, now = performance.now()): number {
-  return byGraph(k, 1, now);
 }

@@ -4,7 +4,6 @@
  *
  *   fit.scale   agent size multiplier: few agents = big, many = smaller, ~ sqrt(nRef / n), clamped per theme.
  *               KitAgent.scale = roleScale(inst) * fit.scale, so parents stay bigger than subagents.
- *               (Replaces lodScale() for kit themes: no double shrinking.)
  *   fit.spread  local spacing multiplier (fan length, sibling gaps) so bigger agents never touch.
  *   fit.label   label size multiplier (Label3D `fit` prop, still clamped by its pxRange).
  *   camera      <FitCamera/> dollies the camera so every kit-placed thing fits the free area, and shifts the
