@@ -58,6 +58,9 @@ HATCHET_GRACE_MS = int(os.environ.get("AGENTGLOW_HATCHET_IDLE_MS", "60000"))
 HATCHET_FINAL_GRACE_MS = 3000
 
 
+MAX_SCOPED_RUNS = 20_000
+
+
 def is_lg_node(name: str) -> bool:
     return name in LG_NODES or bool(LG_NODE_RE.search(name))
 
@@ -172,6 +175,19 @@ class Mapper:
         self.agents: dict[str, Agent] = {}
         self.seen_ended: dict[str, None] = {}  # FIFO set of ended span ids (dedupe live + OTLP)
         self.mcp_known: set[tuple] = set()
+        self.scopes: dict[str, str] = {}  # run_id -> scope (first `agentglow.scope` seen wins); insertion-ordered, bounded
+        self.newly_scoped: list[str] = []  # runs whose scope became known since the Hub last looked
+
+    def _note_scope(self, s: "Span") -> None:
+        if s.run in self.scopes:
+            return
+        v = s.attrs.get("agentglow.scope") or s.attrs.get("agentglow.run.scope")
+        if v is None or v == "":
+            return
+        self.scopes[s.run] = str(v)
+        self.newly_scoped.append(s.run)
+        while len(self.scopes) > MAX_SCOPED_RUNS:
+            self.scopes.pop(next(iter(self.scopes)))
 
     # ------------------------------------------------------------------ public
     def feed(self, kind: str, span: dict) -> list[dict]:
@@ -223,6 +239,7 @@ class Mapper:
         run_id = str(a.get("hatchet.workflow_run_id") or a.get("agentglow.run.id") or (parent.run if parent else d["trace_id"]))
         s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a, run_id)
         self.spans[s.id] = s
+        self._note_scope(s)
         if len(self.spans) > 200_000:  # memory guard for spans that never end
             for k in list(self.spans)[:50_000]:
                 self.spans.pop(k, None)
@@ -275,6 +292,7 @@ class Mapper:
             for k in list(self.seen_ended)[:20_000]:
                 del self.seen_ended[k]
         s.attrs.update(d.get("attributes") or {})
+        self._note_scope(s)
         s.end = d.get("end_time_ms") or s.start
         s.status = d.get("status") or "unset"
         a, ts, run = s.attrs, s.end, self.runs.get(s.run)

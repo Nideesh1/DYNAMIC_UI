@@ -67,6 +67,27 @@ import { AgentScene } from "agentglow";
 ```
 Works in Next.js App Router out of the box (the package is `"use client"`). See [examples/react-embed](examples/react-embed).
 
+## Show each user only their agents
+
+Tag runs with a scope where your agents run:
+```python
+import agentglow
+agentglow.watch()
+with agentglow.scope(user.id):        # every span inside (incl. asyncio tasks) carries agentglow.scope
+    graph.invoke({"messages": [...]})
+```
+Start the server with a secret (`agentglow serve --secret $AGENTGLOW_SECRET`), mint a short-lived token in your
+backend, and pass it to the scene. The token alone decides what the viewer sees:
+```python
+token = agentglow.make_token(os.environ["AGENTGLOW_SECRET"], scope=user.id, ttl_s=3600)  # no scope/run = admin
+```
+```tsx
+<AgentScene source="https://agentglow.yourco.com" scope={user.id} token={token} />
+```
+The token travels in an `Authorization: Bearer` header, never in the URL. Not using Python on the backend? The format
+is a 3-line HMAC, see [docs/SPEC.md "Scopes & auth"](docs/SPEC.md#scopes--auth). Without a secret (dev), `scope`
+alone filters, with no auth.
+
 ## What shows up
 
 | Your system | In the scene |

@@ -57,7 +57,7 @@ Announce MCP servers before they are called: `agentglow.register_mcp("analytics"
 ## Options
 
 ```
-agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/<graph>]
+agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/<graph>] [--secret S]
 ```
 
 | | |
@@ -69,9 +69,21 @@ agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/
 | `GET /live/graph` | graph sample for the scenes from FalkorDB (`--falkor` / `AGENTGLOW_FALKOR_URL`), else an empty graph |
 | `POST /v1/claude-code` | Claude Code HTTP hooks → its main agent + subagents in 3D (see `examples/claude-code`) |
 | `GET /live/health` | status |
-| `POST /live/run` `{topic}` | optional: forwards to `AGENTGLOW_RUN_WEBHOOK` (your trigger endpoint) and returns its JSON, e.g. `{run_id}`; health reports `run: true` and the UI shows "▶ Run agents" only when it is set |
+| `POST /live/run` `{topic, scope?}` | optional: forwards to `AGENTGLOW_RUN_WEBHOOK` (your trigger endpoint) and returns its JSON, e.g. `{run_id}`; health reports `run: true` and the UI shows "▶ Run agents" only when it is set |
 
 Embed in your own React app: `npm i agentglow` → `<AgentScene theme="neural" source="http://localhost:8100" />`.
+
+## Show each user only their agents
+
+```python
+with agentglow.scope(user.id):   # or agentglow.set_scope(user.id); tags every span started inside
+    run_agents()
+token = agentglow.make_token(os.environ["AGENTGLOW_SECRET"], scope=user.id)  # for <AgentScene scope token />
+```
+With `--secret` / `AGENTGLOW_SECRET`, `/live/stream`, `/live/graph` and `/live/run` need `Authorization: Bearer <token>`
+and each viewer sees only its token's scope (or run; no scope and no run = admin). Without a secret (dev), the
+`X-AgentGlow-Scope` / `X-AgentGlow-Run` headers or `?run=` on the stream filter. Claude Code hooks: add `?scope=...`
+to the hook URL. Token format and details: docs/SPEC.md "Scopes & auth".
 
 ## Scale
 

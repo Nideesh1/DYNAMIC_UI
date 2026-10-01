@@ -15,6 +15,8 @@ from typing import Any
 
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 
+from .scope import apply_scope
+
 _MAX_QUEUE = 20_000
 _HEAD, _TAIL = 2500, 2500  # long strings keep head + tail (the tail holds an agent's last message)
 
@@ -80,6 +82,7 @@ class LiveSpanProcessor(SpanProcessor):
 
     # ---- SpanProcessor
     def on_start(self, span, parent_context=None) -> None:
+        apply_scope(span, parent_context)  # `with agentglow.scope(...)` -> agentglow.scope attribute
         self._put("start", span)
 
     def on_end(self, span: ReadableSpan) -> None:

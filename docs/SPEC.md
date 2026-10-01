@@ -26,13 +26,14 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
 | `docker-compose.yml` | agentglow + example stack (Hatchet, FalkorDB; Langfuse under profile `langfuse`) | - |
 
 ## Backend (`backend/`, package `agentglow`)
-- `agentglow serve [--host 0.0.0.0] [--port 8100]` - standalone FastAPI app. Run ONE per environment
+- `agentglow serve [--host 0.0.0.0] [--port 8100] [--secret S]` - standalone FastAPI app. Run ONE per environment
   (k8s: Deployment replicas 1 + Service). In-memory state, no Redis.
 - Endpoints:
   - `POST /v1/live` - JSON batch `[{"kind":"start"|"end","span":{...}}]` from `watch()` (real-time starts).
   - `POST /v1/traces` - standard OTLP/HTTP (protobuf + JSON), ended spans from any OTel SDK/collector.
   - `POST /v1/claude-code` - Claude Code `"type": "http"` hook payloads (examples/claude-code/) → synthetic live spans.
   - `GET /live/stream` - SSE world events. On connect: replay MCP topology + events of runs still in progress. Keepalive 15s.
+    Filtered per viewer by scope/run (see "Scopes & auth").
   - `POST /live/topology` - `{server, resources:[{name, kind}]}` → `mcp_register` (also `agentglow.register_mcp(...)`).
   - `GET /live/graph` - optional graph sample `{nodes:[{id,name,kind}],links:[{source,target}]}`; FalkorDB provider when `AGENTGLOW_FALKOR_URL`/`--falkor` set, else 404 → UI uses its built-in sample.
   - `GET /live/health`; static UI at `/`, `/<theme>`, assets.
@@ -44,6 +45,62 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
   LangChain/LangGraph/deepagents), OpenInference OpenAI Agents instrumentation (extra `[openai-agents]`, added next
   to the SDK's own trace processors) and Hatchet instrumentation when those packages are installed and not
   already instrumented. Idempotent. Also exports `agentglow.otel.LiveSpanProcessor`, `agentglow.register_mcp`.
+
+## Scopes & auth
+Show each user only their own agents. A run's **scope** is a string (user id, tenant, team) set by the app; viewers
+are filtered by scope and/or run id.
+
+**Tagging (producer side).** A run's scope = the first `agentglow.scope` (alias `agentglow.run.scope`) attribute seen
+on any span of the run; later values are ignored. Ways to set it:
+- Python: `with agentglow.scope("user-123"): ...` puts the scope in OTel baggage; every span started inside (nested
+  spans, asyncio tasks created inside, LangChain/OpenAI Agents/Hatchet instrumentation) gets `agentglow.scope`.
+  `agentglow.set_scope("user-123")` does the same without a with-block (current context/task only). Applied by
+  `LiveSpanProcessor` (so `watch()` users need nothing else); add `agentglow.ScopeSpanProcessor()` before other
+  exporters to tag OTLP-only setups. A child started from an explicit parent context inherits its parent's scope.
+- Any language: set the span attribute `agentglow.scope`.
+- Ingest endpoints (`/v1/live`, `/v1/traces`, `/v1/claude-code`): `?scope=<s>` or an `X-AgentGlow-Scope` header
+  scopes spans that carry none (Claude Code hooks: `"url": "http://host:8100/v1/claude-code?scope=user-123"`).
+- Scope values go through the privacy scrub like any attribute: kept, unless they look like a secret.
+
+**Server.** The Hub keeps a bounded run → scope map; each world event gets a `scope` field once its run's scope is
+known (frontends may ignore it). Each SSE subscriber carries a filter `(scope?, run?)`:
+- no filter: everything (unscoped runs included), unchanged behavior;
+- `scope=s`: only events of runs whose scope is `s` (runs with no scope never match), plus `mcp_register`;
+- `run=r`: only run `r` (plus `mcp_register`); both: both must match.
+Replay on connect uses the same filter. Events of a run emitted before its first scoped span are not sent to scoped
+viewers; when the scope becomes known they are delivered to the matching scoped viewers only (from the bounded event
+buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion stays unauthenticated (put it on a
+private network).
+
+**Choosing the filter (viewer side).**
+- Dev (no secret): headers `X-AgentGlow-Scope` and `X-AgentGlow-Run`; `/live/stream` also accepts `?run=<id>`
+  (shareable link, not sensitive). `?scope=` and `?token=` are not accepted on viewer endpoints.
+- Secure (`AGENTGLOW_SECRET` env or `agentglow serve --secret S`): `/live/stream`, `/live/graph`, `/live/run` require
+  `Authorization: Bearer <token>` (401 if missing, invalid or expired; never accepted in a query param). The filter
+  comes only from the token. A scope/run header or `?run=` that contradicts the token is 403; it may only narrow a
+  dimension the token leaves open (an admin token plus `X-AgentGlow-Scope` = view as that scope).
+  `/live/health` without a token returns liveness only (`ok, version, ui, run, auth`); with a token, counts for
+  that filter (`buffered`, `open_runs`, plus `scope`/`run_id`); a bad token is 401.
+- `/live/stream` is plain `text/event-stream` over GET: works with `fetch()` + a stream reader (headers), and with
+  `EventSource` in dev. CORS allows the `Authorization`, `X-AgentGlow-Scope` and `X-AgentGlow-Run` headers.
+- `POST /live/run` `{topic, scope?}` forwards `{"topic", "scope"}` to the webhook (`scope` omitted when unknown).
+  Secure: scope from the token (a different body `scope` is 403). Dev: `X-AgentGlow-Scope` header, else body `scope`.
+- Without a secret, `agentglow serve` logs a warning when bound to a non-localhost address.
+
+**Token format** (mint it in your backend, any language; `agentglow.make_token(secret, scope=None, run=None,
+ttl_s=3600)` in Python):
+```
+token   = payload + "." + sig
+payload = base64url(UTF-8 JSON {"scope": <string|null>, "run": <string|null>, "exp": <unix seconds int>})
+sig     = base64url(HMAC-SHA256(key = secret as UTF-8, message = payload string as ASCII))
+```
+base64url is RFC 4648 section 5 with `=` padding stripped. The signature covers the encoded payload exactly as sent, so
+JSON key order and spacing do not matter. `scope` null and `run` null = admin token (sees everything). Node:
+```js
+const b64 = (b) => Buffer.from(b).toString("base64url");
+const payload = b64(JSON.stringify({ scope: userId, run: null, exp: Math.floor(Date.now() / 1000) + 3600 }));
+const token = payload + "." + crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
+```
 
 ## Span → world event mapping (backend `mapper.py`)
 Owning agent of any span = nearest ancestor agent span. Run id = Hatchet workflow run id found on the span or
