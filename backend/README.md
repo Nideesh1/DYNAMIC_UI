@@ -5,7 +5,7 @@ born when its span starts, pulses on each LLM call, fires tool/MCP/graph packets
 when its span ends. Works with LangChain, LangGraph (incl. `langgraph-supervisor`), deepagents, the OpenAI Agents SDK
 (`agentglow[openai-agents]`), Hatchet workflows, Claude Code (via hooks), and any agent framework that emits OTel spans.
 
-![AgentGlow - neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.gif)
+![AgentGlow - neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.webp)
 
 15 themes:
 
