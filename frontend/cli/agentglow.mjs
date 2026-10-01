@@ -14,7 +14,7 @@ import {
   startBackground, stopServer,
 } from "./lib/server.mjs";
 import { which } from "./lib/uv.mjs";
-import { hasAutostart, installAutostart, removeAutostart } from "./lib/autostart.mjs";
+import { hasAutostart, installAutostart, launchdLogPath, loginPath, removeAutostart } from "./lib/autostart.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const here = path.dirname(SELF);
@@ -184,13 +184,19 @@ async function cmdAutostart(o) {
     console.log(`Removed the AgentGlow autostart entry. Run \`agentglow setup\` to go back to per-session auto-start.`);
     return 0;
   }
-  const port = o.port;
+  const port = effectivePort(o);
   const script = installCliCopy({ srcCliDir: here, version: VERSION });
-  const command = startHookCommand({
-    port, version: VERSION, node: nodeForHook(), script, cacheDir: process.env.AGENTGLOW_CACHE_DIR,
-  });
+  const node = nodeForHook() || process.execPath;
+  const command = startHookCommand({ port, version: VERSION, node, script, cacheDir: process.env.AGENTGLOW_CACHE_DIR });
+  // macOS/Linux: the supervisor runs the server in the foreground (argv, no shell); Windows keeps the shell command
+  const argv = [node, script, "start", "--port", String(port)];
+  const env = { PATH: loginPath({ node }), HOME: os.homedir() };
+  for (const k of ["AGENTGLOW_CACHE_DIR", "AGENTGLOW_API_KEY", "AGENTGLOW_INGEST_KEY", "AGENTGLOW_SECRET", "AGENTGLOW_PY_SPEC"]) {
+    if (process.env[k]) env[k] = process.env[k];
+  }
+  let r;
   try {
-    const r = installAutostart({ command });
+    r = installAutostart({ command, argv, env });
     console.log(`Installed autostart via ${r.method}${r.path ? ` (${r.path})` : ""}.`);
   } catch (e) {
     console.error(`agentglow: could not install autostart (${e.message}).`);
@@ -198,9 +204,11 @@ async function cmdAutostart(o) {
     return 1;
   }
   process.env.AGENTGLOW_URL = baseUrl({ port });
-  const code = await cmdSetup(o);
+  const code = await cmdSetup({ ...o, port });
   if (code === 0) {
-    console.log(`\nAutostart takes effect at next login. Start the server once now too: npx agentglow start --background${portFlag(port)}`);
+    console.log(process.platform === "win32"
+      ? `\nAutostart takes effect at next login. Start the server once now too: npx agentglow start --background${portFlag(port)}`
+      : `\nThe server is running now and will start at every login. Logs: ${r.path && process.platform === "darwin" ? launchdLogPath() : "journalctl --user -u agentglow"}`);
   }
   return code;
 }
@@ -219,6 +227,10 @@ async function cmdRemove(o) {
     const s = await stopServer(port);
     if (s === "stopped") console.log(`Stopped the AgentGlow server on port ${port}.`);
     else if (s === "not-ours") console.log(`An AgentGlow server on port ${port} was not started by this CLI; left it running.`);
+  }
+  if (hasAutostart()) {  // `remove` undoes everything, incl. the login item (it points at the CLI copy removed below)
+    removeAutostart();
+    console.log(`Removed the AgentGlow login item (autostart); its server is stopped.`);
   }
   try { removeCliCopies(); } catch { /* ignore */ }
   return 0;

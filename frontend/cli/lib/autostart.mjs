@@ -30,28 +30,51 @@ function startupVbs(command) {
   return `Set WshShell = CreateObject("WScript.Shell")\r\nWshShell.Run "${esc}", 0, False\r\n`;
 }
 
-function launchdPlist(command) {
-  const esc = command.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const xml = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+export const launchdLogPath = (home = os.homedir()) => path.join(home, "Library", "Logs", "agentglow.log");
+
+/** PATH for login-time jobs: launchd/systemd start with a bare PATH, so add where uv/uvx/node usually live. */
+export function loginPath({ home = os.homedir(), node = process.execPath, base = process.env.PATH || "" } = {}) {
+  const dirs = [path.dirname(node), path.join(home, ".local", "bin"), path.join(home, ".cargo", "bin"),
+    "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin", ...base.split(path.delimiter)];
+  return [...new Set(dirs.filter(Boolean))].join(path.delimiter);
+}
+
+// The server runs in the FOREGROUND under launchd/systemd (not `start --background`): a job whose process exits
+// right away gets its spawned children reaped, and a supervised foreground process can be restarted on crash.
+// `start` exits 0 when a server is already up on the port, so KeepAlive {SuccessfulExit: false} never loops.
+export function launchdPlist({ argv, env = {}, home = os.homedir() }) {
+  const args = argv.map((a) => `<string>${xml(a)}</string>`).join("");
+  const envs = Object.entries(env).map(([k, v]) => `<key>${xml(k)}</key><string>${xml(v)}</string>`).join("");
+  const log = xml(launchdLogPath(home));
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${LABEL}</string>
-  <key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>${esc}</string></array>
+  <key>ProgramArguments</key><array>${args}</array>
+  <key>EnvironmentVariables</key><dict>${envs}</dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><false/>
-  <key>StandardOutPath</key><string>/tmp/agentglow-autostart.log</string>
-  <key>StandardErrorPath</key><string>/tmp/agentglow-autostart.log</string>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>${log}</string>
+  <key>StandardErrorPath</key><string>${log}</string>
 </dict></plist>
 `;
 }
 
-function systemdUnit(command) {
+export function systemdUnit({ argv, env = {} }) {
+  const q = (a) => (/[\s"\\]/.test(a) ? JSON.stringify(a) : a);
+  const envLines = Object.entries(env).map(([k, v]) => `Environment=${q(`${k}=${v}`)}`).join("\n");
   return `[Unit]
 Description=AgentGlow server
 
 [Service]
-ExecStart=/bin/sh -c ${JSON.stringify(command)}
+ExecStart=${argv.map(q).join(" ")}
+${envLines}
 Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=default.target
@@ -59,7 +82,7 @@ WantedBy=default.target
 }
 
 /** Install an OS-level "run this command at login" entry. Returns { method, path? }. Throws on failure. */
-export function installAutostart({ command, platform = process.platform, home = os.homedir() } = {}) {
+export function installAutostart({ command, argv, env = {}, platform = process.platform, home = os.homedir() } = {}) {
   if (platform === "win32") {
     try {
       execFileSync("schtasks", ["/create", "/tn", TASK_NAME, "/tr", winTaskCommand(command), "/sc", "onlogon", "/rl", "limited", "/f"],
@@ -77,15 +100,16 @@ export function installAutostart({ command, platform = process.platform, home = 
   if (platform === "darwin") {
     const file = plistPath(home);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, launchdPlist(command));
+    fs.mkdirSync(path.dirname(launchdLogPath(home)), { recursive: true });
+    fs.writeFileSync(file, launchdPlist({ argv, env, home }));
     try { execFileSync("launchctl", ["unload", file], { stdio: "pipe" }); } catch { /* wasn't loaded */ }
-    execFileSync("launchctl", ["load", "-w", file], { stdio: "pipe" });
+    execFileSync("launchctl", ["load", "-w", file], { stdio: "pipe" });  // RunAtLoad: starts it right now too
     return { method: "launchd", path: file };
   }
   // linux and other unix: systemd --user
   const file = systemdUnitPath(home);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, systemdUnit(command));
+  fs.writeFileSync(file, systemdUnit({ argv, env }));
   execFileSync("systemctl", ["--user", "daemon-reload"], { stdio: "pipe" });
   execFileSync("systemctl", ["--user", "enable", "--now", "agentglow"], { stdio: "pipe" });
   return { method: "systemd --user", path: file };
