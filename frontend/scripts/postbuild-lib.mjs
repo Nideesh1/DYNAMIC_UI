@@ -1,0 +1,15 @@
+// After `vite build -c vite.lib.config.ts && tsc -p tsconfig.lib.json`:
+//  1. make `import { AgentScene } from "agentglow"` pull in dist/style.css automatically;
+//  2. keep only the public declaration files (scene internals are not API).
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+
+const dist = (p) => new URL(`../dist/${p}`, import.meta.url);
+if (!existsSync(dist("style.css"))) throw new Error("dist/style.css missing");
+const js = readFileSync(dist("index.js"), "utf8");
+if (!js.startsWith('import "./style.css";')) writeFileSync(dist("index.js"), `import "./style.css";\n${js}`);
+
+const world = readFileSync(dist("types/scenes/shared/world.d.ts"), "utf8");
+rmSync(dist("types/scenes"), { recursive: true, force: true });
+writeFileSync(dist("types/world.d.ts"), world);
+writeFileSync(dist("types/index.d.ts"), readFileSync(dist("types/index.d.ts"), "utf8").replace("./scenes/shared/world", "./world"));
+for (const f of ["index.d.ts", "AgentScene.d.ts", "themes.d.ts", "world.d.ts"]) if (!existsSync(dist(`types/${f}`))) throw new Error(`missing types/${f}`);

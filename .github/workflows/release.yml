@@ -1,0 +1,84 @@
+# Release: push a tag like v0.1.0 →
+#   1. build the 3D UI and bundle it into the Python wheel
+#   2. publish `agentglow` to PyPI (trusted publishing, no token)
+#   3. publish `agentglow` to npm (NPM_TOKEN)
+# Only NPM_TOKEN is referenced; no other repo secrets are exposed to these jobs.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Set version from tag
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = \".*\"/version = \"$V\"/" backend/pyproject.toml
+          (cd frontend && npm version "$V" --no-git-tag-version --allow-same-version)
+
+      - name: Build UI (app → backend/agentglow/static, lib → frontend/dist)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build:app
+          npm run build:lib
+
+      - name: Test + build Python package
+        working-directory: backend
+        run: |
+          uv run pytest -q
+          uv build
+          python3 -c "import zipfile,glob; z=zipfile.ZipFile(glob.glob('dist/*.whl')[0]); n=[f for f in z.namelist() if 'static/index.html' in f]; assert n, 'UI missing from wheel'; print('wheel ok:', n)"
+
+      - uses: actions/upload-artifact@v4
+        with: { name: python-dist, path: backend/dist/ }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: |
+            frontend/dist/
+            frontend/package.json
+            frontend/README.md
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: python-dist, path: dist/ }
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  npm:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # npm provenance
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: npm-package, path: pkg/ }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish
+        working-directory: pkg
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

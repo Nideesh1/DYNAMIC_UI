@@ -297,7 +297,7 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
       {selected && (
         <Html position={[0, 2, 0]} center style={{ pointerEvents: "none" }}>
           <div className="scene-label" style={{ ["--c" as string]: TYPE_COLOR[inst.type] }}>
-            {TYPE_LABEL[inst.type]}
+            {inst.name}
           </div>
         </Html>
       )}

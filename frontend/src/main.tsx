@@ -1,29 +1,17 @@
-import "./disable-devtools";
-import "@openuidev/react-ui/styles/index.css";
+/** Standalone app: "/" = gallery, "/<theme>" = full-screen scene. Config comes from ?source= / ?sim=1 / ?hud=0. */
 import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App";
+import { THEME_LOADERS, THEMES, type Theme } from "./themes";
 
-const Observatory = lazy(() => import("./observatory/Observatory"));
-// /orbit, /neural, /subway, ... → src/scenes/<name>/index.tsx (default export)
-const sceneModules = import.meta.glob<{ default: React.ComponentType }>("./scenes/*/index.tsx");
-const path = location.pathname.replace(/\/$/, "");
-const sceneLoader = sceneModules[`./scenes${path}/index.tsx`];
-const Scene = sceneLoader ? lazy(sceneLoader) : null;
-import "./app.css";
+const path = location.pathname.replace(/\/+$/, "").slice(1);
+const theme = (THEMES as readonly string[]).includes(path) ? (path as Theme) : null;
+const Page = theme ? lazy(THEME_LOADERS[theme]) : lazy(() => import("./Gallery"));
+if (theme) document.title = `AgentGlow · ${theme}`;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {Scene ? (
-      <Suspense fallback={null}>
-        <Scene />
-      </Suspense>
-    ) : path === "/live" ? (
-      <Suspense fallback={null}>
-        <Observatory />
-      </Suspense>
-    ) : (
-      <App />
-    )}
+    <Suspense fallback={null}>
+      <Page />
+    </Suspense>
   </StrictMode>,
 );

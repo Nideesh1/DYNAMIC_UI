@@ -1,0 +1,25 @@
+[project]
+name = "agentglow-example-deepagents-hatchet"
+version = "0.1.0"
+description = "Hatchet + deepagents + MCP + FalkorDB, visualized live by AgentGlow through OpenTelemetry only"
+requires-python = ">=3.11"
+dependencies = [
+  "agentglow[langchain,hatchet]",
+  "deepagents",
+  "hatchet-sdk[otel]",
+  "langchain-google-genai",
+  "langchain-mcp-adapters",
+  "mcp",
+  "opentelemetry-sdk",
+  "opentelemetry-exporter-otlp-proto-http",
+  "openinference-instrumentation-langchain",
+  "openinference-instrumentation-mcp",
+  "falkordb",
+  "python-dotenv",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agentglow = { path = "../../backend", editable = true }

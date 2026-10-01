@@ -1,12 +1,52 @@
 [project]
-name = "cb6-ask-backend"
+name = "agentglow"
 version = "0.1.0"
-requires-python = ">=3.11"
+description = "Live 3D views of agent systems, driven only by OpenTelemetry spans"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["opentelemetry", "agents", "observability", "langgraph", "deepagents", "visualization"]
 dependencies = [
-    "fastapi",
-    "uvicorn[standard]",
-    "google-genai",
-    "python-dotenv",
-    "falkordb>=1.7.1",
-    "rapidfuzz>=3.14.6",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "opentelemetry-sdk>=1.25",
+  "opentelemetry-proto>=1.25",
+  "protobuf>=4.21",
+  "httpx>=0.27",
 ]
+
+[project.optional-dependencies]
+langchain = ["openinference-instrumentation-langchain>=0.1.30"]
+hatchet = ["hatchet-sdk[otel]>=1.0"]
+falkordb = ["falkordb>=1.0"]
+
+[project.scripts]
+agentglow = "agentglow.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Nideesh1/agentglow"
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "deepagents; python_version >= '3.11'",
+  "langchain-google-genai; python_version >= '3.11'",
+  "openinference-instrumentation-langchain",
+  "python-dotenv",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentglow"]
+# static/ is filled by the frontend build and may be git-ignored: include it explicitly
+artifacts = ["agentglow/static/**"]
+
+[tool.hatch.build.targets.sdist]
+include = ["agentglow", "README.md", "pyproject.toml"]
+artifacts = ["agentglow/static/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

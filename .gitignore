@@ -21,3 +21,7 @@ __pycache__/
 .playwright-mcp/
 .DS_Store
 graph/*.log
+.vite/
+backend/agentglow/static/
+backend/agentvision/
+frontend/dist/

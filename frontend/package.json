@@ -1,37 +1,76 @@
 {
-  "name": "cb6-ask-frontend",
-  "private": true,
+  "name": "agentglow",
+  "version": "0.1.0",
+  "description": "Live 3D views of agent systems (LangGraph, deepagents, any OpenTelemetry-instrumented agents) as a React component.",
+  "keywords": [
+    "opentelemetry",
+    "agents",
+    "3d",
+    "three.js",
+    "langgraph",
+    "deepagents",
+    "react",
+    "observability",
+    "react-three-fiber"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nideesh1/agentglow.git",
+    "directory": "frontend"
+  },
+  "homepage": "https://github.com/Nideesh1/agentglow#readme",
+  "bugs": {
+    "url": "https://github.com/Nideesh1/agentglow/issues"
+  },
   "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./style.css": "./dist/style.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "**/*.css",
+    "./dist/index.js"
+  ],
   "scripts": {
-    "generate": "openui generate --no-telemetry src/library.ts --out src/generated/system-prompt.txt --no-interactive",
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "validate": "tsx scripts/validate-home.ts",
-    "preview": "vite preview"
+    "build": "npm run build:lib && npm run build:app",
+    "build:app": "tsc --noEmit && vite build",
+    "build:lib": "vite build -c vite.lib.config.ts && tsc -p tsconfig.lib.json && node scripts/postbuild-lib.mjs",
+    "preview": "vite preview",
+    "prepublishOnly": "npm run build:lib"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "dependencies": {
-    "@openuidev/react-lang": "0.3.0",
-    "@openuidev/react-ui": "0.16.3",
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.1",
     "@react-three/postprocessing": "^3.1.3",
     "postprocessing": "^6.39.5",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-force-graph-3d": "^1.29.2",
-    "three": "^0.186.1",
-    "three-spritetext": "^1.10.0",
-    "zod": "^4.0.0"
+    "three": "^0.186.1"
   },
   "devDependencies": {
-    "@openuidev/cli": "0.4.1",
     "@types/node": "^22.20.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.0.0",
-    "tsx": "^4.19.0",
     "typescript": "^5.6.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }

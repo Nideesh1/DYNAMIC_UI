@@ -215,7 +215,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
         <sprite ref={halo} material={m.halo} />
         <Html center position={[0, -1.05 * roleScale(inst), 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
           <div ref={label} className="scene-label" style={{ ["--c" as string]: TYPE_COLOR[inst.type], fontSize: inst.subagent ? 9 : 12, padding: "1px 6px", opacity: 0 }}>
-            {TYPE_LABEL[inst.type]}
+            {inst.name}
             {k !== undefined ? ` ${Number(k) + 1}` : ""}
           </div>
         </Html>

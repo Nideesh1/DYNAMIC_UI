@@ -1,0 +1,33 @@
+# CI on pushes/PRs: typecheck + build the UI, test + build the Python package. No secrets used.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+      - name: Frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build:app
+          npm run build:lib
+      - name: Backend
+        working-directory: backend
+        run: |
+          uv run pytest -q
+          uv build

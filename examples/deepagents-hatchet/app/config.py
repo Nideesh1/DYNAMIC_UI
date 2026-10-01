@@ -1,0 +1,60 @@
+"""Env setup shared by the worker, MCP server and trigger. Import this FIRST (sets Hatchet/OTel env)."""
+import base64
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parents[3]  # repo root (has .env)
+load_dotenv(ROOT / ".env")
+
+IN_DOCKER = os.path.exists("/.dockerenv")
+
+# Hatchet client (token minted by the hatchet_token compose service)
+if not os.environ.get("HATCHET_CLIENT_TOKEN"):
+    tok = os.environ.get("OBS_HATCHET_TOKEN") or (Path("/hatchet-token/token").read_text().strip() if Path("/hatchet-token/token").exists() else "")
+    if tok:
+        os.environ["HATCHET_CLIENT_TOKEN"] = tok
+os.environ.setdefault("HATCHET_CLIENT_HOST_PORT", "obs_hatchet_engine:7070" if IN_DOCKER else "localhost:7177")
+os.environ.setdefault("HATCHET_CLIENT_SERVER_URL", "http://obs_hatchet_dashboard:80" if IN_DOCKER else "http://localhost:8180")
+os.environ.setdefault("HATCHET_CLIENT_TLS_STRATEGY", "none")
+os.environ.setdefault("FALKOR_HOST", "falkordb" if IN_DOCKER else "localhost")
+
+AGENTGLOW_URL = os.environ.get("AGENTGLOW_URL", "http://localhost:8100")
+MCP_URL = os.environ.get("MCP_URL", "http://localhost:8200/mcp")
+MODEL = os.environ.get("OBS_MODEL", "gemini-3.8-flash")
+
+# Optional: Langfuse over plain OTLP — on when keys are set (scripts/gen-obs-env.sh) unless LANGFUSE_EXPORT=0.
+# Start Langfuse with `docker compose --profile langfuse up -d`.
+LANGFUSE_PK, LANGFUSE_SK = os.environ.get("OBS_LANGFUSE_PUBLIC_KEY", ""), os.environ.get("OBS_LANGFUSE_SECRET_KEY", "")
+if os.environ.get("LANGFUSE_EXPORT", "1") == "0":
+    LANGFUSE_PK = LANGFUSE_SK = ""
+LANGFUSE_OTLP = os.environ.get("LANGFUSE_OTLP_ENDPOINT", ("http://obs_langfuse_web:3000" if IN_DOCKER else "http://localhost:3100") + "/api/public/otel/v1/traces")
+
+
+def setup_tracing(service_name: str) -> None:
+    """One TracerProvider, two consumers side by side: Langfuse (OTLP batch export, optional) + AgentGlow (live)."""
+    import agentglow
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+
+    provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
+    if LANGFUSE_PK and LANGFUSE_SK:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        auth = "Basic " + base64.b64encode(f"{LANGFUSE_PK}:{LANGFUSE_SK}".encode()).decode()
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=LANGFUSE_OTLP, headers={"Authorization": auth})))
+    trace.set_tracer_provider(provider)
+
+    # MCP trace-context propagation (client injects traceparent into request _meta, server extracts it),
+    # so spans opened inside MCP tool handlers are children of the agent's tool-call span.
+    # (Before anything imports mcp.client: langchain-mcp-adapters binds the transport function at import.)
+    from openinference.instrumentation.mcp import MCPInstrumentor
+
+    MCPInstrumentor().instrument(tracer_provider=provider)
+
+    # AgentGlow reuses the provider above (adds its live processor) and enables
+    # OpenInference LangChain + Hatchet instrumentation. That is the whole integration.
+    agentglow.watch(AGENTGLOW_URL, service_name=service_name)
