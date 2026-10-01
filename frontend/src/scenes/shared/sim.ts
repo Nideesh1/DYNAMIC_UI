@@ -141,13 +141,14 @@ function scheduleRun(at: Sched) {
   msg(researcher, writer, "Findings merged - draft the brief", 120);
   exit(researcher, 200);
   think(writer);
-  const wSkill = pick(["pptx", "docx", "pdf"]);
-  skillOn(writer, wSkill, 150);
+  // the writer loads 2-3 skills at once (overlapping), e.g. a document format + dataviz + a style skill
+  const wSkills = [pick(["pptx", "docx", "pdf"]), "dataviz", "haiku"].slice(0, 2 + Math.floor(Math.random() * 2));
+  wSkills.forEach((sk, k) => skillOn(writer, sk, k ? 500 : 150));
   llm(writer, 1800);
   later(400, () => ({ type: "graph", run_id: run, id: writer, op: "write", nodes: [`Brief: ${topic}`, ...pick(NODES).slice(0, 2)], ts: ts() }));
   later(300, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "call", resource: "Slack API", resource_kind: "api", ts: ts() }));
   later(700, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "result", latency_ms: 700, resource: "Slack API", resource_kind: "api", ts: ts() }));
-  skillOff(writer, wSkill, 300);
+  wSkills.forEach((sk, k) => skillOff(writer, sk, k ? 900 : 300));
   step("write", "done", 400);
   later(150, () => ({ type: "final", run_id: run, text: `Brief on "${topic}": linked accounts, incidents and metrics summarized with sources.`, ts: ts() }));
   exit(writer, 100);

@@ -101,18 +101,38 @@ export type Instance = {
   nodes: Set<string>; // FalkorDB nodes this agent read/wrote
   /** skills this agent used: name -> active now, times started, performance.now() of the last start/end */
   skills: Map<string, SkillUse>;
-  /** the skill the 3D badge shows: newest started one ("" = none yet) and when it ended (0 while active) */
+  /** newest started skill ("" = none yet) and when the last active one ended (0 while one is active) */
   skill: string;
   skillEndAt: number;
 };
-export type SkillUse = { active: boolean; count: number; last: number };
-/** How long the skill badge lingers (fading) after the skill ends (ms). */
-export const SKILL_LINGER_MS = 3000;
-/** 0..1 skill badge visibility: 1 while a skill is active, fades over SKILL_LINGER_MS after it ends. */
+/** one skill on one agent; startAt / endAt (performance.now()) drive its sigil ring (endAt 0 while active) */
+export type SkillUse = { active: boolean; count: number; last: number; startAt: number; endAt: number };
+/** Skill sigil timing (ms): fade in, minimum time shown after a start (Claude Code skills are instantaneous tool
+ *  calls, start and end arrive ms apart), fade out after the (effective) end. */
+export const SKILL_IN_MS = 450;
+export const SKILL_MIN_MS = 4000;
+export const SKILL_OUT_MS = 1100;
+/** when a skill's sigil starts fading out: its end, but never before SKILL_MIN_MS after its start (0 = active) */
+export function skillOffAt(u: SkillUse): number {
+  return u.endAt ? Math.max(u.endAt, u.startAt + SKILL_MIN_MS) : 0;
+}
+/** 0..1 visibility of one skill's sigil: eases in after a start, holds while active (>= SKILL_MIN_MS), then fades. */
+export function skillUseMix(u: SkillUse, now = performance.now()): number {
+  const t = Math.min(1, Math.max(0, (now - u.startAt) / SKILL_IN_MS));
+  const off = skillOffAt(u);
+  const o = off ? Math.min(1, Math.max(0, 1 - (now - off) / SKILL_OUT_MS)) : 1;
+  return t * (2 - t) * o * o * (3 - 2 * o);
+}
+let mixNow = 0;
+let mixMax = 0;
+const mixVisit = (u: SkillUse) => void (mixMax = Math.max(mixMax, skillUseMix(u, mixNow)));
+/** 0..1: the strongest skill sigil on this agent (0 = none shown) */
 export function skillMix(i: Instance, now = performance.now()): number {
   if (!i.skill) return 0;
-  if (!i.skillEndAt) return 1;
-  return Math.max(0, 1 - (now - i.skillEndAt) / SKILL_LINGER_MS);
+  mixNow = now;
+  mixMax = 0;
+  i.skills.forEach(mixVisit);
+  return mixMax;
 }
 export type Run = {
   id: string;
@@ -342,8 +362,8 @@ export function apply(ev: WorldEvent) {
       }
       for (const [k, p] of world.mcpPending) if (p.instance === ev.id) world.mcpPending.delete(k);
       if (i && i.skill && !i.skillEndAt) {
-        // finished without a skill "end": close its skills so the badge fades with it
-        for (const u of i.skills.values()) u.active = false;
+        // finished without a skill "end": close its skills so their sigils fade with it
+        for (const u of i.skills.values()) if (u.active) (u.active = false), (u.endAt = now);
         i.skillEndAt = now;
       }
       break;
@@ -389,22 +409,25 @@ export function apply(ev: WorldEvent) {
       const i = world.instances.get(ev.id);
       if (!i) break;
       let u = i.skills.get(ev.name);
-      if (!u) i.skills.set(ev.name, (u = { active: false, count: 0, last: now }));
+      if (!u) i.skills.set(ev.name, (u = { active: false, count: 0, last: now, startAt: 0, endAt: 0 }));
       u.last = now;
       if (ev.status === "start") {
+        // a start while its sigil is still up keeps it up (no second fade-in), else it eases in
+        const shown = u.count > 0 && (!u.endAt || now < skillOffAt(u) + SKILL_OUT_MS);
+        u.startAt = shown ? now - Math.min(SKILL_IN_MS, now - u.startAt) : now;
+        u.endAt = 0;
         u.active = true;
         u.count++;
         i.skill = ev.name;
         i.skillEndAt = 0;
-      } else {
+      } else if (u.active) {
         u.active = false;
-        if (i.skill === ev.name) {
-          // another skill still running: the badge switches to it, else it lingers and fades
-          let other = "";
-          for (const [n, v] of i.skills) if (v.active && (!other || v.last > i.skills.get(other)!.last)) other = n;
-          if (other) i.skill = other;
-          else i.skillEndAt = now;
-        }
+        u.endAt = now;
+        // another skill still running: `skill` switches to the newest one, else all ended now
+        let other = "";
+        for (const [n, v] of i.skills) if (v.active && (!other || v.startAt > i.skills.get(other)!.startAt)) other = n;
+        if (other) i.skill = other;
+        else i.skillEndAt = now;
       }
       break;
     }
