@@ -22,7 +22,7 @@ on first run). Your agents and subagents appear live at http://localhost:8100/ne
 |---|---|
 | `npx agentglow setup [--port 8100]` | install once (backup first), start the server, open `/neural` |
 | `npx agentglow status` / `open` / `stop` | check install + server / open the view / stop the background server |
-| `npx agentglow remove` | uninstall everything `setup` added |
+| `npx agentglow remove` | uninstall everything `setup` added and stop the server |
 | `npx agentglow start [--background]` | run the server yourself (`serve` is an alias) |
 | `npx agentglow claude [-- <claude args>]` | try it without installing: one session with temporary settings |
 

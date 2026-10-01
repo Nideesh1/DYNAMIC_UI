@@ -23,7 +23,7 @@ Just trying it? `npx agentglow claude` runs one Claude Code session with tempora
 | `npx agentglow status [--port 8100]` | is it installed, is the server up, where are the logs |
 | `npx agentglow open [--port 8100]` | open the 3D view |
 | `npx agentglow stop [--port 8100]` | stop a server the CLI started in the background |
-| `npx agentglow remove` | uninstall: remove exactly what `setup` added (hooks whose URL contains `/v1/claude-code`, its env keys, the auto-start hook); everything else stays |
+| `npx agentglow remove` | uninstall and stop the server: remove exactly what `setup` added (hooks whose URL contains `/v1/claude-code`, its env keys, the auto-start hook); everything else stays |
 | `npx agentglow start [--port 8100] [--background]` | run the server (foreground by default); `serve` is an alias |
 | `npx agentglow claude [--port 8100] [--no-open] [-- <claude args>]` | try mode: start/reuse the server, open `/neural`, run `claude --settings <temp file> <claude args>`; exits with Claude's exit code and leaves the server running |
 
