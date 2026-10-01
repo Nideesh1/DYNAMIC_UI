@@ -144,14 +144,16 @@ export function unmergeSettings(settings, state = null) {
  * `startCommand` adds the SessionStart command hook that starts the local server (see startHookCommand).
  * Returns { settings, state: { addedEnv, base, startHook }, skipped }.
  */
-export function mergeSettings(settings, base, state = null, { startCommand = null } = {}) {
+export function mergeSettings(settings, base, state = null, { startCommand = null, hooks = true } = {}) {
   const s = unmergeSettings(settings, state);
   const ours = claudeSettings(base);
-  if (startCommand) ours.hooks.SessionStart.unshift(startHookGroup(startCommand));
+  if (!hooks) { ours.hooks = {}; startCommand = null; } // the AgentGlow plugin already provides them
+  else if (startCommand) ours.hooks.SessionStart.unshift(startHookGroup(startCommand));
   s.hooks = s.hooks && typeof s.hooks === "object" ? s.hooks : {};
   for (const [event, groups] of Object.entries(ours.hooks)) {
     s.hooks[event] = [...(Array.isArray(s.hooks[event]) ? s.hooks[event] : []), ...groups];
   }
+  if (!Object.keys(s.hooks).length) delete s.hooks;
   s.env = s.env && typeof s.env === "object" ? s.env : {};
   const addedEnv = [];
   const skipped = [];
@@ -161,6 +163,13 @@ export function mergeSettings(settings, base, state = null, { startCommand = nul
   }
   if (!Object.keys(s.env).length) delete s.env;
   return { settings: s, state: { base, addedEnv, startHook: !!startCommand }, skipped };
+}
+
+/** Plugin ids like "agentglow@agentglow" that `enabledPlugins` turns on (the Claude Code plugin brings its own hooks). */
+export function enabledAgentglowPlugins(settings) {
+  return Object.entries(settings?.enabledPlugins || {})
+    .filter(([id, on]) => on === true && id.split("@")[0] === "agentglow")
+    .map(([id]) => id);
 }
 
 // ---------- files ----------
@@ -189,10 +198,10 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sorted = (o) => Object.fromEntries(Object.entries(o || {}).sort(([a], [b]) => a.localeCompare(b)));
 
 /** Merge into a settings file. Returns { changed, backup, skipped, file }. */
-export function installSettingsFile(file, base, { now = Date.now(), startCommand = null, extra = {} } = {}) {
+export function installSettingsFile(file, base, { now = Date.now(), startCommand = null, hooks = true, extra = {} } = {}) {
   const before = readJson(file, {});
   const st = readJson(statePath(file), null);
-  const merged = mergeSettings(before, base, st, { startCommand });
+  const merged = mergeSettings(before, base, st, { startCommand, hooks });
   const { settings, skipped } = merged;
   const state = { ...merged.state, ...extra };
   // keep the first backup we made, so `remove` can point at the pre-AgentGlow settings
@@ -206,6 +215,11 @@ export function installSettingsFile(file, base, { now = Date.now(), startCommand
   if (!same(before, settings)) fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
   fs.writeFileSync(statePath(file), JSON.stringify(state, null, 2) + "\n");
   return { changed: true, backup: bak, skipped, file };
+}
+
+/** enabledAgentglowPlugins() of a settings file ([] when it is missing or unreadable). */
+export function pluginIdsIn(file) {
+  try { return enabledAgentglowPlugins(readJson(file, {})); } catch { return []; }
 }
 
 /** Read the install sidecar (null when AgentGlow is not installed in `file`). */

@@ -29,6 +29,9 @@ jobs:
           V="${GITHUB_REF_NAME#v}"
           sed -i "s/^version = \".*\"/version = \"$V\"/" backend/pyproject.toml
           (cd frontend && npm version "$V" --no-git-tag-version --allow-same-version)
+          # the Claude Code plugin is installed from git (marketplace), not from this build: bump it in a commit first
+          P=$(node -p 'require("./plugin/.claude-plugin/plugin.json").version')
+          [ "$P" = "$V" ] || { echo "::error::plugin/.claude-plugin/plugin.json version is $P, tag is $V. Commit the bump, then tag."; exit 1; }
 
       - name: Build UI (app → backend/agentglow/static, lib → frontend/dist)
         working-directory: frontend

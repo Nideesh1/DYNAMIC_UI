@@ -1,0 +1,186 @@
+{
+  "description": "AgentGlow: start the local server, post every session, prompt, tool and subagent event to it (async, never blocks)",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/ensure-server.mjs",
+              "--port",
+              "8100"
+            ],
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8100/v1/claude-code",
+            "timeout": 2,
+            "async": true,
+            "headers": {
+              "x-api-key": "$AGENTGLOW_API_KEY"
+            },
+            "allowedEnvVars": [
+              "AGENTGLOW_API_KEY"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

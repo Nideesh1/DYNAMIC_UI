@@ -28,6 +28,13 @@ claude                               # then just use Claude Code as usual
 The server runs in the background (on macOS/Linux it also starts at login and restarts on crash; on Windows it starts with each `claude` session); watch at http://localhost:8100/neural. Undo with `npx agentglow remove`.
 uv and Python are fetched automatically on first run. Just trying it? `npx agentglow claude` runs one session with
 AgentGlow attached and installs nothing.
+Or install it as a Claude Code plugin (hooks, server auto-start, the skill and `/agentglow:open`), inside Claude Code:
+```
+/plugin marketplace add Nideesh1/agentglow
+/plugin install agentglow@agentglow
+```
+Use the plugin or `npx agentglow setup`, not both for hooks (setup detects the plugin and adds only the traces env,
+which plugins cannot set; without it LLM pulses show 0 tokens). Details: [examples/claude-code](examples/claude-code#claude-code-plugin).
 Prefer asking Claude? Install the [agentglow skill](skills/agentglow) and say *"show my agents in 3D"*:
 ```bash
 mkdir -p ~/.claude/skills/agentglow && curl -fsSL \
