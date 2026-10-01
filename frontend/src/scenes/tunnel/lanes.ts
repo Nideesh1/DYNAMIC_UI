@@ -19,6 +19,7 @@ export const SHIP_LOCAL: Record<AgentType, number> = {
   researcher: STEP_LOCAL.research + 2,
   graph_scout: STEP_LOCAL.research - 5,
   records_scout: STEP_LOCAL.research - 5,
+  data_scout: STEP_LOCAL.research - 5,
   writer: STEP_LOCAL.write + 2,
 };
 export const FORK = { start: STEP_LOCAL.research + 2, out: STEP_LOCAL.research - 2.2, back: STEP_LOCAL.research - 7.8, end: STEP_LOCAL.research - 10.5 };

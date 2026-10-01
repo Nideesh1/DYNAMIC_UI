@@ -66,7 +66,7 @@ export function mcpPos(slot: number, out: THREE.Vector3) {
 }
 
 const TYPE_RGB = Object.fromEntries(Object.entries(TYPE_COLOR).map(([k, v]) => [k, new THREE.Color(v)])) as Record<AgentType, THREE.Color>;
-const STEP_K = { planner: 0, researcher: 1, graph_scout: 1, records_scout: 1, writer: 2 } as const;
+const STEP_K = { planner: 0, researcher: 1, graph_scout: 1, records_scout: 1, data_scout: 1, writer: 2 } as const;
 const isScout = (t: AgentType) => t === "graph_scout" || t === "records_scout";
 
 type Slot = {

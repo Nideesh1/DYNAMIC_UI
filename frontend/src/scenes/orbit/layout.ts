@@ -14,6 +14,7 @@ const TYPE_ANGLE: Record<AgentType, number> = {
   researcher: STEP_ANGLE.research,
   graph_scout: STEP_ANGLE.research,
   records_scout: STEP_ANGLE.research,
+  data_scout: STEP_ANGLE.research,
   writer: STEP_ANGLE.write,
 };
 export const isScout = (t: AgentType) => t === "graph_scout" || t === "records_scout";

@@ -15,7 +15,7 @@
  */
 import { useSyncExternalStore } from "react";
 
-export type AgentType = "planner" | "researcher" | "graph_scout" | "records_scout" | "writer";
+export type AgentType = "planner" | "researcher" | "graph_scout" | "records_scout" | "data_scout" | "writer";
 export type StepName = "plan" | "research" | "write";
 export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "failed";
 
@@ -42,6 +42,7 @@ export const AGENT_TYPES: { type: AgentType; label: string; color: string }[] = 
   { type: "researcher", label: "Researcher", color: "#fbbf24" },
   { type: "graph_scout", label: "Graph Scout", color: "#22d3ee" },
   { type: "records_scout", label: "Records Scout", color: "#f472b6" },
+  { type: "data_scout", label: "Data Scout", color: "#fb7185" },
   { type: "writer", label: "Writer", color: "#4ade80" },
 ];
 export const TYPE_COLOR = Object.fromEntries(AGENT_TYPES.map((a) => [a.type, a.color])) as Record<AgentType, string>;
@@ -108,6 +109,7 @@ export const MCP_COLORS: Record<string, string> = {
   github: "#e5e7eb",
   slack: "#e879f9",
   "google-drive": "#facc15",
+  analytics: "#06b6d4",
 };
 
 export type Flare = { id: number; run: string; instance: string; node: string; op: "read" | "write"; start: number };
@@ -130,6 +132,7 @@ export const world = {
   stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0 },
   lastFinal: "" as string,
   simulated: false,
+  mode: "connecting" as "connecting" | "sim" | "live",
   focus: null as string | null, // instance id most recently active
   focusAt: 0,
   /** exited instances kept for the agent panel after their shape fades (newest last, capped) */
@@ -394,5 +397,11 @@ export function selectInstance(id: string | null) {
 
 export function setSimulated(v: boolean) {
   world.simulated = v;
+  notify();
+}
+
+export function setMode(m: "sim" | "live") {
+  world.mode = m;
+  world.simulated = m === "sim";
   notify();
 }

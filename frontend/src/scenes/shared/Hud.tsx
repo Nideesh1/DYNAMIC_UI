@@ -5,9 +5,13 @@ import { AGENT_TYPES, getInstance, selectInstance, STEPS, TYPE_COLOR, TYPE_LABEL
 
 export const SCENES = ["orbit", "neural", "subway", "city", "ocean", "circuit", "tunnel", "flow"] as const;
 
+export function shortRun(run: string) {
+  return run.replace("run-", "").slice(0, 6);
+}
+
 function short(id: string) {
   const [run, type, k] = id.split(":");
-  return `${type}${k !== undefined ? `#${Number(k) + 1}` : ""} · ${run.replace("run-", "")}`;
+  return `${type}${k !== undefined ? `#${Number(k) + 1}` : ""} · ${shortRun(run)}`;
 }
 
 export function describe(e: WorldEvent): string {
@@ -15,7 +19,7 @@ export function describe(e: WorldEvent): string {
     case "run":
       return `hatchet run ${e.status} · ${e.topic}`;
     case "step":
-      return `hatchet ${e.step} ${e.status} · ${e.run_id.replace("run-", "")}`;
+      return `hatchet ${e.step} ${e.status} · ${shortRun(e.run_id)}`;
     case "spawn":
       return `spawned ${short(e.id)}`;
     case "exit":
@@ -33,7 +37,7 @@ export function describe(e: WorldEvent): string {
     case "mcp":
       return e.phase === "call" ? `${short(e.id)} → mcp ${e.server}.${e.tool}()${e.resource ? ` → ${e.resource}` : ""}` : `mcp ${e.server}.${e.tool} returned${e.latency_ms ? ` · ${Math.round(e.latency_ms)}ms` : ""}`;
     case "final":
-      return `brief ready · ${e.run_id.replace("run-", "")}`;
+      return `brief ready · ${shortRun(e.run_id)}`;
   }
 }
 
@@ -71,9 +75,11 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
         <div className="hud-title">
           <span className="hud-dot" />
           {title}
-          {w.simulated && <span className="hud-badge">simulated</span>}
+          {w.mode === "sim" && <span className="hud-badge">simulated</span>}
+          {w.mode === "live" && <span className="hud-badge hud-badge--live">live · hatchet</span>}
         </div>
         <div className="hud-sub">{subtitle}</div>
+        {w.mode === "live" && <RunBox />}
         <nav className="hud-nav">
           {SCENES.map((s) => (
             <a key={s} href={`/${s}`} aria-current={s === here ? "page" : undefined}>
@@ -120,6 +126,35 @@ export function Hud({ title, subtitle, selected, onClose, children }: { title: s
 
       {children}
     </>
+  );
+}
+
+// ------------------------------------------------------------------ live: trigger a real Hatchet run
+
+function RunBox() {
+  const [topic, setTopic] = useState("Tara Rose liquor license");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  return (
+    <form
+      className="hud-run"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!topic.trim()) return;
+        setBusy(true);
+        try {
+          const { startLiveRun } = await import("./useSceneSetup");
+          const id = await startLiveRun(topic.trim());
+          setMsg(id ? `run ${id.slice(0, 8)} queued` : "failed to start");
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Research topic…" />
+      <button disabled={busy}>{busy ? "Starting…" : "Run agents"}</button>
+      {msg && <span>{msg}</span>}
+    </form>
   );
 }
 

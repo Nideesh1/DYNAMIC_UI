@@ -41,6 +41,219 @@ services:
     depends_on:
       - falkordb
 
+  # ======================= agent observatory (profile: observatory) =======================
+  # docker compose --profile observatory up -d   — Hatchet + Langfuse + live agent workflow.
+  # Ports avoid the BOOKIE stack: Hatchet UI :8180, gRPC :7177, Langfuse :3100, observatory API :8100.
+  obs_postgres:
+    profiles: ["observatory"]
+    image: postgres:15.6
+    command: postgres -c 'max_connections=500'
+    restart: unless-stopped
+    environment: [POSTGRES_USER=hatchet, POSTGRES_PASSWORD=hatchet, POSTGRES_DB=hatchet]
+    volumes: [obs_postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d hatchet -U hatchet"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  obs_langfuse_db:
+    profiles: ["observatory"]
+    image: postgres:15.6
+    environment: [PGPASSWORD=hatchet]
+    entrypoint: >
+      /bin/sh -c "
+      psql -h obs_postgres -U hatchet -d hatchet -tc \"select 1 from pg_database where datname='langfuse'\" | grep -q 1 || psql -h obs_postgres -U hatchet -d hatchet -c \"create database langfuse\";
+      echo langfuse db ready;
+      "
+    depends_on:
+      obs_postgres: {condition: service_healthy}
+
+  obs_hatchet_migrate:
+    profiles: ["observatory"]
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-migrate:latest
+    command: /hatchet/hatchet-migrate
+    environment:
+      DATABASE_URL: "postgres://hatchet:hatchet@obs_postgres:5432/hatchet"
+    depends_on:
+      obs_postgres: {condition: service_healthy}
+
+  obs_hatchet_config:
+    profiles: ["observatory"]
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:latest
+    command: /hatchet/hatchet-admin quickstart --skip certs --generated-config-dir /hatchet/config --overwrite=false
+    environment:
+      DATABASE_URL: "postgres://hatchet:hatchet@obs_postgres:5432/hatchet"
+      SERVER_MSGQUEUE_KIND: postgres
+      SERVER_AUTH_COOKIE_DOMAIN: localhost:8180
+      SERVER_AUTH_COOKIE_INSECURE: "t"
+      SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
+      SERVER_GRPC_INSECURE: "t"
+      SERVER_GRPC_BROADCAST_ADDRESS: localhost:7177
+      SERVER_INTERNAL_CLIENT_INTERNAL_GRPC_BROADCAST_ADDRESS: obs_hatchet_engine:7070
+    volumes: [obs_hatchet_certs:/hatchet/certs, obs_hatchet_config:/hatchet/config]
+    depends_on:
+      obs_hatchet_migrate: {condition: service_completed_successfully}
+
+  obs_hatchet_engine:
+    profiles: ["observatory"]
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-engine:latest
+    command: /hatchet/hatchet-engine --config /hatchet/config
+    restart: on-failure
+    ports: ["127.0.0.1:7177:7070"]
+    environment:
+      DATABASE_URL: "postgres://hatchet:hatchet@obs_postgres:5432/hatchet"
+      SERVER_MSGQUEUE_KIND: postgres
+      SERVER_GRPC_BIND_ADDRESS: "0.0.0.0"
+      SERVER_GRPC_INSECURE: "t"
+    volumes: [obs_hatchet_certs:/hatchet/certs, obs_hatchet_config:/hatchet/config]
+    depends_on:
+      obs_hatchet_config: {condition: service_completed_successfully}
+
+  obs_hatchet_dashboard:
+    profiles: ["observatory"]
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-dashboard:latest
+    command: sh ./entrypoint.sh --config /hatchet/config
+    restart: on-failure
+    ports: ["127.0.0.1:8180:80"]
+    environment:
+      DATABASE_URL: "postgres://hatchet:hatchet@obs_postgres:5432/hatchet"
+    volumes: [obs_hatchet_certs:/hatchet/certs, obs_hatchet_config:/hatchet/config]
+    depends_on:
+      obs_hatchet_config: {condition: service_completed_successfully}
+
+  obs_hatchet_token:   # mints an API token once into a shared volume; observatory reads it at startup
+    profiles: ["observatory"]
+    image: ghcr.io/hatchet-dev/hatchet/hatchet-admin:latest
+    entrypoint: >
+      /bin/sh -c "
+      if [ -s /hatchet-token/token ]; then echo 'hatchet token present'; exit 0; fi;
+      /hatchet/hatchet-admin token create --config /hatchet/config --name observatory --expiresIn 8760h > /hatchet-token/token.tmp
+      && mv /hatchet-token/token.tmp /hatchet-token/token && chmod 644 /hatchet-token/token && echo 'hatchet token written';
+      "
+    environment:
+      DATABASE_URL: "postgres://hatchet:hatchet@obs_postgres:5432/hatchet"
+      SERVER_MSGQUEUE_KIND: postgres
+    volumes: [obs_hatchet_certs:/hatchet/certs, obs_hatchet_config:/hatchet/config, obs_hatchet_token:/hatchet-token]
+    depends_on:
+      obs_hatchet_config: {condition: service_completed_successfully}
+
+  obs_minio:
+    profiles: ["observatory"]
+    image: minio/minio:latest
+    command: server /data
+    restart: unless-stopped
+    environment: [MINIO_ROOT_USER=minioadmin, MINIO_ROOT_PASSWORD=minioadmin]
+    volumes: [obs_minio_data:/data]
+    networks:
+      default:
+        aliases: [obs-minio]   # S3 SDK rejects hostnames with underscores
+
+  obs_minio_init:
+    profiles: ["observatory"]
+    image: minio/mc:latest
+    depends_on: [obs_minio]
+    entrypoint: >
+      /bin/sh -c "
+      until (mc alias set local http://obs_minio:9000 minioadmin minioadmin) do sleep 1; done;
+      mc mb --ignore-existing local/langfuse; echo bucket ready;
+      "
+
+  obs_clickhouse:
+    profiles: ["observatory"]
+    image: clickhouse/clickhouse-server:25.12
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      - CLICKHOUSE_DB=default
+      - CLICKHOUSE_USER=clickhouse
+      - CLICKHOUSE_PASSWORD=${OBS_CLICKHOUSE_PASSWORD}
+    volumes:
+      - obs_clickhouse_data:/var/lib/clickhouse
+      - ./observatory/docker/clickhouse-low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  obs_langfuse_redis:
+    profiles: ["observatory"]
+    image: redis:7.2.4
+    restart: unless-stopped
+    command: redis-server --requirepass ${OBS_LANGFUSE_REDIS_AUTH} --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${OBS_LANGFUSE_REDIS_AUTH}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  obs_langfuse_worker:
+    profiles: ["observatory"]
+    image: docker.langfuse.com/langfuse/langfuse-worker:4
+    restart: unless-stopped
+    environment: &obs-langfuse-env
+      DATABASE_URL: postgresql://hatchet:hatchet@obs_postgres:5432/langfuse
+      SALT: ${OBS_SALT}
+      ENCRYPTION_KEY: ${OBS_ENCRYPTION_KEY}
+      NEXTAUTH_URL: http://localhost:3100
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://obs_clickhouse:9000
+      CLICKHOUSE_URL: http://obs_clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${OBS_CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: obs_langfuse_redis
+      REDIS_PORT: 6379
+      REDIS_AUTH: ${OBS_LANGFUSE_REDIS_AUTH}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minioadmin
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: minioadmin
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://obs-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minioadmin
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: minioadmin
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://obs-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+    depends_on: &obs-langfuse-deps
+      obs_postgres: {condition: service_healthy}
+      obs_clickhouse: {condition: service_healthy}
+      obs_langfuse_redis: {condition: service_healthy}
+      obs_langfuse_db: {condition: service_completed_successfully}
+      obs_minio: {condition: service_started}
+
+  obs_langfuse_web:
+    profiles: ["observatory"]
+    image: docker.langfuse.com/langfuse/langfuse:4
+    restart: unless-stopped
+    ports: ["127.0.0.1:3100:3000"]
+    environment:
+      <<: *obs-langfuse-env
+      NEXTAUTH_SECRET: ${OBS_NEXTAUTH_SECRET}
+      LANGFUSE_INIT_ORG_ID: observatory
+      LANGFUSE_INIT_ORG_NAME: observatory
+      LANGFUSE_INIT_PROJECT_ID: observatory
+      LANGFUSE_INIT_PROJECT_NAME: agent-observatory
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${OBS_LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${OBS_LANGFUSE_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: admin@observatory.local
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: ${OBS_LANGFUSE_PASSWORD}
+    depends_on: *obs-langfuse-deps
+
 volumes:
   falkordb_data:
     name: falkordb_data
+  obs_postgres_data:
+  obs_hatchet_config:
+  obs_hatchet_certs:
+  obs_hatchet_token:
+  obs_minio_data:
+  obs_clickhouse_data:
