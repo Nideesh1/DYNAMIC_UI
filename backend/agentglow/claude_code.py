@@ -13,6 +13,8 @@ becomes `{"kind": "start"|"end", "span": {...}}` items (the `/v1/live` shape), s
   `last_assistant_message` is the result message back to the parent).
 - Any other tool = TOOL span under the agent that called it (`agent_id` present → that subagent, else main).
   `mcp__<server>__<tool>` also sets `agentglow.mcp.server`/`agentglow.mcp.tool` (→ `mcp` call/result).
+  The `Skill` tool also sets `agentglow.skill` = `tool_input.skill` (e.g. `hello`, `plugin:skill`; → `skill`
+  start/end on that agent); its input preview is the skill name only, never its `args`.
 - Hooks carry no token counts, so the time between tool calls is an LLM span with no usage attributes: the mapper
   shows the agent thinking and emits an `llm` pulse with 0 tokens (no invented numbers).
 
@@ -41,9 +43,11 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
-from .scrub import scrub_hook
+from .scrub import SKILL_KEY, scrub_hook, skill_name
 
 AGENT_TOOLS = {"Agent", "Task"}
+SKILL_TOOL = "Skill"
+SKILL_FIELDS = ("skill", "skill_name", "command", "name")  # Skill tool_input key holding the name (`skill` today)
 MAX_SESSIONS = 64
 MAX_DONE_IDS = 512
 PREVIEW = 600
@@ -278,6 +282,11 @@ class ClaudeCodeAdapter:
             return
         else:
             attrs = {"openinference.span.kind": "TOOL", "tool.name": name, "input.value": _preview(tin)}
+            skill = self._skill_of(name, tin)
+            if skill:
+                attrs.update({SKILL_KEY: skill, "input.value": skill})
+            elif name == SKILL_TOOL:
+                attrs["input.value"] = ""
             if name.startswith("mcp__"):
                 parts = name.split("__", 2)
                 if len(parts) == 3 and parts[1] and parts[2]:
@@ -472,6 +481,13 @@ class ClaudeCodeAdapter:
         if s.turn and not s.turn.stopped:
             return s.turn.main
         return self._open_turn(s, "", now, out).main if open_turn else None
+
+    @staticmethod
+    def _skill_of(tool: str, tin: dict) -> str:
+        """Sanitized skill name of a `Skill` tool call (first non-empty of SKILL_FIELDS), else ''."""
+        if tool != SKILL_TOOL:
+            return ""
+        return next((n for n in (skill_name(tin.get(k)) for k in SKILL_FIELDS) if n), "")
 
     def _start_llm(self, ag: _Agent, now: int, out: list) -> None:
         if ag.llm is None and not ag.closed:
@@ -695,6 +711,9 @@ class ClaudeCodeAdapter:
                 self._end(sub[0], t1, out, status)
             return
         attrs = {"openinference.span.kind": "TOOL", "tool.name": name, "input.value": str(a.get("bash_argv0") or "")}
+        skill = skill_name(a.get("skill_name")) if name == SKILL_TOOL else ""
+        if skill:  # `skill_name` is only exported with OTEL_LOG_TOOL_DETAILS=1
+            attrs.update({SKILL_KEY: skill, "input.value": skill})
         if name.startswith("mcp__"):
             parts = name.split("__", 2)
             if len(parts) == 3 and parts[1] and parts[2]:

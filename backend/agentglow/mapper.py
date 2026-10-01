@@ -44,6 +44,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .scrub import SKILL_KEY, skill_name
+
 LLM_OPS = {"chat", "text_completion", "generate_content"}
 LG_NODES = {"model", "tools", "agent", "call_model", "__start__", "__end__"}
 LG_NODE_RE = re.compile(r"Middleware\.|\.(before|after)_(agent|model)$|^__")
@@ -140,6 +142,7 @@ class Span:
     alias: str | None = None  # later turn of an agent already on screen (langgraph-supervisor): owner = that agent
     team: str | None = None  # langgraph-supervisor team graph: id of its supervisor agent
     persist: bool = False  # supervisor agent: exits when its team graph ends, not when its first turn ends
+    skill: str | None = None  # `agentglow.skill` name once its skill start was emitted
 
 
 @dataclass
@@ -278,6 +281,7 @@ class Mapper:
         elif self._is_tool(s) or (parent and parent.name == "tools"):
             self._tool_start(s, out, ts)
         self._mcp_call(s, out, ts)
+        self._skill_start(s, out, ts)
         if "agentglow.final" in a:
             self._final(s.run, a["agentglow.final"], out, ts)
         return s
@@ -310,6 +314,7 @@ class Mapper:
         if not s.tool and not s.llm and not s.agent and self._is_tool(s):
             self._tool_start(s, out, s.start)
         self._mcp_call(s, out, s.start)
+        self._skill_start(s, out, s.start)
 
         if s.llm:
             owner = self._owner(s, out)
@@ -337,6 +342,8 @@ class Mapper:
             if res:
                 ev.update(resource=res, resource_kind=kind)
             out.append(ev)
+        if s.skill:
+            out.append({"type": "skill", "run_id": s.run, "id": self._owner(s, out), "name": s.skill, "status": "end", "ts": ts})
         if a.get("db.system"):
             self._graph(s, out, ts)
         if "agentglow.final" in a:
@@ -627,6 +634,16 @@ class Mapper:
         if res:
             ev.update(resource=s.mcp[2], resource_kind=kind)
         out.append(ev)
+
+    def _skill_start(self, s: Span, out: list, ts: int) -> None:
+        """Span with `agentglow.skill` (Claude Code Skill tool, manual `agentglow.skill()`): skill start on the agent
+        that owns it; the matching end is emitted when the span ends. Only the sanitized name is carried."""
+        if s.skill or SKILL_KEY not in s.attrs:
+            return
+        name = skill_name(s.attrs.get(SKILL_KEY))
+        if name:
+            s.skill = name
+            out.append({"type": "skill", "run_id": s.run, "id": self._owner(s, out), "name": name, "status": "start", "ts": ts})
 
     def _graph(self, s: Span, out: list, ts: int) -> None:
         a = s.attrs
