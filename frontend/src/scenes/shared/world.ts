@@ -143,7 +143,7 @@ export const ORPHAN_RUN_MS = 120_000;
 /** A finished subagent (has a parent) fades after this long even if its run is still active (e.g. a long-lived
  * session whose root agent never finishes) - otherwise it would stay dimmed forever waiting for a run end
  * that, for that kind of run, never comes. Root/main agents are unaffected: they still fade with their run. */
-export const SUBAGENT_DONE_MS = 8000;
+export const SUBAGENT_DONE_MS = 3000;
 
 /** How long finished instances/runs stay visible while fading out (ms). */
 export const FADE_MS = 2500;
@@ -313,9 +313,13 @@ export function apply(ev: WorldEvent) {
       if (i) {
         i.status = ev.status;
         i.doneAt = now;
-        // stays dimmed until its run ends; no known (or an already ended) run: fade right away
+        // stays dimmed until its run ends; no known (or an already ended) run, or a subagent replayed (e.g. on
+        // page refresh) already genuinely old in real wall-clock time: fade right away instead of waiting again.
+        // ev.ts and Date.now() are both real epoch ms (backend's now_ms() = time.time()*1000) - safe to compare
+        // directly, unlike performance.now() (page-relative, not epoch-based) which must never mix with ev.ts.
         const r = world.runs.get(i.run);
-        if (!r || r.endedAt) i.exitAt = now;
+        const staleReplay = !!i.parent && Date.now() - ev.ts > SUBAGENT_DONE_MS;
+        if (!r || r.endedAt || staleReplay) i.exitAt = now;
       }
       for (const [k, p] of world.mcpPending) if (p.instance === ev.id) world.mcpPending.delete(k);
       break;

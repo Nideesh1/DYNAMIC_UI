@@ -14,6 +14,7 @@ import {
   startBackground, stopServer,
 } from "./lib/server.mjs";
 import { which } from "./lib/uv.mjs";
+import { hasAutostart, installAutostart, removeAutostart } from "./lib/autostart.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const here = path.dirname(SELF);
@@ -30,6 +31,11 @@ const HELP = `agentglow ${VERSION}: watch Claude Code agents in 3D
   npx agentglow stop                  stop the background server
   npx agentglow remove                undo setup: remove the hooks and stop the server
   npx agentglow claude [-- <args>]    try it without installing: one claude session with AgentGlow
+
+  npx agentglow autostart             run the server at login (Task Scheduler / launchd / systemd --user) and
+                                      switch hooks to point at it - every \`claude\` session needs zero shell
+                                      spawn of its own. Shows up across all your Claude Code sessions, not just one.
+  npx agentglow autostart --remove    undo autostart (run \`agentglow setup\` again for the normal per-session mode)
 
 More: npx agentglow start [--background] [--port N]   (serve = start in the foreground)
 Env:  AGENTGLOW_URL (remote server), AGENTGLOW_API_KEY (ingest key), AGENTGLOW_CACHE_DIR
@@ -57,6 +63,7 @@ function parseArgs(argv) {
     else if (a === "--no-open") o.open = false;
     else if (a === "--install") o.install = true;
     else if (a === "--uninstall") o.uninstall = true;
+    else if (a === "--remove") o.remove = true;
     else if (a === "--background" || a === "-b") o.background = true;
     else if (a === "--quiet" || a === "-q") o.quiet = true;
     else if (a === "-h" || a === "--help") o.help = true;
@@ -168,6 +175,36 @@ async function cmdSetup(o) {
   return 0;
 }
 
+/** Run the server at login (OS-native: Task Scheduler / launchd / systemd --user), then re-point hooks at it
+ * via AGENTGLOW_URL so `setup` skips the per-session SessionStart command hook entirely - one server, shared
+ * by every `claude` session on the machine, with zero shell spawn per session. */
+async function cmdAutostart(o) {
+  if (o.remove) {
+    removeAutostart();
+    console.log(`Removed the AgentGlow autostart entry. Run \`agentglow setup\` to go back to per-session auto-start.`);
+    return 0;
+  }
+  const port = o.port;
+  const script = installCliCopy({ srcCliDir: here, version: VERSION });
+  const command = startHookCommand({
+    port, version: VERSION, node: nodeForHook(), script, cacheDir: process.env.AGENTGLOW_CACHE_DIR,
+  });
+  try {
+    const r = installAutostart({ command });
+    console.log(`Installed autostart via ${r.method}${r.path ? ` (${r.path})` : ""}.`);
+  } catch (e) {
+    console.error(`agentglow: could not install autostart (${e.message}).`);
+    console.error(`You can still run the server yourself: npx agentglow start --background${portFlag(port)}`);
+    return 1;
+  }
+  process.env.AGENTGLOW_URL = baseUrl({ port });
+  const code = await cmdSetup(o);
+  if (code === 0) {
+    console.log(`\nAutostart takes effect at next login. Start the server once now too: npx agentglow start --background${portFlag(port)}`);
+  }
+  return code;
+}
+
 async function cmdRemove(o) {
   const file = settingsFile();
   const r = uninstallSettingsFile(file);
@@ -254,6 +291,7 @@ async function cmdStatus(o) {
   console.log(`server:  ${health?.ok ? `healthy at ${base} (server ${health.version || "?"})` : starting ? `starting on port ${port}` : `not running at ${base}`}`);
   if (!remote) console.log(`port:    ${port}${pid ? `  pid ${pid} (started by this CLI)` : ""}`);
   console.log(`hooks:   ${installed ? `installed in ${file}${startHook ? " (server auto-starts with claude)" : ""}` : "not installed (run: npx agentglow setup)"}`);
+  if (!startHook) console.log(`autostart: ${hasAutostart() ? "installed (runs at login)" : "not installed (run: npx agentglow autostart)"}`);
   if (health?.ok) console.log(`view:    ${base}/neural`);
   return 0;
 }
@@ -314,6 +352,8 @@ async function main() {
   switch (o.cmd) {
     case "setup":
       return cmdSetup(o);
+    case "autostart":
+      return cmdAutostart(o);
     case "remove":
     case "uninstall":
       return cmdRemove(o);
