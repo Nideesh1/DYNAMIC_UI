@@ -1,11 +1,15 @@
-/** FalkorDB as a spinning spiral-galaxy core: instanced nodes colored by kind, faint graph links, flares + write rings. */
+/**
+ * Graph resource slot: FalkorDB as a small spiral galaxy on the side (only when the session has a graph), drawn in
+ * its own frame (radius GALAXY_R); the kit positions, scales and fades it. Instanced nodes colored by kind, faint
+ * graph links, flares + write rings, brief node names.
+ */
 import { Sparkles } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, world } from "../shared/world";
-import type { Galaxy } from "../shared/useSceneSetup";
+import type { GraphSlotProps } from "../shared/kit";
 import { galaxyIdx, galaxyRef, reduced } from "./layout";
 
 function galaxyLayout(n: number) {
@@ -25,9 +29,12 @@ const RING_POOL = 32;
 const WHITE = new THREE.Color(5, 5, 5);
 
 const SAMPLE = 200;
+const TILT = 1.35;
+/** natural radius of the galaxy (local units, arms + sparkles): the kit scales it to its side slot */
+export const GALAXY_R = 4.75 * TILT + 0.6;
 const LABELS = 6;
 
-export function GalaxyCore({ galaxy: full }: { galaxy: Galaxy }) {
+export function GalaxyCore({ galaxy: full }: GraphSlotProps) {
   // FalkorDB is shown as a representative sample (named entities first), not the full graph
   const galaxy = useMemo(() => {
     const nodes = full.nodes.slice(0, SAMPLE);
@@ -110,7 +117,7 @@ export function GalaxyCore({ galaxy: full }: { galaxy: Galaxy }) {
       if (f.op === "write") wrote[k] = 1;
       // expanding billboard ring: write = big white shockwave, read = small tinted ring
       if (rings.current && r < RING_POOL && age < 1.6) {
-        v.copy(pos[k]).applyMatrix4(g.matrixWorld);
+        v.copy(pos[k]).applyMatrix4(g.matrix);
         tmp.position.copy(v);
         tmp.quaternion.copy(camera.quaternion);
         const p = age / 1.6;
@@ -176,7 +183,7 @@ export function GalaxyCore({ galaxy: full }: { galaxy: Galaxy }) {
   const nucColor = useMemo(() => new THREE.Color("#c7d2fe").multiplyScalar(2.4), []);
   return (
     <>
-      <group ref={group} rotation={[0.3, 0, 0.08]} scale={1.35}>
+      <group ref={group} rotation={[0.3, 0, 0.08]} scale={TILT}>
         <instancedMesh ref={inst} args={[undefined, undefined, Math.max(1, n)]} frustumCulled={false}>
           <sphereGeometry args={[0.065, 10, 10]} />
           <meshBasicMaterial toneMapped={false} />
@@ -197,13 +204,13 @@ export function GalaxyCore({ galaxy: full }: { galaxy: Galaxy }) {
             <Label3D ref={(d) => void (labelDivs.current[j] = d)} position={[0, 0.32, 0]} text="" size={0.2} opacity={0} pxRange={[8, 11.5]} />
           </group>
         ))}
-        <Sparkles count={reduced ? 30 : 110} scale={[9, 1.3, 9]} size={1.7} speed={reduced ? 0.05 : 0.3} color="#a5b4fc" opacity={0.6} />
+        <Sparkles count={reduced ? 30 : 110} scale={[9, 1.3, 9]} size={0.7} speed={reduced ? 0.05 : 0.3} color="#a5b4fc" opacity={0.6} />
       </group>
       <instancedMesh ref={rings} args={[undefined, undefined, RING_POOL]} frustumCulled={false}>
         <ringGeometry args={[0.2, 0.26, 40]} />
         <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
       </instancedMesh>
-      <GraphLabel3D position={[0, -2.6, 0]} color="#a5b4fc" size={0.42} pxRange={[10, 15]} />
+      <GraphLabel3D position={[0, -0.6, GALAXY_R * 0.78]} color="#a5b4fc" size={0.42} pxRange={[10, 15]} />
     </>
   );
 }
