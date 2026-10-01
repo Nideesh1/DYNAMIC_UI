@@ -1,8 +1,10 @@
 # AgentGlow + the deepagents-hatchet example stack.
 #
-#   ./scripts/gen-obs-env.sh && docker compose up -d --build     # agentglow, falkordb, hatchet, mcp, worker
+#   cp .env.example .env   # + one LLM key (GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY, AGENT_MODEL to match)
+#   docker compose up -d --build                                  # agentglow, falkordb, hatchet, mcp, worker, trigger
 #   open http://localhost:8100                                    # 3D scenes
 #   docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
+#   ./scripts/gen-obs-env.sh   # only for the langfuse profile: generates its local secrets into .env
 #   LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d     # + Langfuse at :3100 (same spans, side by side)
 #
 # Ports avoid the BOOKIE stack: agentglow :8100, Hatchet UI :8180, Hatchet gRPC :7177, Langfuse :3100.
@@ -16,6 +18,7 @@ services:
     ports: ["8100:8100"]
     environment:
       AGENTGLOW_FALKOR_URL: redis://falkordb:6379
+      AGENTGLOW_RUN_WEBHOOK: http://trigger:8300/run   # "▶ Run agents" in the UI → the example's trigger service
     depends_on: [falkordb]
     restart: unless-stopped
 
@@ -61,6 +64,16 @@ services:
       agentglow: {condition: service_started}
       falkordb: {condition: service_started}
       mcp: {condition: service_started}
+      obs_hatchet_engine: {condition: service_started}
+      obs_hatchet_token: {condition: service_completed_successfully}
+    restart: unless-stopped
+
+  trigger:      # internal HTTP trigger (POST :8300/run {topic} → agent_smoke run); agentglow's POST /live/run forwards here
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["uv", "run", "python", "-m", "app.trigger_api"]
+    volumes: [obs_hatchet_token:/hatchet-token:ro]   # Hatchet API token, read automatically by app/config.py
+    depends_on:
       obs_hatchet_engine: {condition: service_started}
       obs_hatchet_token: {condition: service_completed_successfully}
     restart: unless-stopped

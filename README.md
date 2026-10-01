@@ -64,9 +64,11 @@ pod at it: `agentglow.watch("http://agentglow:8100")`. If it's down, your app is
 ## Example: deepagents + Hatchet + MCP + FalkorDB
 
 ```bash
-cp .env.example .env            # add one LLM key (Gemini, OpenAI or Anthropic); ./scripts/gen-obs-env.sh for Langfuse/Hatchet secrets
-docker compose up
+cp .env.example .env            # add one LLM key (Gemini, OpenAI or Anthropic) — that's all the setup
+docker compose up               # then open http://localhost:8100 and press ▶ Run agents
 ```
+Optional Langfuse side by side: `./scripts/gen-obs-env.sh` (generates its local secrets) then
+`LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d`.
 The example agents use any LangChain chat model: set `AGENT_MODEL` to `google_genai:gemini-3.8-flash` (default, `GEMINI_API_KEY`),
 `openai:<model>` (`OPENAI_API_KEY`) or `anthropic:claude-sonnet-5-5` (`ANTHROPIC_API_KEY`).
 See [examples/deepagents-hatchet](examples/deepagents-hatchet/README.md).

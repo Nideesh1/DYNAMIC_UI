@@ -37,20 +37,23 @@ to the same TracerProvider that `watch()` reuses.
 ## Run with docker compose (repo root)
 
 ```bash
-cp .env.example .env            # set one LLM key + AGENT_MODEL (see "LLM provider" below)
-./scripts/gen-obs-env.sh        # local secrets (Langfuse etc.)
-docker compose up -d --build    # agentglow, falkordb, hatchet, mcp, worker
-open http://localhost:8100      # scenes
+cp .env.example .env            # set one LLM key (+ AGENT_MODEL if not Gemini; see "LLM provider" below)
+docker compose up -d --build    # agentglow, falkordb, hatchet, mcp, worker, trigger
+open http://localhost:8100      # scenes — press ▶ Run agents, or:
 docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
 
 Hatchet UI: http://localhost:8180 (admin@example.com / Admin123!!) — you can also trigger `agent_smoke` there.
-Langfuse too: `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d` → http://localhost:3100.
+No other setup: the worker and trigger read the Hatchet API token from the `obs_hatchet_token` volume.
+"▶ Run agents" works because compose sets `AGENTGLOW_RUN_WEBHOOK=http://trigger:8300/run` on agentglow: its
+`POST /live/run {topic}` forwards to the example's `trigger` service (`app/trigger_api.py`), which starts an `agent_smoke` run.
+Langfuse (optional): `./scripts/gen-obs-env.sh` once (generates its local secrets into `.env`), then
+`LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d` → http://localhost:3100.
 
 ## Run locally (dev)
 
 Needs FalkorDB on :6379 and Hatchet on :7177 (`docker compose up -d falkordb obs_hatchet_engine obs_hatchet_dashboard obs_hatchet_token`),
-then `./scripts/gen-obs-env.sh` once to put `OBS_HATCHET_TOKEN` in `.env`.
+then `./scripts/gen-obs-env.sh` once to copy the Hatchet token into `.env` as `OBS_HATCHET_TOKEN` (host runs only; docker needs nothing).
 
 ```bash
 uv sync --all-packages                           # repo root: one uv workspace, one uv.lock
