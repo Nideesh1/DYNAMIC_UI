@@ -40,14 +40,12 @@ class Plan(BaseModel):
 
 def make_model() -> BaseChatModel:
     """Chat model from AGENT_MODEL (e.g. google_genai:gemini-3.8-flash, openai:gpt-5-mini, anthropic:claude-sonnet-5-5).
-    Low temperature / low thinking only where the provider supports those knobs."""
+    Low temperature / low thinking for Gemini only; other providers use their defaults."""
     provider = MODEL.split(":", 1)[0] if ":" in MODEL else ""
     kwargs: dict = {}
     if provider == "google_genai":
         kwargs = {"temperature": 0.2, "thinking_level": "low"}
-    elif provider == "anthropic":
-        kwargs = {"temperature": 0.2}
-    # openai: defaults (reasoning models reject a custom temperature)
+    # anthropic / openai: defaults (current Claude and OpenAI reasoning models take no custom temperature)
     return init_chat_model(MODEL, **kwargs)
 
 
