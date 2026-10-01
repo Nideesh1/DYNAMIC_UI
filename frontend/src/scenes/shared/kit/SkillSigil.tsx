@@ -268,7 +268,7 @@ function Sigil({ agent, radius, height }: { agent: KitAgent; radius: number; hei
             opacity={0}
             glow={1.08}
             renderOrder={24}
-            declutter="skill"
+            declutter={false}  // the skill label lives exactly as long as its ring (never hidden by the overlap pass)
             fit
           />
         </group>
