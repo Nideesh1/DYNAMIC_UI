@@ -1,17 +1,21 @@
 /**
- * Agents are electrons. Parent agents ride their run's shell (bigger); subagents orbit their parent like a
- * mini-atom (smaller) and are linked to it by a directional field line (quanta flow parent → child + arrowhead).
- *   spawn    → excited out of the nucleus (top-level) or budded off the parent (subagent)
- *   thinking → bright, quick shimmer; waiting → dimmer; MCP pending → amber precession ring
- *   LLM call → photon emitted (flash + wave packet), both sized by tokens
- *   exit     → electron decays: core collapses with a flash, it spirals out leaving a fading trail
+ * Agent slot: agents are electrons. Top-level agents sit on their own tilted orbital shell around the run's nucleus
+ * (the shell passes through the agent's kit home; a comet-like trail along it shows the orbit); subagents circle
+ * their kit home on a tiny mini-atom orbit and are linked to their parent by a directional field line (quanta flow
+ * parent -> child + arrowhead).
+ *   spawn    -> excited out of the nucleus (top-level) or budded off the parent (subagent)
+ *   thinking -> bright, quick shimmer; waiting -> dimmer; MCP pending -> amber precession ring
+ *   LLM call -> photon emitted (flash + wave packet), both sized by tokens
+ *   exit     -> electron decays: core collapses with a flash, it spirals out along its shell leaving a fading trail
+ * The drawn position is written into `agent.live` (beams, tethers and messages read it).
  */
 import { useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { FADE_MS, TYPE_COLOR, energy, lingerMs, presence, roleScale, world, type Instance } from "../shared/world";
-import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
+import { FADE_MS, TYPE_COLOR, energy, hash01, lingerMs, presence, world } from "../shared/world";
+import { showLabel } from "../shared/lod";
+import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
   AMBER,
   ARROW_GEO,
@@ -28,36 +32,50 @@ import {
   clamp01,
   easeInOut,
   easeOut,
-  ePos,
-  electronAt,
   glowSprite,
+  hubs,
   lineMat,
   reduced,
   tubeMaterial,
 } from "./fx";
 
-const TRAIL = 48;
+const TRAIL = 40;
+const SHELL_SEG = 160;
 const HIT_MAT = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
 const UP = new THREE.Vector3(0, 1, 0);
+const Z = new THREE.Vector3(0, 0, 1);
 const A = new THREE.Vector3();
 const B = new THREE.Vector3();
 const D = new THREE.Vector3();
+/** unit circle (x, y): drawn through a per-electron basis matrix as its orbital shell */
+const SHELL_GEO = (() => {
+  const p = new Float32Array((SHELL_SEG + 1) * 3);
+  for (let i = 0; i <= SHELL_SEG; i++) {
+    const a = (i / SHELL_SEG) * Math.PI * 2;
+    p.set([Math.cos(a), Math.sin(a), 0], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(p, 3));
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e4);
+  return g;
+})();
 
 // ------------------------------------------------------------------ photon pool (LLM calls)
 type Photon = { on: boolean; start: number; size: number; o: THREE.Vector3; dir: THREE.Vector3; perp: THREE.Vector3; c: THREE.Color };
 const MAX_PH = 40;
 const photons: Photon[] = Array.from({ length: MAX_PH }, () => ({ on: false, start: 0, size: 1, o: new THREE.Vector3(), dir: new THREE.Vector3(), perp: new THREE.Vector3(), c: new THREE.Color() }));
 let phNext = 0;
-function emitPhoton(at: THREE.Vector3, size: number, color: THREE.Color, seed: number) {
+function emitPhoton(at: THREE.Vector3, from: THREE.Vector3, size: number, color: THREE.Color, seed: number) {
   const p = photons[phNext];
   phNext = (phNext + 1) % MAX_PH;
   p.on = true;
   p.start = performance.now();
   p.size = size;
   p.o.copy(at);
-  // emitted outward (away from the nucleus), with a seeded angular kick
-  p.dir.copy(at).normalize();
-  if (p.dir.lengthSq() < 0.5) p.dir.set(0, 1, 0);
+  // emitted outward (away from the run's nucleus), with a seeded angular kick
+  p.dir.copy(at).sub(from);
+  if (p.dir.lengthSq() < 1e-4) p.dir.set(0, 1, 0);
+  p.dir.normalize();
   p.dir.x += Math.sin(seed * 12.9) * 0.6;
   p.dir.y += Math.cos(seed * 7.3) * 0.6;
   p.dir.z += 0.35;
@@ -67,7 +85,9 @@ function emitPhoton(at: THREE.Vector3, size: number, color: THREE.Color, seed: n
   p.c.copy(color).lerp(WHITE, 0.35);
 }
 
-function Electron({ inst, selected, onSelect }: { inst: Instance; selected: boolean; onSelect: (id: string) => void }) {
+/** Electron slot. */
+export function Electron({ agent, selected, onSelect }: AgentSlotProps) {
+  const inst = agent.inst;
   const root = useRef<THREE.Group>(null);
   const body = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
@@ -75,9 +95,11 @@ function Electron({ inst, selected, onSelect }: { inst: Instance; selected: bool
   const sel = useRef<THREE.Mesh>(null);
   const flash = useRef<THREE.Sprite>(null);
   const arrow = useRef<THREE.Mesh>(null);
+  const hit = useRef<THREE.Mesh>(null);
   const label = useRef<Label3DHandle>(null);
+  const labelG = useRef<THREE.Group>(null);
   const color = TYPE_C[inst.type];
-  const big = roleScale(inst);
+  const sub = !!inst.subagent;
   const m = useMemo(
     () => ({
       core: additive("#fff"),
@@ -87,10 +109,11 @@ function Electron({ inst, selected, onSelect }: { inst: Instance; selected: bool
       sel: additive(ICE),
       flash: glowSprite("#fff"),
       arrow: additive(color),
-      field: tubeMaterial(color, inst.subagent ? 0.028 : 0.04),
+      field: tubeMaterial(color, sub ? 0.028 : 0.04),
       trail: lineMat("#fff", true),
+      orbit: lineMat(color),
     }),
-    [color, inst.subagent],
+    [color, sub],
   );
   const trail = useMemo(() => {
     const g = new THREE.BufferGeometry();
@@ -100,55 +123,105 @@ function Electron({ inst, selected, onSelect }: { inst: Instance; selected: bool
     return g;
   }, []);
   const trailLine = useMemo(() => Object.assign(new THREE.Line(trail, m.trail), { frustumCulled: false }), [trail, m.trail]);
-  const s = useMemo(() => ({ live: new THREE.Vector3(), p: new THREE.Vector3(), ctrl: new THREE.Vector3(), par: new THREE.Vector3(), c: new THREE.Color(), llm: inst.llmCalls, ringK: 0, linkK: 0, labelK: 1, seed: (inst.bornAt % 997) / 997 }), [inst]);
+  const shellLine = useMemo(() => Object.assign(new THREE.Line(SHELL_GEO, m.orbit), { frustumCulled: false, matrixAutoUpdate: false, visible: false }), [m.orbit]);
+  const s = useMemo(
+    () => ({
+      p: new THREE.Vector3(),
+      ctrl: new THREE.Vector3(),
+      par: new THREE.Vector3(),
+      n: new THREE.Vector3(),
+      a: new THREE.Vector3(),
+      b: new THREE.Vector3(),
+      from: new THREE.Vector3(),
+      fromSet: false,
+      c: new THREE.Color(),
+      llm: inst.llmCalls,
+      ringK: 0,
+      linkK: 0,
+      labelK: 1,
+      seed: hash01(inst.id, 3),
+      dir: hash01(inst.id, 4) < 0.5 ? 1 : -1,
+      // shell plane: tilt toward the viewer (seeded per agent) -> classic atom-logo ellipses
+      tilt: 0.35 + hash01(inst.id, 5) * 0.25,
+      lean: 0.45 + hash01(inst.id, 6) * 0.25,
+    }),
+    [inst],
+  );
 
-  useEffect(() => {
-    ePos.set(inst.id, s.live);
-    return () => {
-      if (ePos.get(inst.id) === s.live) ePos.delete(inst.id);
-    };
-  }, [inst.id, s]);
+  /** point on the electron's orbit at angle th (shell for top-level, mini-orbit for subagents) */
+  const orbitAt = (th: number, out: THREE.Vector3) => out.copy(s.n).addScaledVector(s.a, Math.cos(th)).addScaledVector(s.b, Math.sin(th));
 
   useFrame(({ clock, camera }) => {
     const now = performance.now();
-    const T = now / 1000;
     const t = clock.elapsedTime;
-    electronAt(inst, T, s.live);
-    root.current?.position.copy(s.live);
-
     // exit timeline in "normal" seconds (sped up when crowded: lingerMs < FADE_MS)
     const te = inst.exitAt ? (now - inst.exitAt) / 1000 / (lingerMs(inst) / FADE_MS) : -1;
-    const ls = lodScale();
-    const pres = presence(inst, now);
     const decay = te >= 0 ? clamp01(te / 0.8) : 0;
+    const dec = te > 0 ? te : 0;
+
+    // ---- orbit frame: n = centre, a = centre -> home, b = tilted perpendicular (both stage space)
+    if (!sub) {
+      const hub = hubs.get(agent.run.id) ?? agent.run.origin;
+      s.n.copy(hub);
+      s.a.copy(agent.pos).sub(hub);
+      let L = s.a.length();
+      if (L < 0.5) s.a.set(0, 0.5, 0), (L = 0.5);
+      // in-plane perpendicular, leaning toward the camera (z) so the shell reads as a tilted ellipse
+      s.b.set(-s.a.y, s.a.x, 0).normalize().multiplyScalar(L * s.tilt * s.dir).addScaledVector(Z, L * s.lean);
+    } else {
+      const r = 0.32 * fit.spread;
+      s.n.copy(agent.pos);
+      s.a.set(r, 0, 0);
+      s.b.set(0, r * 0.45, r * 0.6);
+    }
+    // electron angle: top-level rests at its home (th = 0) with a slight sway; subagents circle their mini-orbit
+    const w = sub ? (reduced ? 0 : 0.9) : 0;
+    let th = sub ? t * w * s.dir + s.seed * 6.28 : reduced ? 0 : Math.sin(t * 0.6 + s.seed * 9) * 0.06;
+    th += s.dir * dec * 0.9; // decay: spirals on along its orbit ...
+    const grow = 1 + dec * dec * 0.07; // ... and outward
+    orbitAt(th, agent.live);
+    if (grow !== 1) agent.live.sub(s.n).multiplyScalar(grow).add(s.n);
+    // born: excited out of the nucleus (top-level) or budded off the parent (subagent)
+    const bt = easeOut((now - inst.bornAt) / 1100);
+    if (bt < 1) {
+      const pp = inst.parent ? agentLive(inst.parent) : undefined;
+      if (pp) s.from.copy(pp), (s.fromSet = true);
+      else if (!s.fromSet) s.from.copy(s.n), (s.fromSet = true);
+      agent.live.lerpVectors(s.from, agent.live, sub ? bt : 0.3 + 0.7 * bt);
+    }
+    const live = agent.live;
+    root.current?.position.copy(live);
+
+    const pres = presence(inst, now);
     const thinking = te < 0 && (inst.status === "thinking" || inst.status === "spawning");
     const e = energy(inst, now);
     let pending = false;
     for (const p of world.mcpPending.values()) if (p.instance === inst.id) pending = true;
     const shimmer = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * (thinking ? 6 : 1.6) + s.seed * 30);
 
-    // LLM call → photon sized by tokens (inst.pulse grows with tokens_in + tokens_out)
+    // LLM call -> photon sized by tokens (inst.pulse grows with tokens_in + tokens_out)
     if (inst.llmCalls !== s.llm) {
       s.llm = inst.llmCalls;
-      if (te < 0) emitPhoton(s.live, inst.pulse, color, s.seed + inst.llmCalls * 0.37);
+      if (te < 0) emitPhoton(live, hubs.get(agent.run.id) ?? agent.run.origin, inst.pulse, color, s.seed + inst.llmCalls * 0.37);
     }
 
+    const big = agent.scale;
     const born = easeOut((now - inst.bornAt) / 700);
-    const sc = 0.3 * big * ls * born * (1 - decay * 0.9) * (1 + e * 0.12);
+    const sc = 0.3 * big * born * (1 - decay * 0.9) * (1 + e * 0.12);
     body.current?.scale.setScalar(Math.max(1e-4, sc));
     s.c.copy(color).multiplyScalar((thinking ? 1.0 + shimmer * 0.4 : 0.55 + shimmer * 0.15) + e * 0.5);
     if (te >= 0) s.c.lerp(GREY, decay);
     m.shell.color.copy(s.c);
     m.core.color.setScalar((thinking ? 0.9 : 0.45) * (1 - decay) + e * 0.4);
     if (halo.current) {
-      halo.current.scale.setScalar(Math.max(1e-4, ls * ((thinking ? 2.4 : 1.7) * big * born * (1 - decay * 0.7) + e * 0.9)));
+      halo.current.scale.setScalar(Math.max(1e-4, (thinking ? 2.4 : 1.7) * big * born * (1 - decay * 0.7) + e * 0.9 * fit.scale));
       m.halo.color.copy(color).multiplyScalar(((thinking ? 0.32 : 0.16) + e * 0.25) * pres);
     }
     // decay flash at exit
     if (flash.current) {
       const f = te >= 0 && te < 0.9 ? 1 - te / 0.9 : 0;
       flash.current.visible = f > 0;
-      flash.current.scale.setScalar(Math.max(1e-4, ls * big * (1.2 + (1 - f) * 3.5)));
+      flash.current.scale.setScalar(Math.max(1e-4, big * (1.2 + (1 - f) * 3.5)));
       m.flash.color.copy(inst.status === "failed" ? AMBER : WHITE).multiplyScalar(f * f * 0.9);
     }
     // MCP pending: amber precession ring
@@ -156,29 +229,45 @@ function Electron({ inst, selected, onSelect }: { inst: Instance; selected: bool
     if (ring.current) {
       ring.current.visible = s.ringK > 0.02;
       ring.current.rotation.set(1.2 + Math.sin(t * 0.8) * 0.3, t * 1.4, 0);
-      ring.current.scale.setScalar(Math.max(1e-4, 0.62 * big * ls * s.ringK));
+      ring.current.scale.setScalar(Math.max(1e-4, 0.62 * big * s.ringK));
       m.ring.color.copy(AMBER).multiplyScalar(1.1 * s.ringK * (0.7 + shimmer * 0.3));
     }
     if (sel.current) {
       sel.current.visible = selected;
       sel.current.quaternion.copy(camera.quaternion);
-      sel.current.scale.setScalar(ls * (0.8 * big + (reduced ? 0 : Math.sin(t * 3) * 0.04)));
+      sel.current.scale.setScalar(0.8 * big + (reduced ? 0 : Math.sin(t * 3) * 0.04));
     }
+    hit.current?.scale.setScalar(Math.max(0.55, 0.62 * big));
+    if (sub) labelG.current?.position.set(0.3 * big + 0.15, 0, 0);
+    // top-level: label on the far side of the electron from the nucleus (never over the nucleus)
+    else labelG.current?.position.set(0, (s.a.y > 0.2 ? 1 : -1) * (0.42 * big + 0.28), 0);
     if (label.current) {
       s.labelK += ((showLabel(inst.id) ? 1 : 0) - s.labelK) * 0.12;
-      const o = clamp01((now - inst.bornAt) / 600) * (1 - clamp01(te / 1.2)) * 0.95 * s.labelK;
-      label.current.setOpacity(o);
+      label.current.setOpacity(clamp01((now - inst.bornAt) / 600) * (1 - clamp01(te / 1.2)) * 0.95 * s.labelK);
     }
 
-    // trail: the orbit just behind the electron (analytic, so it bends with parent motion and the decay spiral)
+    // orbital shell (top-level): faint ellipse through the electron's home around the nucleus
+    if (!sub) {
+      const L = s.a.length();
+      shellLine.visible = L > 0.6 && pres > 0.02;
+      if (shellLine.visible) {
+        D.crossVectors(s.a, s.b).normalize();
+        shellLine.matrix.makeBasis(s.a, s.b, D).setPosition(s.n);
+        shellLine.matrixWorldNeedsUpdate = true;
+        m.orbit.color.copy(color).multiplyScalar((thinking ? 0.32 : 0.2) * born * (1 - decay) * pres);
+      }
+    }
+
+    // trail: the orbit just behind the electron (analytic, so it follows the shell / mini-orbit and the decay spiral)
     const P = trail.getAttribute("position") as THREE.BufferAttribute;
     const C = trail.getAttribute("color") as THREE.BufferAttribute;
-    const span = inst.subagent ? 2.2 : 9.5;
-    const born0 = inst.bornAt / 1000 + (inst.subagent ? 0.6 : 1.1);
-    const trailK = (thinking ? 0.55 : 0.35) * (te >= 0 ? (1 - clamp01((te - 0.4) / 2.0)) * 1.6 : 1);
+    const span = sub ? 2.4 : 1.5;
+    const trailK = (thinking ? 0.75 : 0.45) * born * (te >= 0 ? (1 - clamp01((te - 0.4) / 2.0)) * 1.6 : 1);
     for (let k = 0; k < TRAIL; k++) {
-      const tk = Math.max(Math.min(born0, T), T - (k / (TRAIL - 1)) * (te >= 0 ? Math.min(span, 1.2 + te) : span));
-      electronAt(inst, tk, s.p);
+      const tk = th - s.dir * (k / (TRAIL - 1)) * span;
+      orbitAt(tk, s.p);
+      if (grow !== 1) s.p.sub(s.n).multiplyScalar(grow).add(s.n);
+      if (bt < 1) s.p.lerpVectors(s.from, s.p, sub ? bt : 0.3 + 0.7 * bt);
       P.setXYZ(k, s.p.x, s.p.y, s.p.z);
       const fall = Math.pow(1 - k / (TRAIL - 1), 1.8) * trailK;
       C.setXYZ(k, (te >= 0 ? ICE.r : color.r) * fall, (te >= 0 ? ICE.g : color.g) * fall, (te >= 0 ? ICE.b : color.b) * fall);
@@ -186,33 +275,35 @@ function Electron({ inst, selected, onSelect }: { inst: Instance; selected: bool
     P.needsUpdate = true;
     C.needsUpdate = true;
 
-    // field line parent → child (only while both are alive; fades if the parent exits)
-    const pp = inst.parent ? ePos.get(inst.parent) : undefined;
+    // field line parent -> child (only while both are alive; fades if the parent exits)
+    const pp = inst.parent ? agentLive(inst.parent) : undefined;
     const parent = inst.parent ? world.instances.get(inst.parent) : undefined;
     const alive = !!pp && !!parent && !parent.exitAt && !inst.exitAt;
     s.linkK += ((alive ? 1 : 0) - s.linkK) * (alive ? 0.06 : 0.05);
     if (pp) s.par.copy(pp);
     const u = m.field.uniforms;
     u.uP0.value.copy(s.par);
-    u.uP2.value.copy(s.live);
-    bow(s.par, s.live, inst.subagent ? 0.35 : 1.4, s.ctrl);
+    u.uP2.value.copy(live);
+    // subagent trunk along the run's fan axis, then out to the child
+    if (sub) s.ctrl.copy(s.par).addScaledVector(agent.run.axis, 1.2 * fit.spread);
+    else bow(s.par, live, 1.4, s.ctrl);
     u.uP1.value.copy(s.ctrl);
-    const grow = easeInOut((now - inst.bornAt) / 900);
-    u.uGrow.value = inst.parent && s.linkK > 0.01 ? grow : 0;
+    const gl = easeInOut((now - inst.bornAt) / 900);
+    u.uGrow.value = inst.parent && s.linkK > 0.01 ? gl : 0;
     u.uOpacity.value = (thinking ? 0.7 : 0.45) * s.linkK;
     u.uFlow.value = s.linkK;
     u.uTime.value = reduced ? 0 : t;
-    u.uHead.value = grow < 1 ? grow : -1;
+    u.uHead.value = gl < 1 ? gl : -1;
     if (arrow.current) {
-      const vis = inst.parent && s.linkK > 0.05 && grow >= 1;
+      const vis = inst.parent && s.linkK > 0.05 && gl >= 1;
       arrow.current.visible = !!vis;
       if (vis) {
-        bezier(s.par, s.ctrl, s.live, 0.74, A);
-        bezier(s.par, s.ctrl, s.live, 0.8, B);
+        bezier(s.par, s.ctrl, live, 0.74, A);
+        bezier(s.par, s.ctrl, live, 0.8, B);
         arrow.current.position.copy(A);
         D.subVectors(B, A);
         if (D.lengthSq() > 1e-8) arrow.current.quaternion.setFromUnitVectors(UP, D.normalize());
-        const k = inst.subagent ? 0.11 : 0.15;
+        const k = (sub ? 0.11 : 0.15) * Math.min(1.3, fit.scale);
         arrow.current.scale.set(k, k * 2.6, k);
         m.arrow.color.copy(color).multiplyScalar(1.5 * s.linkK);
       }
@@ -222,18 +313,19 @@ function Electron({ inst, selected, onSelect }: { inst: Instance; selected: bool
   const k = inst.id.split(":")[2];
   return (
     <>
+      <primitive object={shellLine} />
       <mesh geometry={TUBE_GEO} material={m.field} frustumCulled={false} />
       <mesh ref={arrow} geometry={ARROW_GEO} material={m.arrow} visible={false} />
       <primitive object={trailLine} />
-      <group ref={root}>
+      <group ref={root} position={agent.pos}>
         <group ref={body} scale={1e-4}>
           <mesh geometry={SPHERE_GEO} material={m.shell} />
           <mesh geometry={SPHERE_GEO} material={m.core} scale={0.55} />
         </group>
         <mesh
+          ref={hit}
           geometry={SPHERE_GEO}
           material={HIT_MAT}
-          scale={Math.max(0.55, 0.62 * big)}
           onClick={(ev) => {
             ev.stopPropagation();
             onSelect(inst.id);
@@ -245,41 +337,19 @@ function Electron({ inst, selected, onSelect }: { inst: Instance; selected: bool
         <sprite ref={flash} material={m.flash} visible={false} />
         <mesh ref={ring} geometry={RING_GEO} material={m.ring} visible={false} />
         <mesh ref={sel} geometry={RING_GEO} material={m.sel} visible={false} />
-        <Label3D
-          ref={label}
-          position={inst.subagent ? [0.22, 0, 0] : [0, 0.62 * big + 0.2, 0]}
-          anchorX={inst.subagent ? "left" : "center"}
-          offset={inst.subagent ? [0.1, 0] : undefined}
-          text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
-          color={TYPE_COLOR[inst.type]}
-          size={inst.subagent ? 0.22 : 0.28}
-          opacity={0}
-          pxRange={inst.subagent ? [8, 11.5] : [9, 13]}
-        />
+        <group ref={labelG}>
+          <Label3D
+            ref={label}
+            anchorX={sub ? "left" : "center"}
+            text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
+            color={TYPE_COLOR[inst.type]}
+            size={sub ? 0.22 : 0.28}
+            opacity={0}
+            fit
+            pxRange={sub ? [8, 11.5] : [9, 13]}
+          />
+        </group>
       </group>
-    </>
-  );
-}
-
-export function Electrons({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) {
-  const [list, setList] = useState<Instance[]>([]);
-  const known = useRef(new Set<string>());
-  const seen = useRef(-1);
-  useFrame(() => {
-    const m = world.instances;
-    let changed = m.size !== known.current.size || seen.current !== lod.version;
-    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
-    if (changed) {
-      known.current = new Set(m.keys());
-      seen.current = lod.version;
-      setList([...m.values()].filter(isExpanded));
-    }
-  });
-  return (
-    <>
-      {list.map((i) => (
-        <Electron key={i.id} inst={i} selected={selected === i.id} onSelect={onSelect} />
-      ))}
     </>
   );
 }
@@ -365,8 +435,8 @@ export function Messages() {
     let n = 0;
     for (const cm of world.comets) {
       if (n >= MAX_MSG) break;
-      const a = ePos.get(cm.from);
-      const b = ePos.get(cm.to);
+      const a = agentLive(cm.from);
+      const b = agentLive(cm.to);
       const sp = refs.current[n];
       if (!a || !b || !sp) continue;
       const t = clamp01((now - cm.start) / cm.dur);

@@ -1,34 +1,22 @@
 /**
- * /atom - "Atom". The knowledge graph is the nucleus (nucleons light on reads/writes), each run is an orbital
- * shell (plane tilt seeded per run), agents are electrons on their shell (subagents orbit their parent as a
- * mini-atom, joined by a directional field line), LLM calls emit photons sized by tokens, MCP servers are outer
- * particle detectors with backend sensor modules, data flows as particle beams, and exits decay into fading trails.
+ * /atom - "Atom" (scene-kit theme, preset: radial on the xy plane).
+ * Each run is an atom: its NUCLEUS is the run / orchestrator hub and its agents are the electrons orbiting it on
+ * tilted shells (subagents circle their own home like a mini-atom, joined to their parent by a directional field
+ * line); LLM calls emit photons sized by tokens; MCP servers are outer particle detectors with backend sensor
+ * modules; data flows as particle beams; exits decay into fading trails. The knowledge graph is a small molecule
+ * on the side (only when the session has a graph).
  */
-import { OrbitControls } from "@react-three/drei";
-import { Canvas, useFrame } from "@react-three/fiber";
 import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import * as THREE from "three";
-import { Hud } from "../shared/Hud";
-import { useSceneSetup } from "../shared/useSceneSetup";
-import { tick } from "../shared/world";
-import { lodTick } from "../shared/lod";
-import { AtomClusters } from "./Clusters";
-import { Detectors } from "./Detectors";
-import { Electrons, Messages, Photons } from "./Electrons";
-import { lineMat } from "./fx";
-import { Nucleus } from "./Nucleus";
-import { Shells } from "./Shells";
+import { KitScene, fit, kit } from "../shared/kit";
+import { Beams, Detector, Sensor } from "./Detectors";
+import { Electron, Messages, Photons } from "./Electrons";
+import { MOL_R, hubs, lineMat, runTops } from "./fx";
+import { RunAtom } from "./Hub";
+import { Molecule } from "./Molecule";
 
-function Ticker() {
-  useFrame(() => {
-    tick();
-    lodTick();
-  });
-  return null;
-}
-
-/** Faint polar reference grid behind the atom (a plotting-plate feel): rings, ticks and radial guides. */
+/** Faint polar reference grid behind the atoms (a plotting-plate feel): rings, ticks and radial guides. */
 function Plate() {
   const geo = useMemo(() => {
     const v: number[] = [];
@@ -57,37 +45,50 @@ function Plate() {
   return <lineSegments geometry={geo} material={mat} position={[0, 0, -9]} />;
 }
 
+const _p = new THREE.Vector3();
+/** keep each run's nucleus (it may sit above the agents) and the run label above the atom in view */
+function extents(visit: (p: THREE.Vector3, r: number) => void) {
+  for (const r of kit.runs.values()) {
+    const h = hubs.get(r.id);
+    if (h) visit(h, 0.8 * Math.max(0.6, fit.scale));
+    const t = runTops.get(r.id);
+    if (t) visit(_p.set(t.x, t.y + 0.5, t.z), 1.2);
+  }
+}
+
 export default function Scene() {
-  const galaxy = useSceneSetup();
-  const [selected, setSelected] = useState<string | null>(null);
   return (
-    <div className="scene-root" style={{ background: "#02040c" }}>
-      <style>{`.atom-mono{font-family:"JetBrains Mono","SF Mono",ui-monospace,Menlo,monospace;}`}</style>
-      <Canvas camera={{ position: [0, 3.5, 36], fov: 46 }} dpr={[1, 2]} gl={{ antialias: true, powerPreference: "high-performance" }} onPointerMissed={() => setSelected(null)}>
-        <color attach="background" args={["#02040c"]} />
-        <Ticker />
-        <group position={[-2.4, 0, 0]}>
-          <Plate />
-          <Nucleus galaxy={galaxy} />
-          <Shells />
-          <Electrons selected={selected} onSelect={setSelected} />
-          <Photons />
-          <Messages />
-          <Detectors />
-          <AtomClusters />
-        </group>
-        <OrbitControls makeDefault enablePan={false} enableDamping dampingFactor={0.07} minDistance={12} maxDistance={70} />
+    <KitScene
+      title="atom · agent orbitals"
+      subtitle="Each run is an atom: the nucleus is the run hub, agents are electrons on its shells, subagents orbit their parent · LLM calls emit photons sized by tokens · ◎ MCP detectors with backend sensors · graph = molecule on the side · exit = decay"
+      className="atom-root"
+      preset="radial"
+      plane="xy"
+      camera={{ position: [0, 3.5, 36], fov: 46 }}
+      bg="#02040c"
+      gl={{ antialias: true }}
+      fit={{ nRef: 4, min: 0.62, max: 1.6, minRadius: 5.5 }}
+      agentRadius={0.75}
+      graph={{ natural: MOL_R * 1.15, radius: 2.3 }}
+      peripheryGap={3.8}
+      Background={<Plate />}
+      Agent={Electron}
+      RunMarker={RunAtom}
+      McpServer={Detector}
+      Backend={Sensor}
+      GraphResource={Molecule}
+      cluster={{ radius: 1.3, variant: "orb" }}
+      extents={extents}
+      PostFX={
         <EffectComposer multisampling={0}>
           <Bloom mipmapBlur intensity={1.05} luminanceThreshold={0.22} luminanceSmoothing={0.25} radius={0.7} />
           <Vignette eskil={false} offset={0.25} darkness={0.85} />
         </EffectComposer>
-      </Canvas>
-      <Hud
-        title="atom · agent orbitals"
-        subtitle="Knowledge graph = nucleus (nucleons light on read/write) · each run is an orbital shell · agents are electrons, subagents orbit their parent · LLM calls emit photons sized by tokens · ◎ MCP detectors with backend sensors · exit = decay"
-        selected={selected}
-        onClose={() => setSelected(null)}
-      />
-    </div>
+      }
+    >
+      <Photons />
+      <Messages />
+      <Beams />
+    </KitScene>
   );
 }

@@ -6,11 +6,12 @@
  *   result  → a bright particle flies back detector → electron (arrow at the agent); sensor → detector flash
  */
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type McpResource, type McpServer, type ResourceKind } from "../shared/world";
-import { AMBER, ARROW_GEO, ArrowPool, CurvePool, RED, TUBE_GEO, WHITE, additive, bezier, bow, clamp01, detPos, easeInOut, easeOut, ePos, glowSprite, lineMat, reduced, sensorPos, tubeMaterial } from "./fx";
+import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
+import { AMBER, ARROW_GEO, ArrowPool, CurvePool, RED, TUBE_GEO, WHITE, additive, bezier, bow, clamp01, easeInOut, easeOut, glowSprite, lineMat, reduced, tubeMaterial } from "./fx";
 
 const ORIGIN = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
@@ -59,18 +60,17 @@ const KIND_PARTS: Record<ResourceKind, () => Part[]> = {
   queue: () => [part(new THREE.CapsuleGeometry(0.18, 0.7, 4, 12), undefined, [0, 0, Math.PI / 2])],
 };
 
-function Sensor({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: number; n: number }) {
-  const pos = useMemo(() => sensorPos(srv.slot, k, n, new THREE.Vector3()), [srv.slot, k, n]);
-  const dp = useMemo(() => detPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+/** Backend slot: a sensor module wired to its detector (kit places both; they ease when the periphery re-lays out). */
+export function Sensor({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const at = useRef<THREE.Group>(null);
   const parts = useMemo(() => KIND_PARTS[res.kind]?.() ?? KIND_PARTS.api(), [res.kind]);
   const col = useMemo(() => new THREE.Color(srv.color).lerp(WHITE, 0.3), [srv.color]);
   const m = useMemo(() => {
     const edge = tubeMaterial(srv.color, 0.03);
-    edge.uniforms.uP0.value.copy(dp);
-    edge.uniforms.uP2.value.copy(pos);
-    edge.uniforms.uP1.value.copy(dp).add(pos).multiplyScalar(0.5);
     return { edge, fill: additive(col), line: lineMat(col), halo: glowSprite(col), arrow: additive(col) };
-  }, [srv.color, dp, pos, col]);
+  }, [srv.color, col]);
   const g = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
   const arrow = useRef<THREE.Mesh>(null);
@@ -79,6 +79,11 @@ function Sensor({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numbe
   useFrame(({ clock }) => {
     const now = performance.now();
     const t = clock.elapsedTime;
+    at.current?.position.copy(backend.pos);
+    const eu = m.edge.uniforms;
+    eu.uP0.value.copy(mcp.pos);
+    eu.uP2.value.copy(backend.pos);
+    eu.uP1.value.copy(mcp.pos).add(backend.pos).multiplyScalar(0.5);
     const busy = res.inflight > 0;
     const act = Math.exp(-((now - res.activeAt) / 1000) * 1.5);
     const beat = busy && !reduced ? 0.5 + 0.5 * Math.sin(t * 5) : busy ? 0.5 : 0;
@@ -141,7 +146,7 @@ function Sensor({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numbe
     <>
       <mesh geometry={TUBE_GEO} material={m.edge} frustumCulled={false} />
       <mesh ref={arrow} geometry={ARROW_GEO} material={m.arrow} visible={false} />
-      <group position={pos}>
+      <group ref={at}>
         <sprite ref={halo} material={m.halo} />
         <group ref={g}>
           {parts.map((p, i) => (
@@ -168,29 +173,23 @@ function placeArrow(m: THREE.Object3D, p0: THREE.Vector3, p1: THREE.Vector3, p2:
   m.scale.set(size * 0.38, size, size * 0.38);
 }
 
-function Detector({ srv }: { srv: McpServer }) {
-  const pos = useMemo(() => detPos(srv.slot, new THREE.Vector3()), [srv.slot]);
+/** MCP server slot: a barrel particle detector on the outskirts, aimed at the agents. */
+export function Detector({ mcp }: McpServerSlotProps) {
+  const srv = mcp.srv;
+  const at = useRef<THREE.Group>(null);
   const col = useMemo(() => new THREE.Color(srv.color), [srv.color]);
   const m = useMemo(() => ({ line: lineMat(col), fill: additive(col), core: glowSprite("#fff"), halo: glowSprite(col), hit: glowSprite("#fff") }), [col]);
   const aim = useRef<THREE.Group>(null);
   const spin = useRef<THREE.Group>(null);
   const halo = useRef<THREE.Sprite>(null);
   const hit = useRef<THREE.Sprite>(null);
-  const [res, setRes] = useState<McpResource[]>([]);
-  const nRes = useRef(0);
   const lastCalls = useRef(srv.calls);
   const hitAt = useRef(-1e9);
   useFrame(({ clock }) => {
-    if (srv.resources.size !== nRes.current) {
-      nRes.current = srv.resources.size;
-      setRes([...srv.resources.values()]);
-    }
+    at.current?.position.copy(mcp.pos);
     const now = performance.now();
     if (srv.calls !== lastCalls.current) (lastCalls.current = srv.calls), (hitAt.current = now);
-    if (aim.current && !aim.current.userData.aimed) {
-      aim.current.lookAt(ORIGIN); // beam axis points at the nucleus
-      aim.current.userData.aimed = true;
-    }
+    aim.current?.lookAt(ORIGIN); // beam axis points at the agents (stage centre)
     const busy = srv.inflight > 0;
     const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.4);
     const k = (busy ? 0.8 : 0.32) + act * 0.5;
@@ -210,7 +209,7 @@ function Detector({ srv }: { srv: McpServer }) {
   });
   return (
     <>
-      <group position={pos}>
+      <group ref={at}>
         <sprite ref={halo} material={m.halo} />
         <group ref={aim}>
           <group ref={spin}>
@@ -222,9 +221,6 @@ function Detector({ srv }: { srv: McpServer }) {
         <sprite ref={hit} material={m.hit} visible={false} />
         <Label3D position={[0, 1.65, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.28} pxRange={[9, 13]} />
       </group>
-      {res.map((r, k) => (
-        <Sensor key={r.name} srv={srv} res={r} k={k} n={res.length} />
-      ))}
     </>
   );
 }
@@ -234,7 +230,8 @@ const MAX_B = 28;
 const SEG = 40;
 const MAX_PK = 24;
 
-function Beams() {
+/** Theme extra: particle beams electron <-> detector + outgoing call particles. */
+export function Beams() {
   const pool = useMemo(() => new CurvePool(MAX_B * 2, SEG), []);
   const mat = useMemo(() => lineMat("#fff", true), []);
   const arrows = useMemo(() => new ArrowPool(MAX_B), []);
@@ -249,11 +246,12 @@ function Beams() {
     const { a, b, c, p, col, k } = tmp;
     // curve: electron (t=0) → detector (t=1)
     const draw = (instance: string, server: string, mode: 0 | 1, x: number) => {
-      const sp = ePos.get(instance);
+      const sp = agentLive(instance);
       const srv = world.mcpServers.get(server);
-      if (!sp || !srv) return;
+      const sv = serverPos(server);
+      if (!sp || !srv || !sv) return;
       a.copy(sp);
-      detPos(srv.slot, b);
+      b.copy(sv);
       bow(a, b, 1.2, c);
       col.set(srv.color);
       let base: number;
@@ -293,13 +291,14 @@ function Beams() {
     let n = 0;
     for (const call of world.mcpCalls) {
       if (call.phase !== "call" || n >= MAX_PK) continue;
-      const sp = ePos.get(call.instance);
+      const sp = agentLive(call.instance);
       const srv = world.mcpServers.get(call.server);
+      const sv = serverPos(call.server);
       const s = pk.current[n];
       const t = clamp01((now - call.start) / call.dur);
-      if (!sp || !srv || !s || t >= 1) continue;
+      if (!sp || !srv || !sv || !s || t >= 1) continue;
       a.copy(sp);
-      detPos(srv.slot, b);
+      b.copy(sv);
       bow(a, b, 1.2, c);
       bezier(a, c, b, easeInOut(t), p);
       s.visible = true;
@@ -321,21 +320,3 @@ function Beams() {
   );
 }
 
-export function Detectors() {
-  const [servers, setServers] = useState<McpServer[]>([]);
-  const n = useRef(-1);
-  useFrame(() => {
-    if (world.mcpServers.size !== n.current) {
-      n.current = world.mcpServers.size;
-      setServers([...world.mcpServers.values()]);
-    }
-  });
-  return (
-    <>
-      {servers.map((s) => (
-        <Detector key={s.name} srv={s} />
-      ))}
-      <Beams />
-    </>
-  );
-}
