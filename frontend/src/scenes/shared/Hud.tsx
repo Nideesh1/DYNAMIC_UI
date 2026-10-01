@@ -97,7 +97,7 @@ function saveSide(v: { collapsed: boolean; tab: Tab }) {
 const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 
 function HudPanels({ title, subtitle, onClose, inset, children }: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; inset?: ReactNode; children?: ReactNode }) {
-  const { embedded } = useSceneConfig();
+  const { embedded, scope, run: runFilter } = useSceneConfig();
   const canRun = useRunAvailable();
   const w = useWorld();
   const [, tick] = useState(0);
@@ -198,7 +198,14 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
               {title}
             </div>
             {w.mode === "sim" && <span className="hud-badge">sim</span>}
-            {w.mode === "live" && <span className="hud-badge hud-badge--live">live</span>}
+            {w.mode === "live" && !w.unauthorized && <span className="hud-badge hud-badge--live">live</span>}
+            {scope && <FilterChip label="scope" value={scope} />}
+            {runFilter && <FilterChip label="run" value={runFilter} />}
+            {w.unauthorized && (
+              <span className="hud-badge hud-badge--denied" role="status" title="The server answered 401: this token / scope is not allowed to watch these agents">
+                not authorized for this scope
+              </span>
+            )}
             <button className={`hud-info${info ? " on" : ""}`} onClick={() => setInfo((v) => !v)} aria-label="What am I looking at?" aria-expanded={info} title="What am I looking at?">
               i
             </button>
@@ -395,6 +402,16 @@ function LodHint() {
 /** Demo topics sent to POST /live/run; rotated so each run differs. */
 const TOPICS = ["Why is churn rising for Acme Corp?", "Root cause of payment latency incidents", "Which region has the most incidents?", "Is Fraud Shield worth expanding to Globex?"];
 let topicIdx = 0;
+
+/** "scope: user-123" / "run: abc123": tells viewers they are looking at a filtered view. */
+function FilterChip({ label, value }: { label: string; value: string }) {
+  const short = value.length > 18 ? `${value.slice(0, 16)}…` : value;
+  return (
+    <span className="hud-badge hud-chip" title={`${label}: ${value}`}>
+      {label}: <b>{short}</b>
+    </span>
+  );
+}
 
 export function RunButton() {
   const [busy, setBusy] = useState(false);

@@ -179,6 +179,8 @@ export const world = {
   archive: new Map<string, Instance>(),
   /** instance selected in the agent panel or by clicking a shape */
   selected: null as string | null,
+  /** the server answered 401 for this scope/run/token (the HUD shows a notice; no simulator fallback) */
+  unauthorized: false,
 };
 const ARCHIVE_MAX = 500;
 
@@ -486,6 +488,40 @@ export function setSimulated(v: boolean) {
 export function setGraphLabel(label: string) {
   if (world.graphLabel === label) return;
   world.graphLabel = label;
+  notify();
+}
+
+/** The server refused this scope/run/token (401). */
+export function setUnauthorized(v: boolean) {
+  if (world.unauthorized === v) return;
+  world.unauthorized = v;
+  notify();
+}
+
+/** Forget every run, agent and stat (a new connection with a different scope/run filter starts clean). */
+export function resetWorld() {
+  world.runs.clear();
+  world.instances.clear();
+  world.comets.length = 0;
+  world.flares.length = 0;
+  world.mcpServers.clear();
+  world.mcpRegistry.clear();
+  world.mcpCalls.length = 0;
+  world.mcpPending.clear();
+  world.mcpResolved.length = 0;
+  world.ticker.length = 0;
+  for (const k of Object.keys(world.stats) as (keyof typeof world.stats)[]) world.stats[k] = 0;
+  world.lastFinal = "";
+  world.simulated = false;
+  world.mode = "connecting";
+  world.focus = null;
+  world.focusAt = 0;
+  world.spawnHintAt = 0;
+  world.archive.clear();
+  world.selected = null;
+  world.unauthorized = false;
+  world.hasGraph = false;
+  world.hasGraphAt = 0;
   notify();
 }
 

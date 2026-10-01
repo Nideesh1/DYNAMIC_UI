@@ -12,15 +12,21 @@
  *
  * Source (see config.tsx): `${source}/live/stream` (SSE world events), `/live/graph` (optional sample),
  * `/live/health` (reachability), `/live/run` (optional "Run agents" button). `sim` forces the simulator;
- * an unreachable server falls back to it automatically.
+ * an unreachable server falls back to it automatically. A 401 does NOT fall back: the HUD says
+ * "not authorized" instead (world.unauthorized).
+ *
+ * Auth / filters (never in a URL): `token` -> `Authorization: Bearer <token>`, `scope` -> `X-AgentGlow-Scope`,
+ * `run` -> `X-AgentGlow-Run`, on every /live/* request. The stream is read with fetch() (not EventSource) so
+ * it can carry those headers.
  *
  * The world is a page-level singleton, so the connection is too: scenes on the same page with the same
- * source share ONE connection (ref-counted). A scene with a different source replaces it (last one wins).
+ * source + scope/run/token share ONE connection (ref-counted). A scene with a different one replaces it
+ * (last one wins) and the world is reset so the old filter's runs don't linger.
  */
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { useSceneConfig } from "./config";
+import { useSceneConfig, type SceneConfig } from "./config";
 import { runWorldSimulator } from "./sim";
-import { apply, hash01, setGraphLabel, setMode, world, type WorldEvent } from "./world";
+import { apply, hash01, resetWorld, setGraphLabel, setMode, setUnauthorized, world, type WorldEvent } from "./world";
 
 export type GalaxyNode = { id: string; name: string; kind: string };
 export type Galaxy = { nodes: GalaxyNode[]; links: { source: string; target: string }[] };
@@ -85,9 +91,83 @@ class EventGalaxy {
   }
 }
 
+/** Who/what this connection is for: sent as headers on every /live/* request. */
+type Auth = Pick<SceneConfig, "scope" | "run" | "token">;
+
+function authHeaders(a: Auth): Record<string, string> {
+  const h: Record<string, string> = {};
+  if (a.token) h.authorization = `Bearer ${a.token}`;
+  if (a.scope) h["x-agentglow-scope"] = a.scope;
+  if (a.run) h["x-agentglow-run"] = a.run;
+  return h;
+}
+
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((res) => {
+    const t = window.setTimeout(res, ms);
+    signal.addEventListener("abort", () => (window.clearTimeout(t), res()), { once: true });
+  });
+
+/**
+ * Minimal fetch()-based SSE client (EventSource can't send headers or expose status codes).
+ * Dispatches default ("message") events' data, honours `retry:`, reconnects with exponential backoff,
+ * stops for good on 401/403 (onUnauthorized). Returns a stop function (aborts the request).
+ */
+function openStream(url: string, headers: Record<string, string>, onData: (data: string) => void, onUnauthorized: () => void): () => void {
+  const ctl = new AbortController();
+  const { signal } = ctl;
+  let retry = 2000;
+  let attempt = 0;
+  (async () => {
+    while (!signal.aborted) {
+      try {
+        const r = await fetch(url, { headers: { ...headers, accept: "text/event-stream" }, cache: "no-store", signal });
+        if (r.status === 401 || r.status === 403) return onUnauthorized();
+        if (!r.ok || !r.body) throw new Error(`stream ${r.status}`);
+        attempt = 0;
+        const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+        let buf = "";
+        let data: string[] = [];
+        let type = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += value;
+          const lines = buf.split(/\r\n|\r|\n/);
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (line === "") {
+              if (data.length && (type === "" || type === "message")) onData(data.join("\n"));
+              data = [];
+              type = "";
+              continue;
+            }
+            if (line.startsWith(":")) continue;
+            const i = line.indexOf(":");
+            const field = i < 0 ? line : line.slice(0, i);
+            let val = i < 0 ? "" : line.slice(i + 1);
+            if (val.startsWith(" ")) val = val.slice(1);
+            if (field === "data") data.push(val);
+            else if (field === "event") type = val;
+            else if (field === "retry" && /^\d+$/.test(val)) retry = Number(val);
+          }
+        }
+      } catch {
+        if (signal.aborted) return;
+      }
+      // dropped or failed: back off (retry, 2x, 4x... capped at 30s, with jitter) and reconnect
+      const wait = Math.min(retry * 2 ** attempt, 30_000) * (0.75 + Math.random() * 0.5);
+      attempt = Math.min(attempt + 1, 6);
+      await sleep(wait, signal);
+    }
+  })();
+  return () => ctl.abort();
+}
+
 type Conn = {
   key: string;
   source: string;
+  auth: Auth;
   refs: number;
   stop?: () => void;
   dead: boolean;
@@ -119,9 +199,12 @@ export function useRunAvailable(): boolean {
   );
 }
 
-async function health(source: string): Promise<Record<string, unknown> | null> {
+const UNAUTHORIZED = "unauthorized" as const;
+
+async function health(source: string, auth: Auth): Promise<Record<string, unknown> | typeof UNAUTHORIZED | null> {
   try {
-    const r = await fetch(`${source}/live/health`, { signal: AbortSignal.timeout(2500) });
+    const r = await fetch(`${source}/live/health`, { headers: authHeaders(auth), signal: AbortSignal.timeout(2500) });
+    if (r.status === 401 || r.status === 403) return UNAUTHORIZED;
     if (!r.ok) return null;
     return ((await r.json().catch(() => ({}))) ?? {}) as Record<string, unknown>;
   } catch {
@@ -130,10 +213,10 @@ async function health(source: string): Promise<Record<string, unknown> | null> {
 }
 
 /** Does `${source}/live/run` exist? Health may say so (`run: bool`); else a side-effect-free GET (405 = POST route exists). */
-async function probeRun(source: string, h: Record<string, unknown>): Promise<boolean> {
+async function probeRun(source: string, auth: Auth, h: Record<string, unknown>): Promise<boolean> {
   if (typeof h.run === "boolean") return h.run;
   try {
-    const r = await fetch(`${source}/live/run`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(2500) });
+    const r = await fetch(`${source}/live/run`, { headers: { ...authHeaders(auth), accept: "application/json" }, signal: AbortSignal.timeout(2500) });
     return r.status === 405;
   } catch {
     return false;
@@ -166,16 +249,23 @@ function start(c: Conn, sim: boolean) {
     }, 700);
   };
   (async () => {
-    const h = await health(c.source);
+    const h = await health(c.source, c.auth);
     if (c.dead) return;
+    const denied = () => {
+      if (c.dead) return;
+      setUnauthorized(true);
+      setRunAvailable(false);
+    };
+    if (h === UNAUTHORIZED) return denied(); // no simulator fallback: say so in the HUD
     if (!h) {
       c.galaxy = fakeGalaxy();
       return useSim();
     }
     setMode("live");
-    probeRun(c.source, h).then((ok) => !c.dead && setRunAvailable(ok));
-    fetch(`${c.source}/live/graph`)
-      .then((r) => (r.ok ? r.json() : null))
+    const headers = authHeaders(c.auth);
+    probeRun(c.source, c.auth, h).then((ok) => !c.dead && setRunAvailable(ok));
+    fetch(`${c.source}/live/graph`, { headers })
+      .then((r) => (r.status === 401 || r.status === 403 ? (denied(), null) : r.ok ? r.json() : null))
       .then((g: Galaxy | null) => {
         if (!c.dead && g?.nodes?.length) {
           c.galaxy = g;
@@ -187,10 +277,9 @@ function start(c: Conn, sim: boolean) {
         }
       })
       .catch(() => {});
-    const es = new EventSource(`${c.source}/live/stream`);
-    es.onmessage = (m) => {
+    c.stop = openStream(`${c.source}/live/stream`, headers, (data) => {
       try {
-        const ev = JSON.parse(m.data) as WorldEvent;
+        const ev = JSON.parse(data) as WorldEvent;
         const had = world.hasGraph;
         apply(ev);
         if (ev.type === "graph" && Array.isArray(ev.nodes)) {
@@ -201,8 +290,7 @@ function start(c: Conn, sim: boolean) {
       } catch {
         /* ignore malformed */
       }
-    };
-    c.stop = () => es.close();
+    }, denied);
   })();
 }
 
@@ -216,17 +304,19 @@ function teardown(c: Conn) {
   }
 }
 
-function acquire(source: string, sim: boolean): Conn {
-  const key = sim ? "sim" : `live:${source}`;
+function acquire(source: string, sim: boolean, auth: Auth): Conn {
+  const key = sim ? "sim" : `live:${source}|${auth.scope ?? ""}|${auth.run ?? ""}|${auth.token ?? ""}`;
   if (conn && conn.key === key && !conn.dead) {
     conn.refs++;
     return conn;
   }
   if (conn) {
-    console.warn(`[agentglow] one data source per page: switching from "${conn.key}" to "${key}"`);
+    if (conn.source !== source || conn.key === "sim" || key === "sim") console.warn(`[agentglow] one data source per page: switching from "${conn.source || conn.key}" to "${source || key}"`);
     teardown(conn);
   }
-  const c: Conn = { key, source, refs: 1, dead: false, galaxy: sim ? fakeGalaxy() : EMPTY, served: false, events: new EventGalaxy(), growTimer: 0 };
+  // a fresh connection (first one, or a different source / scope / run / token) starts from an empty world
+  resetWorld();
+  const c: Conn = { key, source, auth, refs: 1, dead: false, galaxy: sim ? fakeGalaxy() : EMPTY, served: false, events: new EventGalaxy(), growTimer: 0 };
   conn = c;
   start(c, sim);
   return c;
@@ -242,18 +332,21 @@ function release(c: Conn) {
 /** Trigger a run via the server's optional POST /live/run. Returns the run id, or null (404 → button hides). */
 export async function startLiveRun(topic: string): Promise<string | null> {
   const source = conn?.source ?? "";
-  const r = await fetch(`${source}/live/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ topic }) });
+  const auth = conn?.auth ?? {};
+  const body = auth.scope ? { topic, scope: auth.scope } : { topic };
+  const r = await fetch(`${source}/live/run`, { method: "POST", headers: { ...authHeaders(auth), "content-type": "application/json" }, body: JSON.stringify(body) });
   if (r.status === 404 || r.status === 405) setRunAvailable(false);
+  if (r.status === 401 || r.status === 403) setUnauthorized(true);
   if (!r.ok) return null;
   const j = (await r.json().catch(() => ({}))) as { run_id?: string };
   return j.run_id ?? "started";
 }
 
 export function useSceneSetup(): Galaxy {
-  const { source, sim } = useSceneConfig();
+  const { source, sim, scope, run, token } = useSceneConfig();
   const [galaxy, setGalaxy] = useState<Galaxy>(EMPTY);
   useEffect(() => {
-    const c = acquire(source, sim);
+    const c = acquire(source, sim, { scope: scope || undefined, run: run || undefined, token: token || undefined });
     // the graph is a resource shown only once used: EMPTY until world.hasGraph (a graph event, or sim)
     const sync = () => setGalaxy(world.hasGraph ? c.galaxy : EMPTY);
     sync();
@@ -262,7 +355,7 @@ export function useSceneSetup(): Galaxy {
       subs.delete(sync);
       release(c);
     };
-  }, [source, sim]);
+  }, [source, sim, scope, run, token]);
   return galaxy;
 }
 
