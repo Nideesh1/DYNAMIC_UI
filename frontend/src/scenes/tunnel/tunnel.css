@@ -1,0 +1,3 @@
+.tunnel-pause { bottom: 16px; left: 50%; transform: translateX(-50%); padding: 7px 14px; color: #e2e8f0; font: 600 11px/1 "Public Sans", system-ui, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
+/* bottom centre, between the ticker and the counters; narrow embeds have no room for it (Space still pauses) */
+@media (max-width: 1280px) { .tunnel-pause { display: none; } }

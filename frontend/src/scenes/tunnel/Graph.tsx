@@ -1,19 +1,37 @@
-/** FalkorDB = a constellation of graph nodes lining the outer tunnel shell. Flares ignite nodes; a laser ties the ship to the node (writes = white starburst). */
+/** GraphResource slot: FalkorDB = a short star shell on the side, a segment of tunnel wall lined with graph-node
+ * stars. Flares ignite stars; a laser ties the ship to the star (writes = white starburst). Drawn in its own frame
+ * (radius STAR_R); the kit positions, scales and fades it. */
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, world } from "../shared/world";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
-import { SHELL_R, ships, starTexture } from "./lanes";
+import { agentLive, stageToGraph, type GraphSlotProps } from "../shared/kit";
+import { MOTION, ships, starTexture } from "./lanes";
 
+/** shell radius + length (local units) and the natural radius the kit scales by */
+const SR = 2.3;
+const ZL = 5.2;
+export const STAR_R = 3.4;
+const C = 2 * Math.PI * SR;
+/** the shell segment is turned so it reads as a piece of tunnel (axis toward the camera + to the side) */
+const ORIENT = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(0.28, 0.8, 0));
 const MAXF = 48;
 const SAMPLE = 220;
 const NAME_LABELS = 3;
 const UP = new THREE.Vector3(0, 1, 0);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const _p = new THREE.Vector3();
 
-export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
+function h01(s: string, salt: number) {
+  let h = 2166136261 ^ salt;
+  for (let k = 0; k < s.length; k++) h = Math.imul(h ^ s.charCodeAt(k), 16777619);
+  return ((h >>> 0) % 100000) / 100000;
+}
+type UW = { u: number; w: number };
+
+export function StarShell({ galaxy: full }: GraphSlotProps) {
   // FalkorDB is shown as a representative sample (~220 nodes), never as a count
   const galaxy = useMemo<Galaxy>(() => {
     const nodes = full.nodes.slice(0, SAMPLE);
@@ -21,23 +39,17 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
     return { nodes, links: full.links.filter((l) => keep.has(l.source) && keep.has(l.target)) };
   }, [full]);
   const n = galaxy.nodes.length;
-  const group = useRef<THREE.Group>(null);
   const nodes = useRef<THREE.InstancedMesh>(null);
   const rings = useRef<THREE.InstancedMesh>(null);
   const bursts = useRef<THREE.InstancedMesh>(null);
   const lasers = useRef<THREE.InstancedMesh>(null);
+  /** unrolled-shell coords per node id: kept across graph growth so stars never jump */
+  const prev = useRef(new Map<string, UW>());
 
-  // representative sample: a force-directed layout on the unrolled cylinder shell so linked nodes sit close and edges read
+  // force-directed layout on the unrolled shell (linked nodes sit close), incremental while the graph grows
   const layout = useMemo(() => {
-    const C = 2 * Math.PI * SHELL_R;
-    const Z0 = -12;
-    const ZL = 78;
     const u = new Float32Array(n);
     const w = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      u[i] = Math.random() * C;
-      w[i] = Math.random() * ZL;
-    }
     const idx = new Map(galaxy.nodes.map((nd, i) => [nd.id, i]));
     const E: [number, number][] = [];
     for (const l of galaxy.links) {
@@ -45,19 +57,39 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
       const b = idx.get(l.target);
       if (a !== undefined && b !== undefined && a !== b) E.push([a, b]);
     }
+    let fresh = 0;
+    galaxy.nodes.forEach((nd, i) => {
+      const o = prev.current.get(nd.id);
+      if (o) {
+        u[i] = o.u;
+        w[i] = o.w;
+      } else {
+        u[i] = h01(nd.id, 1) * C;
+        w[i] = h01(nd.id, 2) * ZL;
+        fresh++;
+      }
+    });
+    // new nodes start next to a placed neighbour
+    for (const [a, b] of E) {
+      const na = !prev.current.has(galaxy.nodes[a].id);
+      const nb = !prev.current.has(galaxy.nodes[b].id);
+      if (na && !nb) (u[a] = (u[b] + (h01(galaxy.nodes[a].id, 3) - 0.5) * 0.8 + C) % C), (w[a] = Math.min(ZL, Math.max(0, w[b] + (h01(galaxy.nodes[a].id, 4) - 0.5) * 0.8)));
+      if (nb && !na) (u[b] = (u[a] + (h01(galaxy.nodes[b].id, 3) - 0.5) * 0.8 + C) % C), (w[b] = Math.min(ZL, Math.max(0, w[a] + (h01(galaxy.nodes[b].id, 4) - 0.5) * 0.8)));
+    }
+    const iters = prev.current.size === 0 ? 90 : fresh ? 14 : 0;
     const fu = new Float32Array(n);
     const fw = new Float32Array(n);
     const wrap = (d: number) => (d > C / 2 ? d - C : d < -C / 2 ? d + C : d);
-    for (let it = 0; it < 120; it++) {
+    for (let it = 0; it < iters; it++) {
       fu.fill(0);
       fw.fill(0);
       for (let i = 0; i < n; i++)
         for (let j = i + 1; j < n; j++) {
           const du = wrap(u[i] - u[j]);
           const dw = w[i] - w[j];
-          const d2 = du * du + dw * dw + 0.01;
-          if (d2 > 100) continue;
-          const f = 6 / d2;
+          const d2 = du * du + dw * dw + 0.004;
+          if (d2 > 1.4) continue;
+          const f = 0.05 / d2;
           fu[i] += du * f;
           fw[i] += dw * f;
           fu[j] -= du * f;
@@ -66,23 +98,27 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
       for (const [a, b] of E) {
         const du = wrap(u[b] - u[a]);
         const dw = w[b] - w[a];
-        fu[a] += du * 0.08;
-        fw[a] += dw * 0.08;
-        fu[b] -= du * 0.08;
-        fw[b] -= dw * 0.08;
+        fu[a] += du * 0.06;
+        fw[a] += dw * 0.06;
+        fu[b] -= du * 0.06;
+        fw[b] -= dw * 0.06;
       }
-      const step = 0.9 * (1 - it / 120) + 0.05;
+      const step = 0.6 * (1 - it / Math.max(1, iters)) + 0.05;
       for (let i = 0; i < n; i++) {
-        u[i] = (u[i] + Math.max(-2, Math.min(2, fu[i])) * step + C) % C;
-        w[i] = Math.max(0, Math.min(ZL, w[i] + Math.max(-2, Math.min(2, fw[i])) * step));
+        u[i] = (u[i] + Math.max(-0.3, Math.min(0.3, fu[i])) * step + C) % C;
+        w[i] = Math.max(0, Math.min(ZL, w[i] + Math.max(-0.3, Math.min(0.3, fw[i])) * step));
       }
     }
     const pos = new Float32Array(n * 3);
+    const m = new Map<string, UW>();
     for (let i = 0; i < n; i++) {
-      const a = u[i] / SHELL_R;
-      const r = SHELL_R + 0.6 + Math.sin(i * 7.3) * 0.6;
-      pos.set([Math.cos(a) * r, Math.sin(a) * r, Z0 - w[i]], i * 3);
+      m.set(galaxy.nodes[i].id, { u: u[i], w: w[i] });
+      const a = u[i] / SR;
+      const r = SR + Math.sin(i * 7.3) * 0.12;
+      _p.set(Math.cos(a) * r, Math.sin(a) * r, ZL / 2 - w[i]).applyMatrix4(ORIENT);
+      pos.set([_p.x, _p.y, _p.z], i * 3);
     }
+    prev.current = m;
     return pos;
   }, [n, galaxy]);
   const base = useMemo(() => galaxy.nodes.map((nd) => new THREE.Color(KIND_COLOR[nd.kind] ?? "#94a3b8")), [galaxy]);
@@ -96,7 +132,7 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
       const dx = layout[a * 3] - layout[b * 3];
       const dy = layout[a * 3 + 1] - layout[b * 3 + 1];
       const dz = layout[a * 3 + 2] - layout[b * 3 + 2];
-      if (dx * dx + dy * dy + dz * dz > 22 * 22) continue;
+      if (dx * dx + dy * dy + dz * dz > 2.6 * 2.6) continue;
       out.push(layout[a * 3], layout[a * 3 + 1], layout[a * 3 + 2], layout[b * 3], layout[b * 3 + 1], layout[b * 3 + 2]);
     }
     const g = new THREE.BufferGeometry();
@@ -123,10 +159,29 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
   const labelOp = useRef<string[]>([]);
   const labelNode = useRef<number[]>([-1, -1, -1]);
 
+  // the shell itself: a few faint wall rings + struts (the tunnel motif in miniature)
+  const shellGeo = useMemo(() => {
+    const pts: number[] = [];
+    const K = 48;
+    for (const z of [-ZL / 2, -ZL / 6, ZL / 6, ZL / 2])
+      for (let k = 0; k < K; k++) {
+        const a0 = (k / K) * Math.PI * 2;
+        const a1 = ((k + 1) / K) * Math.PI * 2;
+        pts.push(Math.cos(a0) * SR, Math.sin(a0) * SR, z, Math.cos(a1) * SR, Math.sin(a1) * SR, z);
+      }
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2;
+      pts.push(Math.cos(a) * SR, Math.sin(a) * SR, -ZL / 2, Math.cos(a) * SR, Math.sin(a) * SR, ZL / 2);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+    g.applyMatrix4(ORIENT);
+    return g;
+  }, []);
+
   useFrame(({ clock }) => {
-    const g = group.current;
     const nm = nodes.current;
-    if (!g || !nm) return;
+    if (!nm) return;
     const cs = 1;
     const sn = 0;
     const now = performance.now();
@@ -152,7 +207,7 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
       if (rings.current && nr < MAXF) {
         tmp.position.set(lx, ly, lz);
         tmp.quaternion.identity();
-        tmp.scale.setScalar((write ? 0.6 : 0.35) + age * (write ? 2.6 : 1.5));
+        tmp.scale.setScalar(((write ? 0.6 : 0.35) + age * (write ? 2.6 : 1.5)) * 0.18);
         tmp.updateMatrix();
         rings.current.setMatrixAt(nr, tmp.matrix);
         col.copy(write ? white : base[k]).multiplyScalar((write ? 4 : 2.4) * life);
@@ -162,19 +217,21 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
       if (write && bursts.current && nb < MAXF) {
         tmp.position.set(lx, ly, lz);
         tmp.quaternion.setFromAxisAngle(Z_AXIS, age * 0.8);
-        tmp.scale.setScalar(1.5 + 3 * inten);
+        tmp.scale.setScalar((1.5 + 3 * inten) * 0.45);
         tmp.updateMatrix();
         bursts.current.setMatrixAt(nb, tmp.matrix);
         col.copy(white).multiplyScalar(3.2 * life);
         bursts.current.setColorAt(nb++, col);
       }
-      // laser: ship → node
+      // laser: ship -> star, drawn in the shell's frame (the ship's stage position in graph-local units)
       const s = ships.get(f.instance);
-      if (s && lasers.current && nl < MAXF && s.presence > 0.02) {
+      const live = agentLive(f.instance);
+      if (s && live && lasers.current && nl < MAXF && s.presence > 0.02) {
+        const sp = stageToGraph(live, _p);
         v.set(lx, ly, lz);
-        d.subVectors(v, s.pos);
+        d.subVectors(v, sp);
         const len = d.length();
-        tmp.position.copy(s.pos).addScaledVector(d, 0.5);
+        tmp.position.copy(sp).addScaledVector(d, 0.5);
         tmp.quaternion.setFromUnitVectors(UP, d.normalize());
         const w = write ? 1.6 : 1;
         tmp.scale.set(w * (0.5 + inten), len, w * (0.5 + inten));
@@ -197,8 +254,7 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
       const g2 = labelGroups.current[nl2];
       const el = labelEls.current[nl2];
       if (g2 && el) {
-        g2.position.set(layout[k * 3] * 1.0, layout[k * 3 + 1] * 1.0, layout[k * 3 + 2]);
-        g2.position.multiplyScalar(1);
+        g2.position.set(layout[k * 3], layout[k * 3 + 1], layout[k * 3 + 2]);
         if (labelNode.current[nl2] !== k || labelOp.current[nl2] !== f.op) {
           el.setText((f.op === "write" ? "wrote · " : "") + f.node);
           labelOp.current[nl2] = f.op;
@@ -226,23 +282,27 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
       const f = flareI[i];
       tmp.position.set(layout[i * 3], layout[i * 3 + 1], layout[i * 3 + 2]);
       tmp.quaternion.identity();
-      tmp.scale.setScalar(1 + f * 3.4);
+      tmp.scale.setScalar(1 + f * 2.4);
       tmp.updateMatrix();
       nm.setMatrixAt(i, tmp.matrix);
-      const twinkle = 0.75 + 0.25 * Math.sin(tw * 1.7 + i * 1.3);
+      const twinkle = 0.75 + 0.25 * Math.sin(tw * 1.7 * MOTION + i * 1.3);
       col.copy(base[i]).multiplyScalar(1.1 * twinkle + f * 5);
       if (flareW[i]) col.lerp(white, Math.min(1, f) * 0.6).multiplyScalar(1 + f);
       nm.setColorAt(i, col);
     }
+    nm.count = n;
     nm.instanceMatrix.needsUpdate = true;
     if (nm.instanceColor) nm.instanceColor.needsUpdate = true;
   });
 
   return (
     <>
-      <group ref={group}>
-        <instancedMesh ref={nodes} args={[undefined, undefined, Math.max(1, n)]} frustumCulled={false}>
-          <icosahedronGeometry args={[0.16, 1]} />
+      <group>
+        <lineSegments geometry={shellGeo}>
+          <lineBasicMaterial color={new THREE.Color("#4f46e5").multiplyScalar(0.9)} transparent opacity={0.35} blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
+        </lineSegments>
+        <instancedMesh ref={nodes} args={[undefined, undefined, SAMPLE]} frustumCulled={false}>
+          <icosahedronGeometry args={[0.13, 1]} />
           <meshBasicMaterial toneMapped={false} />
         </instancedMesh>
         <lineSegments geometry={links}>
@@ -262,12 +322,12 @@ export function Constellation({ galaxy: full }: { galaxy: Galaxy }) {
         <cylinderGeometry args={[0.035, 0.035, 1, 6, 1, true]} />
         <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
       </instancedMesh>
-      <group position={[0, SHELL_R + 2.2, -30]}>
-        <GraphLabel3D color="#a5b4fc" letterSpacing={0.04} size={0.5} pxRange={[10, 14]} />
+      <group position={[0, -STAR_R - 0.5, 0]}>
+        <GraphLabel3D color="#a5b4fc" letterSpacing={0.04} size={0.32} pxRange={[9, 13]} />
       </group>
       {Array.from({ length: NAME_LABELS }, (_, z) => (
         <group key={z} ref={(g) => void (labelGroups.current[z] = g)}>
-          <Label3D ref={(d) => void (labelEls.current[z] = d)} position={[0, 0.7, 0]} text="" size={0.3} opacity={0} pxRange={[8, 12]} />
+          <Label3D ref={(d) => void (labelEls.current[z] = d)} position={[0, 0.45, 0]} text="" size={0.24} opacity={0} pxRange={[8, 12]} />
         </group>
       ))}
     </>
