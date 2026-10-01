@@ -32,6 +32,8 @@ export type WorldEvent =
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
   | { type: "final"; run_id: string; text: string; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
+  // topology: an MCP server and the backends behind it (sent at worker startup and to every new viewer)
+  | { type: "mcp_register"; run_id?: string; server: string; resources: { name: string; kind: ResourceKind }[]; ts: number }
   | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number; resource?: string; resource_kind?: ResourceKind };
 
 /** What sits behind an MCP server (the server is a node; its backends are nodes too). */
@@ -169,7 +171,7 @@ function freeSlot(): number {
 
 export function apply(ev: WorldEvent) {
   const now = performance.now();
-  world.ticker = [ev, ...world.ticker].slice(0, 60);
+  if (ev.type !== "mcp_register") world.ticker = [ev, ...world.ticker].slice(0, 60);
   switch (ev.type) {
     case "run": {
       if (ev.status === "started") {
@@ -288,6 +290,15 @@ export function apply(ev: WorldEvent) {
       if (ev.op === "read") world.stats.graphReads += ev.nodes.length;
       else world.stats.graphWrites += ev.nodes.length;
       break;
+    case "mcp_register": {
+      let srv = world.mcpServers.get(ev.server);
+      if (!srv) {
+        srv = { name: ev.server, color: MCP_COLORS[ev.server] ?? "#94a3b8", slot: world.mcpServers.size, activeAt: 0, calls: 0, inflight: 0, resources: new Map() };
+        world.mcpServers.set(ev.server, srv);
+      }
+      for (const r of ev.resources) if (!srv.resources.has(r.name)) srv.resources.set(r.name, { name: r.name, kind: r.kind, activeAt: 0, inflight: 0, calls: 0 });
+      break;
+    }
     case "mcp": {
       let srv = world.mcpServers.get(ev.server);
       if (!srv) {

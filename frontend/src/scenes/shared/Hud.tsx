@@ -36,6 +36,8 @@ export function describe(e: WorldEvent): string {
       return `${short(e.id)} ${e.op === "read" ? "read" : "WROTE"} falkordb: ${e.nodes.slice(0, 2).join(", ")}`;
     case "mcp":
       return e.phase === "call" ? `${short(e.id)} → mcp ${e.server}.${e.tool}()${e.resource ? ` → ${e.resource}` : ""}` : `mcp ${e.server}.${e.tool} returned${e.latency_ms ? ` · ${Math.round(e.latency_ms)}ms` : ""}`;
+    case "mcp_register":
+      return `mcp server ${e.server} online`;
     case "final":
       return `brief ready · ${shortRun(e.run_id)}`;
   }

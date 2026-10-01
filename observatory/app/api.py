@@ -23,6 +23,7 @@ app = FastAPI(title="agent observatory")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 BUFFER: deque[dict] = deque(maxlen=4000)
+TOPOLOGY: dict[str, dict] = {}  # MCP server -> latest mcp_register event (always sent to new viewers)
 SUBS: set[asyncio.Queue] = set()
 
 
@@ -36,7 +37,10 @@ async def ingest(request: Request):
     events = await request.json()
     events = events if isinstance(events, list) else [events]
     for ev in events:
-        BUFFER.append(ev)
+        if ev.get("type") == "mcp_register":
+            TOPOLOGY[ev["server"]] = ev
+        else:
+            BUFFER.append(ev)
         for q in list(SUBS):
             q.put_nowait(ev)
     return {"ok": True, "n": len(events)}
@@ -47,7 +51,7 @@ async def stream(request: Request):
     q: asyncio.Queue = asyncio.Queue()
     # replay only runs still in progress (finished runs would just re-draw and fade on every page load)
     done = {e["run_id"] for e in BUFFER if e.get("type") == "run" and e.get("status") in ("completed", "failed")}
-    replay = [e for e in BUFFER if e.get("run_id") not in done]
+    replay = list(TOPOLOGY.values()) + [e for e in BUFFER if e.get("run_id") not in done]
 
     async def gen():
         SUBS.add(q)

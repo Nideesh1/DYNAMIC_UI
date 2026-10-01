@@ -37,6 +37,11 @@ async def lifespan():
         name="researcher",
     )
     writer = create_deep_agent(model=make_model(), tools=WRITE_TOOLS, system_prompt=WRITER, name="writer")
+    # announce MCP topology (server + backends) so viewers draw it before any call happens
+    from .emit import emitter
+    from .mcp_server import BACKENDS
+    emitter.emit({"type": "mcp_register", "server": "analytics", "resources": [{"name": n, "kind": k} for n, k in dict.fromkeys(BACKENDS.values())]})
+    await emitter.flush()
     print(f"agents ready · mcp tools: {[t.name for t in mcp_tools]}")
     yield {"researcher": researcher, "writer": writer}
 
