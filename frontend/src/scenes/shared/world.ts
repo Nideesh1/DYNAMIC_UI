@@ -143,7 +143,14 @@ export const world = {
   instances: new Map<string, Instance>(),
   comets: [] as Comet[],
   flares: [] as Flare[],
+  /**
+   * MCP servers agents have CALLED (an `mcp` event). Registration alone (`mcp_register`) does not add one here:
+   * it only fills mcpRegistry (names / backend kinds) so a newly used server looks right immediately.
+   * Visibility over time: mcpWanted(srv) (shown while used, hidden after MCP_IDLE_MS idle).
+   */
   mcpServers: new Map<string, McpServer>(),
+  /** registered (not necessarily used) MCP servers: server -> backend name -> kind */
+  mcpRegistry: new Map<string, Map<string, ResourceKind>>(),
   mcpCalls: [] as McpCall[],
   /** in-flight MCP calls keyed `${instance}|${server}|${tool}`; resolvedAt kept briefly for a "snap back" effect */
   mcpPending: new Map<string, McpPending>(),
@@ -156,8 +163,9 @@ export const world = {
   /** label for the graph/memory structure: names the DB only when the server provides a real graph */
   graphLabel: "knowledge graph",
   /**
-   * True once this session has a knowledge graph to draw: /live/graph served nodes, a `graph` read/write event
-   * arrived, or sim mode (the simulator emits graph events). Sticky for the session. When false, scenes draw
+   * True once this session USES a knowledge graph: a `graph` read/write event arrived, or sim mode (the
+   * simulator emits graph events). A served /live/graph sample alone does not flip it (it only supplies the
+   * real nodes to draw once the graph is used). Sticky for the session. When false, scenes draw
    * no graph centerpiece and let the agents take the center. Use `graphMix()` in useFrame for a smooth 0..1.
    */
   hasGraph: false,
@@ -331,12 +339,10 @@ export function apply(ev: WorldEvent) {
       else world.stats.graphWrites += ev.nodes.length;
       break;
     case "mcp_register": {
-      let srv = world.mcpServers.get(ev.server);
-      if (!srv) {
-        srv = { name: ev.server, color: MCP_COLORS[ev.server] ?? "#94a3b8", slot: world.mcpServers.size, activeAt: 0, calls: 0, inflight: 0, resources: new Map() };
-        world.mcpServers.set(ev.server, srv);
-      }
-      for (const r of ev.resources) if (!srv.resources.has(r.name)) srv.resources.set(r.name, { name: r.name, kind: r.kind, activeAt: 0, inflight: 0, calls: 0 });
+      // topology only: remember names/kinds; the server is drawn once an agent actually calls it
+      let reg = world.mcpRegistry.get(ev.server);
+      if (!reg) world.mcpRegistry.set(ev.server, (reg = new Map()));
+      for (const r of ev.resources) if (!reg.has(r.name)) reg.set(r.name, r.kind);
       break;
     }
     case "mcp": {
@@ -350,7 +356,7 @@ export function apply(ev: WorldEvent) {
       if (ev.resource) {
         res = srv.resources.get(ev.resource);
         if (!res) {
-          res = { name: ev.resource, kind: ev.resource_kind ?? "api", activeAt: now, inflight: 0, calls: 0 };
+          res = { name: ev.resource, kind: ev.resource_kind ?? world.mcpRegistry.get(ev.server)?.get(ev.resource) ?? "api", activeAt: now, inflight: 0, calls: 0 };
           srv.resources.set(ev.resource, res);
         }
         res.activeAt = now;
@@ -494,6 +500,13 @@ export function setHasGraph(v: boolean, doNotify = true) {
   // sim starts with a graph: no fade, it is simply there from the first frame
   world.hasGraphAt = world.mode === "sim" ? -1e9 : performance.now();
   if (doNotify) notify();
+}
+
+/** An MCP server with no calls for this long (and none in flight) fades out; the next call fades it back in. */
+export const MCP_IDLE_MS = 90_000;
+/** Should this MCP server (and its used backends) be drawn now? Shared "only show resources while used" rule. */
+export function mcpWanted(srv: McpServer, now = performance.now()): boolean {
+  return srv.calls > 0 && (srv.inflight > 0 || now - srv.activeAt < MCP_IDLE_MS);
 }
 
 /** How long the side graph fades in after hasGraph flips true (ms). */

@@ -9,9 +9,12 @@
  *  1. Agents are always the centre. Visible runs are laid out around the stage centre by the theme's preset;
  *     each run is centred on its anchor (1 run = its agents centred on screen).
  *  2. The knowledge graph is just another RESOURCE on the side (like MCP servers + backends), on the outskirts
- *     and small. Drawn only when the session has a graph (world.hasGraph and a non-empty galaxy); appearing
- *     mid-session it fades in at the side and agents don't move. Beams agent <-> graph use graphToStage() /
- *     stageToGraph().
+ *     and small. Resources are shown ONLY WHEN USED: the graph appears on the first `graph` read/write event
+ *     (world.hasGraph; sim always uses it), drawing the served FalkorDB sample if any, else the event-grown
+ *     galaxy; it fades in at the side and agents don't move. An MCP server (+ the backends calls targeted)
+ *     appears on its first `mcp` call and fades out after MCP_IDLE_MS (~90s) idle with nothing in flight
+ *     (world.mcpWanted; mcp_register only supplies names/kinds). Hidden or fading resources take no room in
+ *     placement / fit. Beams agent <-> graph use graphToStage() / stageToGraph().
  *  3. Adaptive fit (fit.ts): agent scale ~ sqrt(nRef / visible count) clamped, spacing follows, the camera dollies
  *     so everything kit-placed fits the FREE area (canvas minus measured HUD panels) and the projection centre
  *     is shifted into that free area. Eased ~0.6s with hysteresis; resize / embedding re-fits.

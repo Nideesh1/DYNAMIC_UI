@@ -181,11 +181,49 @@ function Mcp({ McpServer, Backend }: { McpServer?: ComponentType<McpServerSlotPr
     <>
       {list.map((m) => (
         <Fragment key={m.uid}>
-          <LabelScope.Provider value={SCOPE_MCP}>{McpServer && <McpServer mcp={m} />}</LabelScope.Provider>
-          <LabelScope.Provider value={SCOPE_BACKEND}>{Backend && [...m.backends.values()].map((b) => <Backend key={b.uid} mcp={m} backend={b} />)}</LabelScope.Provider>
+          <LabelScope.Provider value={SCOPE_MCP}>
+            {McpServer && (
+              <Fade item={m}>
+                <McpServer mcp={m} />
+              </Fade>
+            )}
+          </LabelScope.Provider>
+          <LabelScope.Provider value={SCOPE_BACKEND}>
+            {Backend &&
+              [...m.backends.values()].map((b) => (
+                <Fade key={b.uid} item={b}>
+                  <Backend mcp={m} backend={b} />
+                </Fade>
+              ))}
+          </LabelScope.Provider>
         </Fragment>
       ))}
     </>
+  );
+}
+
+/**
+ * Fades a resource slot (MCP server / backend) in and out with its `mix`: the slot draws in stage space at
+ * item.pos, so the wrapper scales everything about that point (T(pos) S(mix) T(-pos)); hidden at mix 0.
+ */
+function Fade({ item, children }: { item: { pos: THREE.Vector3; mix: number }; children: ReactNode }) {
+  const outer = useRef<THREE.Group>(null);
+  const inner = useRef<THREE.Group>(null);
+  useFrame(() => {
+    const o = outer.current;
+    const i = inner.current;
+    if (!o || !i) return;
+    const t = Math.min(1, Math.max(0, item.mix));
+    const s = t * t * (3 - 2 * t);
+    o.position.copy(item.pos);
+    o.scale.setScalar(Math.max(0.0001, s));
+    i.position.copy(item.pos).negate();
+    o.visible = s > 0.002;
+  });
+  return (
+    <group ref={outer} scale={0.0001} visible={false}>
+      <group ref={inner}>{children}</group>
+    </group>
   );
 }
 

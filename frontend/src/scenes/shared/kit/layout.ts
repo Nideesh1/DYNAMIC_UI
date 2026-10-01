@@ -11,7 +11,7 @@
 import * as THREE from "three";
 import { clusterOf, isExpanded, isRunExpanded, LOD_LANES, lod } from "../lod";
 import { alt, jit } from "../spread";
-import { graphMix, roleScale, world, type AgentType, type Instance } from "../world";
+import { graphMix, mcpWanted, roleScale, world, type AgentType, type Instance } from "../world";
 import { fit, fitTick } from "./fit";
 import { radial, type LayoutPreset, type Point2, type PresetCtx, type Slot2 } from "./presets";
 import { kit, nextUid, planePoint, type KitAgent, type KitBackend, type KitMcp, type KitRun } from "./state";
@@ -173,17 +173,22 @@ function syncMembership() {
     kit.runs.delete(id);
     kit.runsVersion++;
   }
-  // MCP servers + their backends
+  // MCP servers + their backends: only while USED (world.mcpWanted). A server idle past MCP_IDLE_MS stops being
+  // wanted, fades out in place (kitTick) and is dropped; its next call brings it back (fresh, fading in).
+  const now = performance.now();
   for (const srv of world.mcpServers.values()) {
     let m = kit.mcp.get(srv.name);
+    const wanted = mcpWanted(srv, now);
+    if (m) m.wanted = wanted;
+    if (!wanted && !m) continue;
     if (!m) {
-      m = { uid: nextUid(), name: srv.name, srv, out: new THREE.Vector3(1, 0, 0), target: new THREE.Vector3(), pos: new THREE.Vector3(), backends: new Map(), fresh: true };
+      m = { uid: nextUid(), name: srv.name, srv, out: new THREE.Vector3(1, 0, 0), target: new THREE.Vector3(), pos: new THREE.Vector3(), backends: new Map(), fresh: true, wanted: true, mix: 0 };
       kit.mcp.set(srv.name, m);
       kit.mcpVersion++;
     }
     if (m.backends.size !== srv.resources.size) {
       for (const res of srv.resources.values())
-        if (!m.backends.has(res.name)) m.backends.set(res.name, { uid: nextUid(), res, k: 0, n: 0, target: new THREE.Vector3(), pos: new THREE.Vector3(), fresh: true } as KitBackend);
+        if (!m.backends.has(res.name)) m.backends.set(res.name, { uid: nextUid(), res, k: 0, n: 0, target: new THREE.Vector3(), pos: new THREE.Vector3(), fresh: true, mix: 0 } as KitBackend);
       kit.mcpVersion++;
     }
   }
@@ -369,7 +374,8 @@ function layoutPeriphery() {
   // ---- MCP servers (+ backends) and the side graph
   const servers = SERVERS;
   servers.length = 0;
-  for (const m of kit.mcp.values()) servers.push(m);
+  // hidden / fading-out servers keep their last spot and take no room (the rest re-pack around them smoothly)
+  for (const m of kit.mcp.values()) if (m.wanted) servers.push(m);
   servers.sort(bySlot);
   if (P.periphery === "rim") {
     const ring = Math.max(hw, hh) + gap;
@@ -520,12 +526,19 @@ export function kitTick(now = performance.now()) {
   c.hw += (Math.max(2.5, c.thw) - c.hw) * k;
   c.hh += (Math.max(2.5, c.thh) - c.hh) * k;
   c.r = Math.max(c.hw, c.hh);
+  const fade = Math.min(1, dt / MCP_FADE_S);
   for (const m of kit.mcp.values()) {
     if (m.fresh) m.pos.copy(m.target), (m.fresh = false);
     else m.pos.lerp(m.target, k);
+    m.mix = m.wanted ? Math.min(1, m.mix + fade) : Math.max(0, m.mix - fade);
     for (const b of m.backends.values()) {
       if (b.fresh) b.pos.copy(b.target), (b.fresh = false);
       else b.pos.lerp(b.target, k);
+      b.mix = m.wanted ? Math.min(1, b.mix + fade) : Math.min(b.mix, m.mix);
+    }
+    if (!m.wanted && m.mix <= 0) {
+      kit.mcp.delete(m.name);
+      kit.mcpVersion++;
     }
   }
   // side graph: fades in where it lives (agents never move for it)
@@ -538,6 +551,9 @@ export function kitTick(now = performance.now()) {
   g.natural = config.graphNatural;
   g.scale = (g.radius / Math.max(1e-3, g.natural)) * Math.max(0.001, g.mix);
 }
+
+/** MCP server / backend fade in / out length (s). */
+const MCP_FADE_S = 0.9;
 
 /** Visit every kit-placed thing that must stay in view (camera framing): stage targets + radii. */
 export function kitExtents(visit: (p: THREE.Vector3, r: number) => void, agentRadius: number, agentHeight = 0) {
@@ -557,6 +573,7 @@ export function kitExtents(visit: (p: THREE.Vector3, r: number) => void, agentRa
     visit(_x, 1.2);
   }
   for (const m of kit.mcp.values()) {
+    if (!m.wanted) continue;
     visit(m.target, 1.7);
     for (const b of m.backends.values()) visit(b.target, 1.4);
   }

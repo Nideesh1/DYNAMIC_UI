@@ -2,9 +2,10 @@
  * Every scene calls useSceneSetup() once: it connects the shared world to a data source and returns the
  * graph sample ("galaxy") the scene draws as its memory/graph backdrop.
  *
- * No fake graph: the galaxy is EMPTY until the session has a real one (world.hasGraph). Sources, in order:
+ * No fake graph, and only when used: the galaxy is EMPTY until an agent touches the graph (world.hasGraph flips
+ * on the first `graph` event; sim mode emits them). What it shows then, in order:
  *   - sim mode: a generated sample (the simulator emits graph reads/writes against it)
- *   - live: the `/live/graph` sample when the server has a graph DB (FalkorDB provider)
+ *   - live: the `/live/graph` sample when the server has a graph DB (FalkorDB provider), fetched up front
  *   - live without a sample: a small galaxy grown from the node names seen in `graph` events, so reads/writes
  *     still light something (nodes appear as they are touched)
  * Scenes render their graph centerpiece only when `galaxy.nodes.length > 0`; agents take the center otherwise.
@@ -19,7 +20,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useSceneConfig } from "./config";
 import { runWorldSimulator } from "./sim";
-import { apply, hash01, setGraphLabel, setHasGraph, setMode, type WorldEvent } from "./world";
+import { apply, hash01, setGraphLabel, setMode, world, type WorldEvent } from "./world";
 
 export type GalaxyNode = { id: string; name: string; kind: string };
 export type Galaxy = { nodes: GalaxyNode[]; links: { source: string; target: string }[] };
@@ -144,6 +145,7 @@ function start(c: Conn, sim: boolean) {
     if (c.dead) return;
     setMode("sim");
     c.stop = runWorldSimulator();
+    emit();
   };
   if (sim) return useSim();
   // live graph events with no served sample: grow a galaxy from the touched node names (throttled re-emit)
@@ -178,9 +180,9 @@ function start(c: Conn, sim: boolean) {
         if (!c.dead && g?.nodes?.length) {
           c.galaxy = g;
           c.served = true;
-          // the server only serves /live/graph when a real graph DB is configured (FalkorDB provider)
+          // the server only serves /live/graph when a real graph DB is configured (FalkorDB provider).
+          // Stored, not shown: world.hasGraph flips only when an agent touches the graph (a `graph` event).
           setGraphLabel((g as Galaxy & { label?: string }).label ?? "FalkorDB · knowledge graph");
-          setHasGraph(true);
           emit();
         }
       })
@@ -189,8 +191,13 @@ function start(c: Conn, sim: boolean) {
     es.onmessage = (m) => {
       try {
         const ev = JSON.parse(m.data) as WorldEvent;
-        if (ev.type === "graph" && Array.isArray(ev.nodes)) grow(ev.nodes);
+        const had = world.hasGraph;
         apply(ev);
+        if (ev.type === "graph" && Array.isArray(ev.nodes)) {
+          grow(ev.nodes);
+          // first use of the graph: publish what we have (the served sample, or the grown galaxy)
+          if (!had && world.hasGraph) emit();
+        }
       } catch {
         /* ignore malformed */
       }
@@ -247,7 +254,8 @@ export function useSceneSetup(): Galaxy {
   const [galaxy, setGalaxy] = useState<Galaxy>(EMPTY);
   useEffect(() => {
     const c = acquire(source, sim);
-    const sync = () => setGalaxy(c.galaxy);
+    // the graph is a resource shown only once used: EMPTY until world.hasGraph (a graph event, or sim)
+    const sync = () => setGalaxy(world.hasGraph ? c.galaxy : EMPTY);
     sync();
     subs.add(sync);
     return () => {

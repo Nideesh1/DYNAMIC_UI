@@ -84,7 +84,8 @@ export type KitRun = {
   v1: number;
 };
 
-export type KitBackend = { uid: number; res: McpResource; k: number; n: number; target: THREE.Vector3; pos: THREE.Vector3; fresh: boolean };
+/** `mix` 0..1: fade presence (the kit shrinks the slot about its position with it). */
+export type KitBackend = { uid: number; res: McpResource; k: number; n: number; target: THREE.Vector3; pos: THREE.Vector3; fresh: boolean; mix: number };
 export type KitMcp = {
   uid: number;
   name: string;
@@ -95,6 +96,10 @@ export type KitMcp = {
   pos: THREE.Vector3;
   backends: Map<string, KitBackend>;
   fresh: boolean;
+  /** world.mcpWanted() this frame: used recently (placed + framed); false = fading out (keeps its spot) */
+  wanted: boolean;
+  /** 0..1 fade presence; the server is removed from kit.mcp once it has faded out */
+  mix: number;
 };
 
 export type KitGraph = {
@@ -201,7 +206,7 @@ export function kitSummary() {
     plane: kit.plane,
     agents: [...kit.agents.values()].map((a) => ({ id: a.id, run: a.run.id, depth: a.depth, scale: Math.round(a.scale * 100) / 100, pos: r2(a.pos) })),
     runs: kit.runOrder.map((r) => ({ id: r.id, members: r.members, origin: r2(r.origin), hu: r.hu, hv: r.hv })),
-    mcp: [...kit.mcp.values()].map((m) => ({ name: m.name, pos: r2(m.pos), backends: [...m.backends.values()].map((b) => ({ res: b.res.name, pos: r2(b.pos) })) })),
+    mcp: [...kit.mcp.values()].map((m) => ({ name: m.name, wanted: m.wanted, mix: Math.round(m.mix * 100) / 100, pos: r2(m.pos), backends: [...m.backends.values()].map((b) => ({ res: b.res.name, mix: Math.round(b.mix * 100) / 100, pos: r2(b.pos) })) })),
     clusters: kit.clusterPos.map(r2),
     core: { ...kit.core },
     graph: { wanted: kit.graphWanted, pos: r2(kit.graph.pos), out: r2(kit.graph.out), radius: kit.graph.radius, scale: kit.graph.scale, mix: kit.graph.mix },
