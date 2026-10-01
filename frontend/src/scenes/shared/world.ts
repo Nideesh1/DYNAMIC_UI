@@ -21,7 +21,7 @@ export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "fai
 
 // ------------------------------------------------------------------ event contract (v2)
 export type WorldEvent =
-  | { type: "run"; run_id: string; status: "started" | "completed" | "failed"; topic: string; workflow: string; ts: number }
+  | { type: "run"; run_id: string; status: "started" | "renamed" | "completed" | "failed"; topic: string; workflow: string; ts: number }
   | { type: "step"; run_id: string; step: StepName; status: "running" | "done" | "failed"; ts: number }
   | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; ts: number }
   | { type: "exit"; run_id: string; id: string; status: "done" | "failed"; ts: number }
@@ -274,7 +274,10 @@ export function apply(ev: WorldEvent) {
   if (ev.type !== "mcp_register") world.ticker = [ev, ...world.ticker].slice(0, 60);
   switch (ev.type) {
     case "run": {
-      if (ev.status === "started") {
+      if (ev.status === "renamed") {
+        const r = world.runs.get(ev.run_id);
+        if (r) r.topic = ev.topic; // e.g. a Claude Code session /rename: label only, run state untouched
+      } else if (ev.status === "started") {
         const slot = freeSlot();
         world.runs.set(ev.run_id, {
           id: ev.run_id,

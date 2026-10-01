@@ -9,6 +9,8 @@ put identity data, raw user prompts or secrets into world events. See docs/SPEC.
   `llm_request.context` unless it is a short label (Claude Code sends "interaction"/"tool").
 - A skill name (`agentglow.skill`) is reduced to `[A-Za-z0-9:_.-]`, max 64 chars (`skill_name`); nothing else
   about a skill use (args, prompt text) is ever carried in the skill event.
+- A Claude Code session title (`session_title`: the user's /rename name, else Claude Code's auto title) is a run
+  label: secrets redacted, control chars and whitespace runs collapsed, max 60 chars.
 - Secret-looking substrings are replaced with `[redacted]` in every remaining string value (API keys, tokens,
   `Bearer ...`), including the agent-level text the product shows (input.value, output.value, final text).
 """
@@ -35,6 +37,8 @@ SECRET_RE = re.compile(
 HOOK_PROMPT_KEYS = {"prompt", "user_message"}
 SKILL_KEY = "agentglow.skill"
 SKILL_BAD_RE = re.compile(r"[^A-Za-z0-9:_.-]+")
+TITLE_MAX = 60
+TITLE_WS_RE = re.compile(r"[\s\x00-\x1f\x7f]+")
 
 
 def skill_name(v: object) -> str:
@@ -43,6 +47,14 @@ def skill_name(v: object) -> str:
         return ""
     s = SKILL_BAD_RE.sub("-", redact(str(v).strip().lstrip("/"))).strip("-")
     return s[:64]
+
+
+def session_title(v: object) -> str:
+    """Session title → safe run label: secrets redacted, whitespace/control runs → one space, max TITLE_MAX chars."""
+    if not isinstance(v, str):
+        return ""
+    s = TITLE_WS_RE.sub(" ", redact(v)).strip()
+    return s if len(s) <= TITLE_MAX else s[: TITLE_MAX - 1].rstrip() + "…"
 
 
 def redact(s: str) -> str:

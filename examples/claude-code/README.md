@@ -86,7 +86,7 @@ start the server yourself.
 
 | Claude Code | AgentGlow |
 |---|---|
-| each prompt you submit | a run (topic = `Claude Code · <folder>`, never your prompt) |
+| your session | one run (topic = the session title from /rename or Claude Code's auto title, else `Claude Code · <folder>`; never your prompt) |
 | main session | agent `claude`: thinking between tool calls, waiting while subagents work |
 | `Agent` tool call → subagent | `task` tool + spawned subagent (named after its type) with the delegation text |
 | any tool (`Bash`, `Read`, `Glob`, …) | tool event on the agent that called it |

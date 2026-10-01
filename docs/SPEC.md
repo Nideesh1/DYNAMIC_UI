@@ -164,7 +164,11 @@ JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload b
   `enduser.*`, any key containing `email`.
 - Dropped raw user prompts: `user_prompt*` (Claude Code traces), `gen_ai.prompt*`, `llm_request.context` unless it is
   a short label, hook `prompt` / `user_message` (a `<task-notification>` keeps only its `<summary>`). Claude Code run
-  topics are `Claude Code · <cwd basename>` (hooks) / `Claude Code` (traces only), never the prompt.
+  topics are never the prompt: `<session title> · <id4> · <HH:MM>` (hooks; the title is the user's /rename name, else
+  Claude Code's auto title, read from the session transcript's `custom-title` / `ai-title` records), else
+  `Claude Code · <cwd basename> · <id4> · <HH:MM>` (hooks) / `Claude Code · <id4> · <HH:MM>` (traces only). A session
+  title is a user- or AI-chosen name (the auto title summarizes the conversation): secrets redacted, whitespace and
+  control chars collapsed, max 60 chars.
 - Redacted to `[redacted]` in every remaining string (span names, attributes, hook fields, incl. the agent-level
   text the UI shows: `input.value`, `output.value`, tool args, final text): `sk-ant-…`, `sk-…`, `npm_…`, `AIza…`,
   `ghp_…`/`github_pat_…`, `xox?-…`, `AKIA…`, `Bearer …`.
@@ -179,6 +183,7 @@ Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
 `skill` = `{"type": "skill", "run_id", "id": <agent instance id>, "name": <skill name>, "status": "start"|"end", "ts"}`:
 an agent (main or subagent) started / finished using a skill.
 `llm` may carry an extra `tokens_cached` (prompt-cache reads) when known.
+`run` may carry status `renamed` (same `run_id`, new `topic`, e.g. a Claude Code session /rename): relabel only.
 
 ## Frontend (`frontend/`, npm `agentglow`)
 - App build: gallery at `/`, `/<theme>`; data source = same origin `/live/stream` (`?source=<url>` override, `?sim=1` simulator, `?hud=0` hide HUD). Output copied to `backend/agentglow/static/`.
