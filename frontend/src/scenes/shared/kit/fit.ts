@@ -10,14 +10,23 @@
  *               projection centre (camera.setViewOffset) into the middle of the free area: agents are centred
  *               in what you can see, never under a HUD panel. Re-fits on resize/embedding; keeps the user's zoom.
  *
- * Everything eases (~0.6s) with hysteresis (targets only move on a >6-8% change, at most every 400ms), so
- * spawns/exits don't pump the view.
+ * Calm camera (one committed target for distance, projection shift AND fit.scale, so they move together):
+ *   batch      a spawn / exit / grouping / resource change (or a `task` tool call: a subagent is coming) restarts a
+ *              quiet window; the target is only re-committed once content has been quiet BATCH_QUIET_MS (or
+ *              BATCH_MAX_MS after it first needed more room), then ONE ease-in-out move (OUT_MS).
+ *   asymmetric zoom OUT (content needs >OUT_BAND more distance) right after the batch window, to the largest
+ *              fit seen in it; zoom IN only when the gain is > IN_BAND and content has been stable IN_STABLE_MS,
+ *              slowly (IN_MS). Between the bands nothing moves (hysteresis: no oscillation). Exiting agents keep
+ *              counting until faded, so an exit never zooms in right away.
+ *   user       orbit / zoom / pan suspends auto-refit for USER_HOLD_MS (the user's zoom factor is kept).
+ *   resize     re-fits quickly (RESIZE_MS); reduced motion snaps.
  */
 import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { visitLabelRects, type LabelEntry } from "./labels";
-import { kit } from "./state";
+import { world } from "../world";
+import { kit, reduced } from "./state";
 
 export type FitProfile = {
   /** weighted visible agent count at which scale = 1 (parents count 1, subagents 0.5, clusters 1.5) */
@@ -50,9 +59,10 @@ export const fit = {
   aspect: 16 / 9,
   /**
    * camera framing: `dist` = current camera distance to the orbit target (read it for fog / LOD instead of
-   * camera.position), `want` = fitted distance before the user's zoom factor `user`; `points` = framed points
+   * camera.position), `want` = committed fitted distance before the user's zoom factor `user`, `fit` = the
+   * instantaneous fit (what `want` would be with no batching / hysteresis); `points` = framed points
    */
-  cam: { want: 0, dist: 0, user: 1, points: 0 },
+  cam: { want: 0, fit: 0, dist: 0, user: 1, points: 0 },
   /** how much of the free area the content's screen bounds fill [x, y] (debug / verification) */
   fill: [0, 0] as [number, number],
   /** world units per css px at the fitted camera distance (px-clamped labels: world size = px * wpp) */
@@ -67,26 +77,52 @@ export function setFitProfile(p: Partial<FitProfile>) {
 }
 
 let target = -1;
-let lastEval = -1e9;
-let lastNow = -1;
-const ease = (dt: number, tau: number) => 1 - Math.exp(-dt / tau);
+let lastSig = NaN;
+/** scale tween (follows FitCamera's commits) */
+const tw = { from: 1, t0: 0, dur: 0 };
+const scaleFor = (n: number) => THREE.MathUtils.clamp(Math.sqrt(fit.profile.nRef / Math.max(1, n)), fit.profile.min, fit.profile.max);
+/** ease-in-out (smoothstep) 0..1 */
+const inOut = (u: number) => u * u * (3 - 2 * u);
 
-/** Once per frame (kitTick): weighted count -> eased scale/spread/label. */
-export function fitTick(now: number, weightedN: number) {
-  const dt = lastNow < 0 ? 0.016 : Math.min(0.1, (now - lastNow) / 1000);
-  lastNow = now;
-  const P = fit.profile;
-  if (now - lastEval > 400 || target < 0) {
-    lastEval = now;
-    fit.n = weightedN;
-    const t = THREE.MathUtils.clamp(Math.sqrt(P.nRef / Math.max(1, weightedN)), P.min, P.max);
-    // hysteresis: one scout more or less shouldn't resize everyone
-    if (target < 0 || Math.abs(t - target) / target > 0.06) target = t;
+/** content timing shared with FitCamera: `nLive` = latest weighted count, `activityAt` = last content change */
+export const fitClock = { nLive: 0, activityAt: -1e9 };
+
+/**
+ * Once per frame (kitTick): records the weighted count + content signature (`sig` changes on any spawn / exit /
+ * fade-out / grouping / resource change) and plays the committed scale tween. The scale TARGET only moves when
+ * FitCamera commits a new framing (fitCommit), so agents don't pulse in size per spawn.
+ */
+export function fitTick(now: number, weightedN: number, sig = weightedN) {
+  fitClock.nLive = weightedN;
+  if (sig !== lastSig) {
+    if (!Number.isNaN(lastSig)) fitClock.activityAt = now;
+    lastSig = sig;
   }
-  fit.scale += (target - fit.scale) * ease(dt, 0.2);
-  if (Math.abs(target - fit.scale) < 1e-3) fit.scale = target;
+  if (target < 0) {
+    fit.n = weightedN;
+    target = scaleFor(weightedN);
+    fit.scale = target;
+    tw.dur = 0;
+  }
+  const u = tw.dur > 0 ? Math.min(1, (now - tw.t0) / tw.dur) : 1;
+  fit.scale = tw.from + (target - tw.from) * inOut(u);
+  if (u >= 1) fit.scale = target;
   fit.spread = Math.max(0.85, Math.pow(fit.scale, 0.8));
   fit.label = THREE.MathUtils.clamp(Math.pow(fit.scale, 0.5), 0.85, 1.25);
+}
+
+/** would a commit now change the scale target (6% hysteresis)? */
+const scaleMoves = () => target > 0 && Math.abs(scaleFor(fitClock.nLive) - target) / target > 0.06;
+
+/** FitCamera commits a new framing: the scale target follows (6% hysteresis). */
+function fitCommit(now: number, durMs: number) {
+  fit.n = fitClock.nLive;
+  const t = scaleFor(fit.n);
+  if (target > 0 && Math.abs(t - target) / target <= 0.06) return;
+  tw.from = fit.scale;
+  tw.t0 = now;
+  tw.dur = durMs;
+  target = t;
 }
 
 // ------------------------------------------------------------------ HUD insets
@@ -176,6 +212,17 @@ const _m = new THREE.Matrix4();
 const SHIFT = 0.85;
 /** floats per framed point (see FitCamera's buffer) */
 const S = 8;
+// calm camera timing (ms) and hysteresis bands (see the header)
+const BATCH_QUIET_MS = 1100;
+const BATCH_MAX_MS = 2500;
+const OUT_BAND = 1.04;
+const OUT_MS = 1000;
+const IN_BAND = 1.18;
+const IN_STABLE_MS = 7000;
+const IN_MS = 2000;
+const USER_HOLD_MS = 10000;
+const RESIZE_MS = 450;
+const STEADY_MS = 300;
 
 /**
  * Frames the camera on the kit content. Mounted by <KitScene>.
@@ -191,7 +238,17 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
   const controls = useThree((s) => s.controls) as unknown as Controls | null;
   const gl = useThree((s) => s.gl);
   const size = useThree((s) => s.size);
-  const st = useRef({ base: 0, user: 1, userActive: false, desired: 0, want: 0, lastMeasure: -1e9, dir: new THREE.Vector3(), lastFit: -1e9, aspect: 1.6, sx: 0, sy: 0, fresh: true });
+  const st = useRef({
+    base: 0, user: 1, userActive: false, userUntil: -1e9, want: 0, lastMeasure: -1e9, dir: new THREE.Vector3(), aspect: 1.6, refit: true,
+    // committed move: fitted distance (before the user factor) + projection shift tween from -> to
+    cur: 0, from: 0, t0: 0, dur: 0, sx: 0, sy: 0, fx: 0, fy: 0, tx: 0, ty: 0,
+    // pending zoom-out (since, largest fit seen in the batch window) / zoom-in (since)
+    outSince: 0, outMax: 0, inSince: 0,
+    // two-phase commit: the scale moves first, then (at `phase2`) the camera fits the resized layout in one move
+    phase2: 0, phase2Ms: 0,
+    // the instantaneous fit has been steady (<0.5%/frame) since: layout / grouping / labels still easing otherwise
+    lastDesired: 0, steadySince: 0,
+  });
   // camera-space points of this frame (x, y, z, r, then a screen-fixed rect around the point in view-angle units
   // [x0, x1, y0, y1] for px-clamped labels), grown on demand; the visitors are created once
   const buf = useRef({ a: new Float64Array(512 * S), n: 0, tgt: new THREE.Vector3(), tpp: 0 });
@@ -227,8 +284,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     fit.w = size.width;
     fit.h = size.height;
     st.current.lastMeasure = -1e9; // re-measure HUD on resize
-    st.current.want = 0; // re-fit immediately (no hysteresis)
-    st.current.fresh = true;
+    st.current.refit = true; // re-fit quickly (no batch window / hysteresis)
   }, [size.width, size.height]);
 
   useEffect(() => () => camera.clearViewOffset(), [camera]);
@@ -239,10 +295,14 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     const onStart = () => (s.userActive = true);
     const onEnd = () => {
       s.userActive = false;
+      s.userUntil = performance.now() + USER_HOLD_MS; // no auto-refit for a while after the user moved the view
+      // a committed move the user interrupted stops where it is
+      s.want = s.from = s.cur;
+      s.dur = 0;
       const tgt = controls.target ?? _c.set(0, 0, 0);
       const d = camera.position.distanceTo(tgt);
       // remember the user's zoom relative to our fit (bounded so a wild scroll can't lock the fit out)
-      if (s.desired > 0) s.user = THREE.MathUtils.clamp(d / s.desired, 0.35, 3);
+      if (s.cur > 0) s.user = THREE.MathUtils.clamp(d / s.cur, 0.35, 3);
     };
     controls.addEventListener("start", onStart);
     controls.addEventListener("end", onEnd);
@@ -291,7 +351,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     const minD = P.minRadius / Math.min(hx, hy);
     const maxD = P.maxRadius / Math.min(hx, hy);
     let desired: number;
-    if (!n) desired = s.base;
+    if (!n) desired = s.want || s.base; // nothing to frame: stay put
     else {
       // smallest distance at which the content's screen bounding box fits the free area (with margin)
       const m = P.margin;
@@ -306,36 +366,115 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
         desired = THREE.MathUtils.clamp(hi, minD, maxD);
       } else desired = maxD;
     }
-    // hysteresis on the fit so single spawns/exits don't pump the camera
-    if (!s.want || Math.abs(desired - s.want) / s.want > 0.07 || now - s.lastFit > 4000) {
-      s.want = desired;
-      s.lastFit = now;
-    }
-    s.desired = s.want;
-    // world per px at the fitted distance (hysteresis: cluster spacing follows it, then the fit follows that)
-    const wpp = (2 * tanH * s.want * s.user) / H;
-    if (Math.abs(wpp - fit.wpp) / fit.wpp > 0.1) fit.wpp = wpp;
-    fit.cam.want = s.want;
-    fit.cam.dist = cur;
-    fit.cam.user = s.user;
-    fit.cam.points = n;
-
-    // centre the content's bounds (at the current distance) in the free area: shift in tangent units, clamped
-    // so the orbit target never leaves the free area
-    let shx = 0;
-    let shy = 0;
     if (n) {
       bounds(B.a, n, cur);
-      shx = THREE.MathUtils.clamp((BX[0] + BX[1]) / 2, -hx * SHIFT, hx * SHIFT);
-      shy = THREE.MathUtils.clamp((BX[2] + BX[3]) / 2, -hy * SHIFT, hy * SHIFT);
       s.aspect += (THREE.MathUtils.clamp((BX[1] - BX[0]) / Math.max(1e-4, BX[3] - BX[2]), 0.5, 4) - s.aspect) * 0.1;
       fit.fill[0] = (BX[1] - BX[0]) / (2 * hx);
       fit.fill[1] = (BX[3] - BX[2]) / (2 * hy);
     }
-    const ks = s.fresh ? 1 : 1 - Math.exp(-dt / 0.3);
-    s.fresh = false;
-    s.sx += (shx - s.sx) * ks;
-    s.sy += (shy - s.sy) * ks;
+
+    // ---- commit policy: batch window, asymmetric bands, user hold (see the header)
+    if (!s.lastDesired || Math.abs(desired - s.lastDesired) / s.lastDesired > 0.005) s.steadySince = now;
+    s.lastDesired = desired;
+    const steady = now - s.steadySince;
+    const following = s.userActive || now < s.userUntil;
+    // the policy picks at most one move (no per-frame closures): goTo >= 0 -> move there over goMs;
+    // goDecide -> if agent size changes, resize first (the fit measured now is for the old size), then frame
+    let goTo = -1;
+    let goMs = 0;
+    let goDecide = false;
+    if (!s.want || s.refit) {
+      goTo = desired;
+      goMs = s.want ? RESIZE_MS : 0;
+      s.refit = false;
+    } else if (s.phase2) {
+      // phase 2: one camera move to the layout at its new size (any direction: the camera hasn't moved yet),
+      // once that layout (and any regrouping it caused) has settled
+      if (now >= s.phase2 && (steady >= STEADY_MS || now - s.phase2 >= BATCH_MAX_MS)) {
+        s.phase2 = 0;
+        const r = desired / s.want;
+        if (r > 1.02 || r < 1 / 1.02) {
+          goTo = desired;
+          goMs = s.phase2Ms;
+        }
+      }
+    } else if (!following) {
+      const r = desired / s.want;
+      const quiet = now - Math.max(fitClock.activityAt, world.spawnHintAt);
+      if (r > OUT_BAND) {
+        s.inSince = 0;
+        if (!s.outSince) {
+          s.outSince = now;
+          s.outMax = desired;
+        } else s.outMax = Math.max(s.outMax, desired);
+        if ((quiet >= BATCH_QUIET_MS && steady >= STEADY_MS) || now - s.outSince >= BATCH_MAX_MS) {
+          goTo = Math.max(s.outMax, desired);
+          goMs = OUT_MS;
+          goDecide = true;
+        }
+      } else {
+        s.outSince = 0;
+        if (r < 1 / IN_BAND) {
+          if (!s.inSince) s.inSince = now;
+          if (now - s.inSince >= IN_STABLE_MS && quiet >= IN_STABLE_MS) {
+            goTo = desired;
+            goMs = IN_MS;
+            goDecide = true;
+          }
+        } else s.inSince = 0;
+      }
+    }
+    if (goTo >= 0) {
+      s.outSince = s.inSince = 0;
+      if (goDecide && scaleMoves() && !reduced) {
+        fitCommit(now, goMs * 0.8);
+        s.phase2 = now + goMs * 0.8 + 250;
+        s.phase2Ms = goMs;
+      } else {
+        const dur = reduced ? 0 : goMs;
+        s.from = s.cur || goTo;
+        s.want = goTo;
+        s.t0 = now;
+        s.dur = dur;
+        s.fx = s.sx;
+        s.fy = s.sy;
+        // projection shift that centres the content once the camera arrives
+        if (n) {
+          bounds(B.a, n, goTo * s.user);
+          s.tx = THREE.MathUtils.clamp((BX[0] + BX[1]) / 2, -hx * SHIFT, hx * SHIFT);
+          s.ty = THREE.MathUtils.clamp((BX[2] + BX[3]) / 2, -hy * SHIFT, hy * SHIFT);
+        }
+        fitCommit(now, dur);
+      }
+    }
+    // world per px at the fitted distance (hysteresis: cluster spacing follows it, then the fit follows that)
+    const wpp = (2 * tanH * s.want * s.user) / H;
+    if (Math.abs(wpp - fit.wpp) / fit.wpp > 0.1) fit.wpp = wpp;
+
+    // ---- play the committed move (ease-in-out): fitted distance + projection shift together
+    const u = s.dur > 0 ? Math.min(1, (now - s.t0) / s.dur) : 1;
+    const e = inOut(u);
+    s.cur = s.from + (s.want - s.from) * e;
+    if (following && n) {
+      // the user is orbiting: keep the content centred live (like before), no distance change
+      bounds(B.a, n, cur);
+      const k = 1 - Math.exp(-dt / 0.3);
+      s.tx = THREE.MathUtils.clamp((BX[0] + BX[1]) / 2, -hx * SHIFT, hx * SHIFT);
+      s.ty = THREE.MathUtils.clamp((BX[2] + BX[3]) / 2, -hy * SHIFT, hy * SHIFT);
+      s.sx += (s.tx - s.sx) * k;
+      s.sy += (s.ty - s.sy) * k;
+      s.fx = s.sx;
+      s.fy = s.sy;
+    } else {
+      s.sx = s.fx + (s.tx - s.fx) * e;
+      s.sy = s.fy + (s.ty - s.fy) * e;
+    }
+    fit.cam.want = s.want;
+    fit.cam.fit = desired;
+    fit.cam.dist = cur;
+    fit.cam.user = s.user;
+    fit.cam.points = n;
+
     // projection centre -> centre of the free area, plus the content shift
     const cx = ins.left + freeW / 2;
     const cy = ins.top + freeH / 2;
@@ -345,12 +484,11 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     if (!v || !v.enabled || v.fullWidth !== W || v.fullHeight !== H || Math.abs(v.offsetX - ox) > 0.25 || Math.abs(v.offsetY - oy) > 0.25) camera.setViewOffset(W, H, ox, oy, W, H);
 
     if (s.userActive) return;
-    let want = s.want * s.user;
+    let want = s.cur * s.user;
     if (controls?.minDistance !== undefined) want = Math.max(want, controls.minDistance);
     if (controls?.maxDistance !== undefined && Number.isFinite(controls.maxDistance)) want = Math.min(want, controls.maxDistance);
-    const next = cur + (want - cur) * (1 - Math.exp(-dt / 0.22));
-    if (Math.abs(next - cur) < 1e-4) return;
-    camera.position.copy(tgt).addScaledVector(s.dir, next);
+    if (Math.abs(want - cur) < 1e-4) return;
+    camera.position.copy(tgt).addScaledVector(s.dir, want);
     controls?.update?.();
   });
   return null;

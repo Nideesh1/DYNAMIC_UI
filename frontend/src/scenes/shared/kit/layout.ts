@@ -474,11 +474,19 @@ export function kitTick(now = performance.now()) {
   orderRuns();
 
   // fit: weighted count of what's drawn
+  // (exiting agents still count until they have faded out: an exit never zooms in right away)
   let n = 0;
-  for (const a of kit.agents.values()) if (!a.inst.exitAt) n += a.inst.subagent ? 0.5 : 1;
+  let alive = 0;
+  for (const a of kit.agents.values()) {
+    n += a.inst.subagent ? 0.5 : 1;
+    if (!a.inst.exitAt) alive++;
+  }
   let clusters = 0;
   if (lod.grouped) for (let k = 0; k < LOD_LANES; k++) if (clusterOf(k).active) clusters++;
-  fitTick(now, n + clusters * 1.5);
+  let mcp = 0;
+  for (const m of kit.mcp.values()) if (m.wanted) mcp++;
+  // content signature: any change (spawn, exit, fade-out, grouping, run, resource) restarts FitCamera's batch window
+  fitTick(now, n + clusters * 1.5, kit.agents.size + alive * 1e3 + clusters * 1e6 + kit.runs.size * 1e8 + mcp * 1e10 + (kit.graphWanted ? 1e13 : 0));
   for (const a of kit.agents.values()) a.scale = roleScale(a.inst) * fit.scale;
 
   layoutAgents();

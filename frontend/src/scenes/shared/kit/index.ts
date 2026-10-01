@@ -17,7 +17,9 @@
  *     placement / fit. Beams agent <-> graph use graphToStage() / stageToGraph().
  *  3. Adaptive fit (fit.ts): agent scale ~ sqrt(nRef / visible count) clamped, spacing follows, the camera dollies
  *     so everything kit-placed fits the FREE area (canvas minus measured HUD panels) and the projection centre
- *     is shifted into that free area. Eased ~0.6s with hysteresis; resize / embedding re-fits.
+ *     is shifted into that free area. Calm camera: changes are batched (~1.1s quiet, max 2.5s), then scale then
+ *     camera move once (ease-in-out); zoom out promptly, zoom in only after ~7s stable and >18% gain; user
+ *     orbit/zoom suspends refit 10s; resize / embedding re-fits quickly (see fit.ts header).
  *  4. Existing behavior is kept: auto-grouping (lod.ts) with one ClusterBall per active lane, Label3D labels
  *     (showLabel), seeded spawn variation and stable sibling slots, subagents fanned from their parent with
  *     directional edges, MCP servers/backends on the outskirts, exit fades (lingerMs), reduced motion,

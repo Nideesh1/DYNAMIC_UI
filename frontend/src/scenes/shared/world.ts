@@ -173,6 +173,8 @@ export const world = {
   hasGraphAt: 0,
   focus: null as string | null, // instance id most recently active
   focusAt: 0,
+  /** last `task` / `Agent` tool call (performance.now()): a subagent is about to spawn (FitCamera batches it) */
+  spawnHintAt: 0,
   /** exited instances kept for the agent panel after their shape fades (newest last, capped) */
   archive: new Map<string, Instance>(),
   /** instance selected in the agent panel or by clicking a shape */
@@ -323,6 +325,7 @@ export function apply(ev: WorldEvent) {
       break;
     case "tool": {
       world.stats.toolCalls++;
+      if (/^(task|agent)$/i.test(ev.tool)) world.spawnHintAt = now;
       const i = world.instances.get(ev.id);
       if (i) {
         i.pulse = Math.max(i.pulse, 0.5);
