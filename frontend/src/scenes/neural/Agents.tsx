@@ -7,11 +7,12 @@
  *   done    → dims, withers and shrinks away (presence())
  * Synapses run parent → child only; messages are one calm pulse along the synapse.
  */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { TYPE_COLOR, TYPE_LABEL, energy, presence, roleScale, world, type Comet, type Instance } from "../shared/world";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
+import { TYPE_COLOR, TYPE_LABEL, energy, lingerMs, presence, roleScale, world, type Comet, type Instance } from "../shared/world";
+import { isExpanded, lod, lodScale, showLabel } from "../shared/lod";
 import {
   CONE_GEO,
   SPHERE_GEO,
@@ -61,7 +62,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
   const ring = useRef<THREE.Mesh>(null);
   const arrow = useRef<THREE.Mesh>(null);
   const halo = useRef<THREE.Sprite>(null);
-  const label = useRef<HTMLDivElement>(null);
+  const label = useRef<Label3DHandle>(null);
   const seed = useMemo(() => [...inst.id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 9973, 7) / 9973, [inst.id]);
   const spikes = useMemo(() => spikeDirs(seed), [seed]);
   const color = TYPE_C[inst.type];
@@ -78,7 +79,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     [color, inst.type],
   );
   const s = useMemo(
-    () => ({ pos: new THREE.Vector3(), target: new THREE.Vector3(), live: new THREE.Vector3(), p0: new THREE.Vector3(), p1: new THREE.Vector3(), seedP: new THREE.Vector3(), init: false, p0set: false, spik: 0, ringK: 0, parentK: 1, c: new THREE.Color() }),
+    () => ({ pos: new THREE.Vector3(), target: new THREE.Vector3(), live: new THREE.Vector3(), p0: new THREE.Vector3(), p1: new THREE.Vector3(), seedP: new THREE.Vector3(), init: false, p0set: false, labelK: 1, spik: 0, ringK: 0, parentK: 1, c: new THREE.Color() }),
     [],
   );
 
@@ -115,7 +116,8 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     const grow = inst.parent ? easeOut(tb / 0.9) : 1;
     const swell = backOut((tb - (inst.parent ? 0.85 : 0.1)) / 0.7);
     const te = inst.exitAt ? (now - inst.exitAt) / 1000 : -1;
-    const wither = te >= 0 ? clamp01(te / 2.3) : 0;
+    const fadeS = lingerMs(inst) / 1000;
+    const wither = te >= 0 ? clamp01(te / (fadeS * 0.92)) : 0;
     const pres = presence(inst, now);
 
     let pending = false;
@@ -134,7 +136,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       else root.current.position.copy(s.live);
     }
     const seedScale = grow < 1 ? 0.18 : 0;
-    const sc = Math.max(seedScale, 0.18 + 0.82 * swell) * (1 - wither * wither * 0.95) * roleScale(inst);
+    const sc = Math.max(seedScale, 0.18 + 0.82 * swell) * (1 - wither * wither * 0.95) * roleScale(inst) * lodScale();
     body.current?.scale.setScalar(Math.max(0.0001, sc * (0.55 + e * 0.06 + (thinking ? pulse * 0.05 : breath * 0.04))));
     spikesG.current?.scale.setScalar(Math.max(0.0001, s.spik * (0.85 + pulse * 0.15)));
 
@@ -156,7 +158,11 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
       halo.current.scale.setScalar(Math.max(0.0001, sc * (thinking ? 2.3 + pulse * 0.3 : 1.6) + e * 0.35));
       m.halo.color.copy(color).multiplyScalar((thinking ? 0.22 : 0.09) * (1 - wither) + e * 0.06);
     }
-    if (label.current) label.current.style.opacity = String(clamp01(swell) * (1 - wither) * 0.95);
+    if (label.current) {
+      const on = showLabel(inst.id);
+      s.labelK += ((on ? 1 : 0) - s.labelK) * 0.12;
+      label.current.setOpacity(clamp01(swell) * (1 - wither) * 0.95 * s.labelK);
+    }
 
     // synapse: visible while both ends live; grows on birth, retracts on exit
     // lineage link lives while BOTH ends are alive; fades (~1.5s) once the parent exits — no dangling edges
@@ -166,7 +172,7 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
     u.uP0.value.copy(s.p0);
     u.uP1.value.copy(s.p1);
     u.uP2.value.copy(s.live);
-    const retract = te >= 0 ? easeInOut(te / 1.6) : 0;
+    const retract = te >= 0 ? easeInOut(te / (fadeS * 0.64)) : 0;
     u.uGrow.value = inst.parent ? grow * (1 - retract) : 0;
     u.uSpark.value = 0;
     u.uHead.value = grow < 1 ? grow : -1;
@@ -213,12 +219,15 @@ function Soma({ inst, onSelect }: { inst: Instance; onSelect: (id: string) => vo
         </group>
         <mesh ref={ring} geometry={ringGeo} material={m.ring} visible={false} />
         <sprite ref={halo} material={m.halo} />
-        <Html center position={[0, -1.05 * roleScale(inst), 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-          <div ref={label} className="scene-label" style={{ ["--c" as string]: TYPE_COLOR[inst.type], fontSize: inst.subagent ? 9 : 12, padding: "1px 6px", opacity: 0 }}>
-            {inst.name}
-            {k !== undefined ? ` ${Number(k) + 1}` : ""}
-          </div>
-        </Html>
+        <Label3D
+          ref={label}
+          position={[0, -1.05 * roleScale(inst), 0]}
+          text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
+          color={TYPE_COLOR[inst.type]}
+          size={inst.subagent ? 0.22 : 0.3}
+          opacity={0}
+          pxRange={inst.subagent ? [8, 11.5] : [9, 13.5]}
+        />
       </group>
     </>
   );
@@ -232,13 +241,15 @@ const UP = new THREE.Vector3(0, 1, 0);
 export function Somas({ onSelect }: { onSelect: (id: string) => void }) {
   const [list, setList] = useState<Instance[]>([]);
   const known = useRef(new Set<string>());
+  const seen = useRef(-1);
   useFrame(() => {
     const m = world.instances;
-    let changed = m.size !== known.current.size;
+    let changed = m.size !== known.current.size || seen.current !== lod.version;
     if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
     if (changed) {
       known.current = new Set(m.keys());
-      setList([...m.values()]);
+      seen.current = lod.version;
+      setList([...m.values()].filter(isExpanded));
     }
   });
   return (
@@ -293,7 +304,8 @@ export function Pulses() {
       k.n = c.length;
       k.first = first;
       k.last = last;
-      setList(c.slice());
+      // collapsed agents have no soma: only pulse between drawn neurons
+      setList(lod.grouped ? c.filter((x) => isExpanded(x.from) && isExpanded(x.to)) : c.slice());
     }
   });
   return (

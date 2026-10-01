@@ -11,6 +11,8 @@ import { useState, type ReactNode } from "react";
 import { Hud } from "../shared/Hud";
 import { useSceneSetup } from "../shared/useSceneSetup";
 import { tick } from "../shared/world";
+import { lodTick } from "../shared/lod";
+import { NeuralClusters } from "./Clusters";
 import { Pulses, Somas } from "./Agents";
 import { Cortex } from "./Cortex";
 import { reduced } from "./fx";
@@ -18,7 +20,10 @@ import { Pathways } from "./Hatchet";
 import { Senses } from "./Senses";
 
 function Ticker() {
-  useFrame(() => tick());
+  useFrame(() => {
+    tick();
+    lodTick();
+  });
   return null;
 }
 
@@ -42,6 +47,7 @@ export default function Scene() {
           <Pathways />
           <Somas onSelect={setSelected} />
           <Pulses />
+          <NeuralClusters />
           <Senses />
         </Stage>
         <OrbitControls makeDefault enablePan={false} enableDamping dampingFactor={0.06} minDistance={10} maxDistance={48} />
@@ -52,7 +58,7 @@ export default function Scene() {
       </Canvas>
       <Hud
         title="neural · living brain"
-        subtitle="Agents are neurons (spiky = thinking, smooth = waiting, amber ring = waiting on MCP) · ⬢ MCP servers wire to their backends · FalkorDB memory lights up on reads/writes"
+        subtitle="Agents are neurons (spiky = thinking, smooth = waiting, amber ring = waiting on MCP) · ⬢ MCP servers wire to their backends · graph memory lights up on reads/writes"
         selected={selected}
         onClose={() => setSelected(null)}
       />

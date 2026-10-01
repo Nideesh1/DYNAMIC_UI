@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { TYPE_COLOR, world, type Comet, type McpCall } from "../shared/world";
 import { arcPoint, jellyPos, satPos } from "./layout";
+import { isExpanded, lod } from "../shared/lod";
 
 const FISH_GEO = new THREE.ConeGeometry(0.07, 0.34, 8).rotateX(Math.PI / 2);
 const _n = new THREE.Vector3();
@@ -90,9 +91,25 @@ function Fish({ call }: { call: McpCall }) {
   );
 }
 
+// reused buffers: while LOD groups a crowd, only messages between drawn jellies get a (Trail-carrying) mesh
+const shownComets: Comet[] = [];
+const shownCalls: McpCall[] = [];
+function visibleComets() {
+  if (!lod.grouped) return world.comets;
+  shownComets.length = 0;
+  for (const c of world.comets) if (isExpanded(c.from) && isExpanded(c.to)) shownComets.push(c);
+  return shownComets;
+}
+function visibleCalls() {
+  if (!lod.grouped) return world.mcpCalls;
+  shownCalls.length = 0;
+  for (const c of world.mcpCalls) if (isExpanded(c.instance)) shownCalls.push(c);
+  return shownCalls;
+}
+
 export function Messages() {
-  const comets = useIdList(() => world.comets);
-  const calls = useIdList(() => world.mcpCalls);
+  const comets = useIdList(visibleComets);
+  const calls = useIdList(visibleCalls);
   return (
     <group>
       {comets.map((c) => (

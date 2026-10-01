@@ -11,6 +11,13 @@ const ACCENT: Record<Theme, [string, string]> = {
   circuit: ["#4ade80", "#22d3ee"],
   tunnel: ["#fb923c", "#e879f9"],
   flow: ["#a5b4fc", "#f0abfc"],
+  hive: ["#fbbf24", "#f59e0b"],
+  forest: ["#4ade80", "#a3e635"],
+  constellation: ["#c7d2fe", "#60a5fa"],
+  factory: ["#f97316", "#facc15"],
+  airport: ["#34d399", "#22d3ee"],
+  mycelium: ["#a78bfa", "#2dd4bf"],
+  atom: ["#38bdf8", "#f472b6"],
 };
 
 export default function Gallery() {

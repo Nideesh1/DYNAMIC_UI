@@ -1,6 +1,7 @@
 #!/bin/sh
-# Adds local secrets to .env if missing (Langfuse + ClickHouse + Redis, and the Hatchet token once
-# `docker compose up` has minted it). Never prints values.
+# Only needed for the optional langfuse profile (and for running the example worker on the host):
+# adds local secrets to .env if missing (Langfuse + ClickHouse + Redis, and the Hatchet token once
+# `docker compose up` has minted it). Plain `docker compose up` needs none of this. Never prints values.
 set -e
 cd "$(dirname "$0")/.."
 touch .env

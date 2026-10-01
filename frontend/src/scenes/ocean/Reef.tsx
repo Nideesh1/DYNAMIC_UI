@@ -1,8 +1,8 @@
 /** FalkorDB as a bioluminescent coral reef: instanced polyps per graph node, ripples + bubbles on flares, light beams from jellies. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, TYPE_COLOR, world } from "../shared/world";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
 import { FLOOR_Y, MOTION, jellyPos } from "./layout";
@@ -129,7 +129,7 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
 
   // a few pooled name tags for the most recent flares (updated imperatively, no re-render)
   const tagGroups = useRef<(THREE.Group | null)[]>([]);
-  const tagEls = useRef<(HTMLDivElement | null)[]>([]);
+  const tagEls = useRef<(Label3DHandle | null)[]>([]);
   const tagNode = useRef<string[]>(["", "", "", ""]);
 
   const beamGeo = useMemo(() => {
@@ -263,17 +263,17 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
       if (g && el) {
         g.position.set(L.head[i * 3], L.head[i * 3 + 1] + 0.55 + age * 0.25, L.head[i * 3 + 2]);
         if (tagNode.current[tk] !== f.node) {
-          el.textContent = (f.op === "write" ? "✎ " : "") + f.node;
-          el.style.setProperty("--c", f.op === "write" ? "#ffffff" : KIND_COLOR[galaxy.nodes[i].kind] ?? "#94a3b8");
+          el.setText((f.op === "write" ? "wrote · " : "") + f.node);
+          el.setColor(f.op === "write" ? "#ffffff" : KIND_COLOR[galaxy.nodes[i].kind] ?? "#94a3b8");
         }
-        el.style.opacity = String(Math.min(1, (1.8 - age) * 2));
+        el.setOpacity(Math.min(1, (1.8 - age) * 2));
       }
       tagNode.current[tk] = f.node;
       tk++;
     }
     for (let j = tk; j < TAG_SLOTS.length; j++) {
       const el = tagEls.current[j];
-      if (el && el.style.opacity !== "0") el.style.opacity = "0";
+      el?.setOpacity(0);
       tagNode.current[j] = "";
     }
 
@@ -338,16 +338,10 @@ export function Reef({ galaxy: full }: { galaxy: Galaxy }) {
       <lineSegments geometry={beamGeo} frustumCulled={false}>
         <lineBasicMaterial vertexColors transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
       </lineSegments>
-      <Html center position={[0, FLOOR_Y + 0.2, 4.4]} distanceFactor={20} style={{ pointerEvents: "none" }}>
-        <div className="scene-label" style={{ ["--c" as string]: "#2dd4bf" }}>
-          FalkorDB · knowledge graph
-        </div>
-      </Html>
+      <GraphLabel3D position={[0, FLOOR_Y + 0.2, 4.4]} color="#2dd4bf" size={0.3} pxRange={[9, 13]} />
       {TAG_SLOTS.map((k) => (
         <group key={k} ref={(g) => void (tagGroups.current[k] = g)}>
-          <Html center distanceFactor={20} style={{ pointerEvents: "none" }}>
-            <div ref={(d) => void (tagEls.current[k] = d)} className="scene-label" style={{ opacity: 0 }} />
-          </Html>
+          <Label3D ref={(d) => void (tagEls.current[k] = d)} text="" size={0.24} opacity={0} pxRange={[8, 12]} />
         </group>
       ))}
     </group>

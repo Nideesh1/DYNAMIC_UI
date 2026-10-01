@@ -3,10 +3,10 @@
  * are their own nodes wired to the server. A pending call = tether agent → server (amber → red with waitSeconds);
  * the server → backend edge lights up and a pulse travels to the backend; the result pulses back to the agent.
  */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { waitSeconds, world, type McpCall, type McpResource, type McpServer, type ResourceKind } from "../shared/world";
 import { ARROW_GEO, ArrowPool, SPHERE_GEO, TUBE_GEO, additiveBasic, placeOnCurve, reduced, backendPos, bezier, bowControl, clamp01, easeInOut, easeOut, glowSpriteMaterial, satPos, somaPos, tubeMaterial } from "./fx";
 
@@ -58,7 +58,7 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
   const halo = useRef<THREE.Sprite>(null);
   const arrow = useRef<THREE.Mesh>(null);
   const srvCol = useMemo(() => new THREE.Color(srv.color), [srv.color]);
-  const label = useRef<HTMLDivElement>(null);
+  const label = useRef<Label3DHandle>(null);
   const lastText = useRef("");
   useFrame(({ clock }) => {
     const now = performance.now();
@@ -83,11 +83,11 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
     } else if (call && call.phase === "result" && now - call.start < 1800) txt = `${res.name} ✓ returned`;
     if (label.current) {
       if (txt !== lastText.current) {
-        label.current.textContent = txt;
+        label.current.setText(txt);
         lastText.current = txt;
       }
-      label.current.style.opacity = busy ? "1" : String(0.55 + act * 0.45);
-      label.current.style.fontWeight = busy ? "700" : "500";
+      label.current.setOpacity(busy ? 1 : 0.55 + act * 0.45);
+      label.current.setEmphasis(busy);
     }
     if (g.current) g.current.rotation.y = res.kind === "spark" || res.kind === "api" ? clock.elapsedTime * (busy ? 0.6 : 0.15) : Math.sin(clock.elapsedTime * 0.2) * 0.25;
     // data flow on the server → backend edge (curve runs server t=0 → backend t=1):
@@ -145,11 +145,7 @@ function Backend({ srv, res, k, n }: { srv: McpServer; res: McpResource; k: numb
             </group>
           ))}
         </group>
-        <Html center position={[0, -0.95, 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-          <div ref={label} className="scene-label" style={{ ["--c" as string]: srv.color, fontSize: 10, fontWeight: 500, padding: "1px 6px", opacity: 0.55 }}>
-            {res.name}
-          </div>
-        </Html>
+        <Label3D ref={label} position={[0, -0.95, 0]} text={res.name} color={srv.color} size={0.2} opacity={0.55} pxRange={[7.5, 11.5]} />
       </group>
     </>
   );
@@ -191,11 +187,7 @@ function Server({ srv }: { srv: McpServer }) {
           <lineSegments geometry={OCTA_EDGES} material={m.line} />
           <mesh geometry={SPHERE_GEO} material={m.core} scale={0.18} />
         </group>
-        <Html center position={[0, 1.35, 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-          <div className="scene-label" style={{ ["--c" as string]: srv.color }}>
-            ⬢ MCP · {srv.name}
-          </div>
-        </Html>
+        <Label3D position={[0, 1.35, 0]} text={`MCP · ${srv.name}`} color={srv.color} size={0.28} pxRange={[9, 13]} />
       </group>
       {res.map((r, k) => (
         <Backend key={r.name} srv={srv} res={r} k={k} n={res.length} />

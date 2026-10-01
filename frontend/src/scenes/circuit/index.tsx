@@ -16,29 +16,35 @@ import { Chip } from "./Chip";
 import { Fx } from "./Fx";
 import { GateHeaders, Lanes } from "./Lanes";
 import { Ports } from "./Ports";
+import { CircuitClusters } from "./Clusters";
+import { isExpanded, isRunExpanded, lod, lodTick } from "../shared/lod";
 
-/** Re-render chip/lane/port lists only when membership changes (checked every frame, cheap). */
+/** Re-render chip/lane/port lists only when membership (or LOD grouping) changes (checked every frame, cheap). */
 function Dynamic({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) {
   const [insts, setInsts] = useState<Instance[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [servers, setServers] = useState<McpServer[]>([]);
-  const keys = useRef({ i: "", r: "", s: 0 });
+  const keys = useRef({ i: new Set<string>(), r: new Set<string>(), s: 0, v: -1 });
   useFrame(() => {
     tick();
-    let ki = "";
-    for (const id of world.instances.keys()) ki += id + ",";
-    if (ki !== keys.current.i) {
-      keys.current.i = ki;
-      setInsts([...world.instances.values()]);
+    lodTick();
+    const k = keys.current;
+    const lodChanged = k.v !== lod.version;
+    k.v = lod.version;
+    let ci = lodChanged || world.instances.size !== k.i.size;
+    if (!ci) for (const id of world.instances.keys()) if (!k.i.has(id)) (ci = true);
+    if (ci) {
+      k.i = new Set(world.instances.keys());
+      setInsts([...world.instances.values()].filter(isExpanded));
     }
-    let kr = "";
-    for (const id of world.runs.keys()) kr += id + ",";
-    if (kr !== keys.current.r) {
-      keys.current.r = kr;
-      setRuns([...world.runs.values()]);
+    let cr = lodChanged || world.runs.size !== k.r.size;
+    if (!cr) for (const id of world.runs.keys()) if (!k.r.has(id)) (cr = true);
+    if (cr) {
+      k.r = new Set(world.runs.keys());
+      setRuns([...world.runs.values()].filter((r) => isRunExpanded(r.id)));
     }
-    if (world.mcpServers.size !== keys.current.s) {
-      keys.current.s = world.mcpServers.size;
+    if (world.mcpServers.size !== k.s) {
+      k.s = world.mcpServers.size;
       setServers([...world.mcpServers.values()]);
     }
   });
@@ -49,6 +55,7 @@ function Dynamic({ selected, onSelect }: { selected: string | null; onSelect: (i
       {insts.map((i) => (
         <Chip key={i.id} inst={i} selected={selected === i.id} onSelect={onSelect} />
       ))}
+      <CircuitClusters />
     </>
   );
 }
@@ -100,7 +107,7 @@ export default function Scene() {
       >
         <SceneContents galaxy={galaxy} selected={selected} onSelect={setSelected} />
       </Canvas>
-      <Hud title="circuit" subtitle="Hatchet buses · agent chips · FalkorDB memory bank · MCP I/O ports" selected={selected} onClose={() => setSelected(null)} />
+      <Hud title="circuit" subtitle="Hatchet buses · agent chips · graph memory bank · MCP I/O ports" selected={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

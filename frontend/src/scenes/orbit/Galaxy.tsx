@@ -1,8 +1,9 @@
 /** FalkorDB as a spinning spiral-galaxy core: instanced nodes colored by kind, faint graph links, flares + write rings. */
-import { Html, Sparkles } from "@react-three/drei";
+import { Sparkles } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, world } from "../shared/world";
 import type { Galaxy } from "../shared/useSceneSetup";
 import { galaxyIdx, galaxyRef, reduced } from "./layout";
@@ -34,7 +35,8 @@ export function GalaxyCore({ galaxy: full }: { galaxy: Galaxy }) {
     return { nodes, links: full.links.filter((l) => ids.has(l.source) && ids.has(l.target)) };
   }, [full]);
   const labelGroups = useRef<(THREE.Group | null)[]>([]);
-  const labelDivs = useRef<(HTMLDivElement | null)[]>([]);
+  const labelDivs = useRef<(Label3DHandle | null)[]>([]);
+  const labelOp = useRef<string[]>([]);
   const labelNode = useRef<number[]>(Array(LABELS).fill(-1));
   const group = useRef<THREE.Group>(null);
   const inst = useRef<THREE.InstancedMesh>(null);
@@ -140,12 +142,12 @@ export function GalaxyCore({ galaxy: full }: { galaxy: Galaxy }) {
       const ld = labelDivs.current[L];
       if (lg && ld) {
         lg.position.copy(pos[k]);
-        if (labelNode.current[L] !== k || ld.dataset.op !== f.op) {
-          ld.textContent = `${f.op === "write" ? "✎ " : ""}${f.node}`;
-          ld.dataset.op = f.op;
-          ld.style.setProperty("--c", f.op === "write" ? "#ffffff" : `#${base[k].getHexString()}`);
+        if (labelNode.current[L] !== k || labelOp.current[L] !== f.op) {
+          ld.setText(`${f.op === "write" ? "wrote · " : ""}${f.node}`);
+          labelOp.current[L] = f.op;
+          ld.setColor(f.op === "write" ? "#ffffff" : `#${base[k].getHexString()}`);
         }
-        ld.style.opacity = String(Math.min(1, (1.8 - age) / 0.5));
+        ld.setOpacity(Math.min(1, (1.8 - age) / 0.5));
         lg.visible = true;
       }
       labelNode.current[L] = k;
@@ -192,9 +194,7 @@ export function GalaxyCore({ galaxy: full }: { galaxy: Galaxy }) {
         </mesh>
         {Array.from({ length: LABELS }, (_, j) => (
           <group key={j} ref={(m) => void (labelGroups.current[j] = m)} visible={false}>
-            <Html center position={[0, 0.32, 0]} distanceFactor={22} style={{ pointerEvents: "none" }}>
-              <div ref={(d) => void (labelDivs.current[j] = d)} className="scene-label" style={{ fontSize: 10, opacity: 0 }} />
-            </Html>
+            <Label3D ref={(d) => void (labelDivs.current[j] = d)} position={[0, 0.32, 0]} text="" size={0.2} opacity={0} pxRange={[8, 11.5]} />
           </group>
         ))}
         <Sparkles count={reduced ? 30 : 110} scale={[9, 1.3, 9]} size={1.7} speed={reduced ? 0.05 : 0.3} color="#a5b4fc" opacity={0.6} />
@@ -203,11 +203,7 @@ export function GalaxyCore({ galaxy: full }: { galaxy: Galaxy }) {
         <ringGeometry args={[0.2, 0.26, 40]} />
         <meshBasicMaterial transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} side={THREE.DoubleSide} />
       </instancedMesh>
-      <Html center position={[0, -2.6, 0]} distanceFactor={26} style={{ pointerEvents: "none" }}>
-        <div className="scene-label" style={{ ["--c" as string]: "#a5b4fc", fontSize: 15 }}>
-          FalkorDB · knowledge graph
-        </div>
-      </Html>
+      <GraphLabel3D position={[0, -2.6, 0]} color="#a5b4fc" size={0.42} pxRange={[10, 15]} />
     </>
   );
 }

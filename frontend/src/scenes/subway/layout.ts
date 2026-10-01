@@ -1,6 +1,8 @@
 /** Shared geometry for the /subway transit map: every run is a radial LINE out of Graph Central. */
 import * as THREE from "three";
-import type { AgentType, StepName } from "../shared/world";
+import { type AgentType, type Instance, type StepName } from "../shared/world";
+import { laneOfRun, laneRank, lod } from "../shared/lod";
+import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -24,6 +26,10 @@ export const HUB_Y = 0.5;
 const SLOT_DEG = [270, 30, 150, 210, 330, 90];
 export function slotAngle(slot: number) {
   return (SLOT_DEG[slot % SLOT_DEG.length] * Math.PI) / 180 + Math.floor(slot / SLOT_DEG.length) * 0.22;
+}
+/** a run's line angle: its slot direction swung by a seeded ±~10° so no two runs lay track in the same place */
+export function lineAngle(runId: string, slot: number) {
+  return slotAngle(slot) + jit(runId, 21) * 0.36;
 }
 
 const smooth = (x: number) => {
@@ -54,10 +60,15 @@ export function homeR(type: AgentType) {
   if (type === "writer") return R.WRITE;
   return (R.SPLIT_A + R.SPLIT_B) / 2;
 }
-export const isScout = (t: AgentType) => t === "graph_scout" || t === "records_scout";
-export function scoutLane(id: string) {
-  const k = Number(id.split(":")[2]);
-  return Number.isFinite(k) ? k : 0;
+export const isScout = isSubRole;
+/** stable spur lane of a scout within its run (lowest free lane while it lives) */
+export const scoutLane = (i: Instance) => roleIndex(i);
+
+/** a train's resting distance along its line: seeded per agent, same-role trains in one run spread out */
+export function homeROf(i: Instance) {
+  const base = homeR(i.type);
+  if (isScout(i.type)) return base + jit(i.id, 22) * 1.3; // stays on the parallel part of the spur
+  return base + jit(i.id, 23) * 0.7 + alt(roleIndex(i)) * 1.3;
 }
 
 /** per-run max number of scouts seen (only grows, so spurs don't collapse while scouts fade) */
@@ -88,4 +99,15 @@ export function airportPos(slot: number, out: THREE.Vector3) {
 
 export function hdr(color: string, k: number) {
   return new THREE.Color(color).multiplyScalar(k);
+}
+
+// ------------------------------------------------------------------ LOD: compact slots while grouped
+/**
+ * Layout slot for a run. Unchanged when not grouped; while grouped, the expanded run ranked k in lane L
+ * (lod laneRank) gets L + 6k, so focus runs fan out one-sidedly from their lane's spot instead of using
+ * huge unbounded slots (the lane's cluster sits on the other side).
+ */
+export function displaySlot(runId: string, slot: number) {
+  if (!lod.grouped) return slot;
+  return laneOfRun(runId) + 6 * laneRank(runId);
 }

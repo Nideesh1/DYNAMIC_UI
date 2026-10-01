@@ -2,12 +2,14 @@
  * Everything that connects things: one pooled LineSegments for graph beams, spawn tethers (fan-out spokes)
  * and MCP tethers (scrolling dashes); message comets and MCP laser packets with trails; MCP satellites.
  */
-import { Html, Trail } from "@react-three/drei";
+import { Trail } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Label3D } from "../shared/Label3D";
 import { TYPE_COLOR, waitSeconds, world, type Comet, type McpCall } from "../shared/world";
 import { instPos, isScout, nodeWorld, reduced, satPos } from "./layout";
+import { isExpanded, lod } from "../shared/lod";
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
@@ -52,7 +54,7 @@ export function Beams() {
     // 1) FalkorDB beams: instance → node (read = agent color, write = white-hot)
     for (const f of world.flares) {
       const age = (now - f.start) / 1900;
-      if (age >= 1) continue;
+      if (age >= 1 || !isExpanded(f.instance)) continue;
       const from = instPos(f.instance, t, now);
       if (!from || !nodeWorld(f.node, _w)) continue;
       const inst = world.instances.get(f.instance);
@@ -68,7 +70,7 @@ export function Beams() {
     }
     // 2) spawn tethers: parent → child during birth; scouts keep a faint spoke to their researcher (fan-out)
     for (const i of world.instances.values()) {
-      if (!i.parent) continue;
+      if (!i.parent || !isExpanded(i)) continue;
       const parent = world.instances.get(i.parent);
       if (!parent) continue;
       const age = (now - i.bornAt) / 1000;
@@ -85,6 +87,7 @@ export function Beams() {
     }
     // 3) MCP tethers: dashes scrolling toward the server while pending; color server → amber → red with wait
     for (const pd of world.mcpPending.values()) {
+      if (!isExpanded(pd.instance)) continue;
       const a = instPos(pd.instance, t, now);
       const srv = world.mcpServers.get(pd.server);
       if (!a || !srv) continue;
@@ -116,7 +119,7 @@ export function Beams() {
     // 4) resolved: bright flash runs BACK along the tether to the agent, then it dissolves
     for (const r of world.mcpResolved) {
       const age = (now - r.resolvedAt) / 700;
-      if (age >= 1) continue;
+      if (age >= 1 || !isExpanded(r.instance)) continue;
       const a = instPos(r.instance, t, now);
       const srv = world.mcpServers.get(r.server);
       if (!a || !srv) continue;
@@ -189,11 +192,12 @@ export function Comets() {
   const [list, setList] = useState<Comet[]>([]);
   const key = useRef(-1);
   useFrame(() => {
-    let k = world.comets.length * 7919;
+    let k = world.comets.length * 7919 + lod.version * 104729;
     for (const c of world.comets) k += c.id;
     if (k !== key.current) {
       key.current = k;
-      setList(world.comets.slice());
+      // collapsed agents aren't drawn: only fly comets between drawn orbs
+      setList(lod.grouped ? world.comets.filter((c) => isExpanded(c.from) && isExpanded(c.to)) : world.comets.slice());
     }
   });
   return (
@@ -238,11 +242,11 @@ export function McpPackets() {
   const [list, setList] = useState<McpCall[]>([]);
   const key = useRef(-1);
   useFrame(() => {
-    let k = world.mcpCalls.length * 7919;
+    let k = world.mcpCalls.length * 7919 + lod.version * 104729;
     for (const c of world.mcpCalls) k += c.id;
     if (k !== key.current) {
       key.current = k;
-      setList(world.mcpCalls.slice());
+      setList(lod.grouped ? world.mcpCalls.filter((c) => isExpanded(c.instance)) : world.mcpCalls.slice());
     }
   });
   return (
@@ -313,11 +317,7 @@ function Satellite({ name }: { name: string }) {
         <sphereGeometry args={[0.55, 20, 20]} />
         <meshBasicMaterial color={color} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
       </mesh>
-      <Html center position={[0, -1.1, 0]} distanceFactor={36} style={{ pointerEvents: "none" }}>
-        <div className="scene-label" style={{ ["--c" as string]: color, fontSize: 11 }}>
-          mcp · {name}
-        </div>
-      </Html>
+      <Label3D position={[0, -1.1, 0]} text={`MCP · ${name}`} color={color} size={0.3} pxRange={[9, 13]} />
     </group>
   );
 }

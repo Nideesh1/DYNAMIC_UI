@@ -24,8 +24,8 @@ def _default_url(url: str | None) -> str:
 
 def watch(url: str | None = None, *, instrument: bool = True, service_name: str | None = None) -> TracerProvider:
     """Stream spans to agentglow. Reuses the global SDK TracerProvider (keeps Langfuse/OTLP exporters), else
-    creates and installs one. Instruments LangChain/LangGraph/deepagents (OpenInference) and Hatchet when
-    installed. Idempotent; never raises because the server is down."""
+    creates and installs one. Instruments LangChain/LangGraph/deepagents and the OpenAI Agents SDK (OpenInference)
+    and Hatchet when installed. Idempotent; never raises because the server is down."""
     url = _default_url(url)
     with _lock:
         provider = trace.get_tracer_provider()
@@ -52,6 +52,17 @@ def _instrument(provider: TracerProvider) -> None:
         inst = LangChainInstrumentor()
         if not inst.is_instrumented_by_opentelemetry:
             inst.instrument(tracer_provider=provider)
+    try:
+        from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
+    except ImportError:
+        pass
+    else:
+        inst = OpenAIAgentsInstrumentor()
+        if not inst.is_instrumented_by_opentelemetry:
+            try:  # exclusive_processor=False: keep the SDK's own trace processors (OpenAI dashboard tracing)
+                inst.instrument(tracer_provider=provider, exclusive_processor=False)
+            except Exception as e:  # e.g. instrumentor installed without the `openai-agents` package
+                log.info("agentglow: OpenAI Agents instrumentation skipped: %s", e)
     try:
         from hatchet_sdk.opentelemetry.instrumentor import HatchetInstrumentor
     except ImportError:

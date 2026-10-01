@@ -1,0 +1,20 @@
+[project]
+name = "agentglow-example-quickstart"
+version = "0.1.0"
+description = "Smallest AgentGlow demo: one deepagents researcher + two subagents, watched live in 3D"
+requires-python = ">=3.11"
+dependencies = [
+  "agentglow[langchain]",
+  "deepagents",
+  "langchain",
+  "langchain-openai",
+  "langchain-anthropic",
+  "langchain-google-genai",
+  "python-dotenv",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agentglow = { workspace = true }  # in this repo; outside it, the published `agentglow` from PyPI is used

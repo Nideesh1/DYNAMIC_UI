@@ -3,10 +3,10 @@
  * edges are faint great-circle arcs hugging it. Flares: touched nodes brighten + name label + soft beam to the
  * agent (reads in agent color, writes white with a ring ripple spreading across the sphere surface).
  */
-import { Html } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, world } from "../shared/world";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
 import { ArrowPool, SPHERE_GEO, TYPE_C, addScaled, glowSpriteMaterial, reduced, somaPos } from "./fx";
@@ -72,7 +72,7 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
   const galaxy = useMemo(() => sampleGalaxy(full), [full]);
   const n = galaxy.nodes.length;
   const { size, gl, camera } = useThree();
-  const nameRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const nameRefs = useRef<(Label3DHandle | null)[]>([]);
   const nameGroups = useRef<(THREE.Group | null)[]>([]);
   const nameShown = useRef<string[]>(Array(MAX_NAMES).fill(""));
 
@@ -296,17 +296,17 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
       if (el && ng) {
         ng.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
         if (nameShown.current[shown] !== f.node) {
-          el.textContent = `${f.op === "write" ? "wrote" : "read"} · ${f.node}`;
-          el.style.setProperty("--c", f.op === "write" ? "#ffffff" : "#22d3ee");
+          el.setText(`${f.op === "write" ? "wrote" : "read"} · ${f.node}`);
+          el.setColor(f.op === "write" ? "#ffffff" : "#22d3ee");
         }
-        el.style.opacity = "1";
+        el.setOpacity(1);
       }
       nameShown.current[shown] = f.node;
       shown++;
     }
     for (let z = shown; z < MAX_NAMES; z++) {
       const el = nameRefs.current[z];
-      if (el) el.style.opacity = "0";
+      el?.setOpacity(0);
       nameShown.current[z] = "";
     }
   });
@@ -324,16 +324,10 @@ export function Cortex({ galaxy: full }: { galaxy: Galaxy }) {
       <primitive object={arrows.mesh} />
       {Array.from({ length: MAX_NAMES }, (_, k) => (
         <group key={k} ref={(x) => void (nameGroups.current[k] = x)}>
-          <Html center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-            <div ref={(x) => void (nameRefs.current[k] = x)} className="scene-label" style={{ opacity: 0, transition: "opacity .25s", fontSize: 11, transform: "translateY(-16px)" }} />
-          </Html>
+          <Label3D ref={(x) => void (nameRefs.current[k] = x)} text="" offset={[0, 0.42]} size={0.24} opacity={0} fadeMs={250} pxRange={[8, 12]} />
         </group>
       ))}
-      <Html center position={[0, -ORB_R - 0.9, 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-        <div className="scene-label" style={{ ["--c" as string]: "#a78bfa", opacity: 0.7, fontSize: 11 }}>
-          FalkorDB · memory
-        </div>
-      </Html>
+      <GraphLabel3D position={[0, -ORB_R - 0.9, 0]} color="#a78bfa" size={0.28} opacity={0.7} pxRange={[8, 12]} />
     </>
   );
 }

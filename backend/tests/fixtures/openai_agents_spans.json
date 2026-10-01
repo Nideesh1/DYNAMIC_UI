@@ -1,0 +1,1582 @@
+[
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "f84f6bcfc4d60e02",
+   "parent_span_id": null,
+   "name": "support_desk",
+   "start_time_ms": 1790838503631,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "agentglow.run.topic": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "576b67efd1f47ff6",
+   "parent_span_id": "f84f6bcfc4d60e02",
+   "name": "support_desk",
+   "start_time_ms": 1790838503632,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "d0bd97fc49d5bdf4",
+   "parent_span_id": "576b67efd1f47ff6",
+   "name": "support_desk",
+   "start_time_ms": 1790838503633,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "8de13fe0389db9e7",
+   "parent_span_id": "d0bd97fc49d5bdf4",
+   "name": "triage",
+   "start_time_ms": 1790838503633,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "a5c0dc7d004694fa",
+   "parent_span_id": "8de13fe0389db9e7",
+   "name": "turn",
+   "start_time_ms": 1790838503633,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "a9980c3bc9a49e3e",
+   "parent_span_id": "a5c0dc7d004694fa",
+   "name": "response",
+   "start_time_ms": 1790838503635,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "a9980c3bc9a49e3e",
+   "parent_span_id": "a5c0dc7d004694fa",
+   "name": "response",
+   "start_time_ms": 1790838503635,
+   "end_time_ms": 1790838506931,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_005fee9bdc6d8585006abe06e80ed087d1bc315bedc1cbf169\",\"access_programs\":null,\"created_at\":1790838504.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"You are the support front desk. Look up the customer with lookup_customer, then hand off to exactly ONE agent: connectivity/outage problems (even if they also mention a charge) \u2192 tech_support, pure billing questions \u2192 billing. Never answer yourself.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"account_id\\\":\\\"ACME-1042\\\"}\",\"call_id\":\"call_KcCvNJqnnjlO1l8U7lcCRMrx\",\"name\":\"lookup_customer\",\"type\":\"function_call\",\"id\":\"fc_005fee9bdc6d8585006abe06ea450087d1b8c7ae36355705f8\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"lookup_customer\",\"parameters\":{\"properties\":{\"account_id\":{\"title\":\"Account Id\",\"type\":\"string\"}},\"required\":[\"account_id\"],\"title\":\"lookup_customer_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Look up a customer account: plan, region and status.\",\"output_schema\":null},{\"name\":\"transfer_to_tech_support\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{},\"required\":[]},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Handoff to the tech_support agent to handle the request. Connectivity problems, outages and equipment.\",\"output_schema\":null},{\"name\":\"transfer_to_billing\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{},\"required\":[]},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838506.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":211,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":23,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":234},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"lookup_customer\", \"description\": \"Look up a customer account: plan, region and status.\", \"parameters\": {\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}}, \"required\": [\"account_id\"], \"title\": \"lookup_customer_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.1.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"transfer_to_tech_support\", \"description\": \"Handoff to the tech_support agent to handle the request. Connectivity problems, outages and equipment.\", \"parameters\": {\"additionalProperties\": false, \"type\": \"object\", \"properties\": {}, \"required\": []}, \"strict\": true}}",
+    "llm.tools.2.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"transfer_to_billing\", \"description\": \"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\", \"parameters\": {\"additionalProperties\": false, \"type\": \"object\", \"properties\": {}, \"required\": []}, \"strict\": true}}",
+    "llm.token_count.completion": 23,
+    "llm.token_count.prompt": 211,
+    "llm.token_count.total": 234,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "lookup_customer",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You are the support front desk. Look up the customer with lookup_customer, then hand off to exactly ONE agent: connectivity/outage problems (even if they also mention a charge) \u2192 tech_support, pure billing questions \u2192 billing. Never answer yourself.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_005fee9bdc6d8585006abe06e80ed087d1bc315bedc1cbf169\", \"created_at\": 1790838504.0, \"instructions\": \"You are the support front desk. Look up the customer with lookup_customer, then hand off to exactly ONE agent: connectivity/outage problems (even if they also mention a charge) \u2192 tech_support, pure billing questions \u2192 billing. Never answer yourself.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838506.0, \"prompt_cache_key\": \"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?\", \"role\": \"user\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "a4c999bf92ca5bd3",
+   "parent_span_id": "a5c0dc7d004694fa",
+   "name": "lookup_customer",
+   "start_time_ms": 1790838506933,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "a4c999bf92ca5bd3",
+   "parent_span_id": "a5c0dc7d004694fa",
+   "name": "lookup_customer",
+   "start_time_ms": 1790838506933,
+   "end_time_ms": 1790838506934,
+   "status": "ok",
+   "attributes": {
+    "tool.name": "lookup_customer",
+    "input.value": "{\"account_id\":\"ACME-1042\"}",
+    "input.mime_type": "application/json",
+    "output.value": "{\"account_id\": \"ACME-1042\", \"name\": \"Dana Ortiz\", \"plan\": \"Fiber 500\", \"region\": \"us-east-3\", \"status\": \"active\"}",
+    "output.mime_type": "application/json",
+    "tool.description": "Look up a customer account: plan, region and status.",
+    "tool.parameters": "{\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}}, \"required\": [\"account_id\"], \"title\": \"lookup_customer_args\", \"type\": \"object\", \"additionalProperties\": false}",
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "a5c0dc7d004694fa",
+   "parent_span_id": "8de13fe0389db9e7",
+   "name": "turn",
+   "start_time_ms": 1790838503633,
+   "end_time_ms": 1790838506934,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "9a3a5cb47dc77db6",
+   "parent_span_id": "8de13fe0389db9e7",
+   "name": "turn",
+   "start_time_ms": 1790838506934,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "8c229d526d753781",
+   "parent_span_id": "9a3a5cb47dc77db6",
+   "name": "response",
+   "start_time_ms": 1790838506935,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "8c229d526d753781",
+   "parent_span_id": "9a3a5cb47dc77db6",
+   "name": "response",
+   "start_time_ms": 1790838506935,
+   "end_time_ms": 1790838507978,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_005fee9bdc6d8585006abe06eb32b887d1827379494a74e891\",\"access_programs\":null,\"created_at\":1790838507.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"You are the support front desk. Look up the customer with lookup_customer, then hand off to exactly ONE agent: connectivity/outage problems (even if they also mention a charge) \u2192 tech_support, pure billing questions \u2192 billing. Never answer yourself.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{}\",\"call_id\":\"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\",\"name\":\"transfer_to_tech_support\",\"type\":\"function_call\",\"id\":\"fc_005fee9bdc6d8585006abe06eba86087d18952891d9f79cb3e\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"lookup_customer\",\"parameters\":{\"properties\":{\"account_id\":{\"title\":\"Account Id\",\"type\":\"string\"}},\"required\":[\"account_id\"],\"title\":\"lookup_customer_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Look up a customer account: plan, region and status.\",\"output_schema\":null},{\"name\":\"transfer_to_tech_support\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{},\"required\":[]},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Handoff to the tech_support agent to handle the request. Connectivity problems, outages and equipment.\",\"output_schema\":null},{\"name\":\"transfer_to_billing\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{},\"required\":[]},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838507.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":286,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":17,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":303},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"lookup_customer\", \"description\": \"Look up a customer account: plan, region and status.\", \"parameters\": {\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}}, \"required\": [\"account_id\"], \"title\": \"lookup_customer_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.1.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"transfer_to_tech_support\", \"description\": \"Handoff to the tech_support agent to handle the request. Connectivity problems, outages and equipment.\", \"parameters\": {\"additionalProperties\": false, \"type\": \"object\", \"properties\": {}, \"required\": []}, \"strict\": true}}",
+    "llm.tools.2.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"transfer_to_billing\", \"description\": \"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\", \"parameters\": {\"additionalProperties\": false, \"type\": \"object\", \"properties\": {}, \"required\": []}, \"strict\": true}}",
+    "llm.token_count.completion": 17,
+    "llm.token_count.prompt": 286,
+    "llm.token_count.total": 303,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "transfer_to_tech_support",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You are the support front desk. Look up the customer with lookup_customer, then hand off to exactly ONE agent: connectivity/outage problems (even if they also mention a charge) \u2192 tech_support, pure billing questions \u2192 billing. Never answer yourself.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_005fee9bdc6d8585006abe06eb32b887d1827379494a74e891\", \"created_at\": 1790838507.0, \"instructions\": \"You are the support front desk. Look up the customer with lookup_customer, then hand off to exactly ONE agent: connectivity/outage problems (even if they also mention a charge) \u2192 tech_support, pure billing questions \u2192 billing. Never answer yourself.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838507.0, \"prompt_cache_key\": \"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\"}\", \"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"name\": \"lookup_customer\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ea450087d1b8c7ae36355705f8\", \"status\": \"completed\"}, {\"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"name\\\": \\\"Dana Ortiz\\\", \\\"plan\\\": \\\"Fiber 500\\\", \\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"active\\\"}\", \"type\": \"function_call_output\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?",
+    "llm.input_messages.2.message.role": "assistant",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.name": "lookup_customer",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.3.message.role": "tool",
+    "llm.input_messages.3.message.tool_call_id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.3.message.content": "{\"account_id\": \"ACME-1042\", \"name\": \"Dana Ortiz\", \"plan\": \"Fiber 500\", \"region\": \"us-east-3\", \"status\": \"active\"}",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "cad6a1c34b370404",
+   "parent_span_id": "9a3a5cb47dc77db6",
+   "name": "handoff",
+   "start_time_ms": 1790838507979,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "cad6a1c34b370404",
+   "parent_span_id": "9a3a5cb47dc77db6",
+   "name": "handoff to tech_support",
+   "start_time_ms": 1790838507979,
+   "end_time_ms": 1790838507979,
+   "status": "ok",
+   "attributes": {
+    "input.value": "triage",
+    "output.value": "tech_support",
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "9a3a5cb47dc77db6",
+   "parent_span_id": "8de13fe0389db9e7",
+   "name": "turn",
+   "start_time_ms": 1790838506934,
+   "end_time_ms": 1790838507979,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "8de13fe0389db9e7",
+   "parent_span_id": "d0bd97fc49d5bdf4",
+   "name": "triage",
+   "start_time_ms": 1790838503633,
+   "end_time_ms": 1790838507979,
+   "status": "ok",
+   "attributes": {
+    "graph.node.id": "triage",
+    "agent.name": "triage",
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "6316f77cca1d37db",
+   "parent_span_id": "d0bd97fc49d5bdf4",
+   "name": "tech_support",
+   "start_time_ms": 1790838507979,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "82f302d029939f18",
+   "parent_span_id": "6316f77cca1d37db",
+   "name": "turn",
+   "start_time_ms": 1790838507980,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "9ad1b69b2904635b",
+   "parent_span_id": "82f302d029939f18",
+   "name": "response",
+   "start_time_ms": 1790838507980,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "9ad1b69b2904635b",
+   "parent_span_id": "82f302d029939f18",
+   "name": "response",
+   "start_time_ms": 1790838507980,
+   "end_time_ms": 1790838509862,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_005fee9bdc6d8585006abe06ec223087d1bacc290c6ea3f213\",\"access_programs\":null,\"created_at\":1790838508.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"You diagnose connectivity issues. Always do both, in order: (1) call check_service_status for the customer's region, (2) call search_knowledge_base with a question about the matching policy. Then, if the customer asked for money back or a credit, call transfer_to_billing (do not reply in text first); otherwise answer the customer directly in 2 sentences.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"region\\\":\\\"us-east-3\\\"}\",\"call_id\":\"call_cOK44ew5vsq9GyfdctaIudJe\",\"name\":\"check_service_status\",\"type\":\"function_call\",\"id\":\"fc_005fee9bdc6d8585006abe06ed6fb487d184eb6533ba1374c3\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"check_service_status\",\"parameters\":{\"properties\":{\"region\":{\"title\":\"Region\",\"type\":\"string\"}},\"required\":[\"region\"],\"title\":\"check_service_status_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Current network status for a service region.\",\"output_schema\":null},{\"name\":\"search_knowledge_base\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Ask the KB researcher a support policy question.\",\"output_schema\":null},{\"name\":\"transfer_to_billing\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{},\"required\":[]},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838509.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":360,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":22,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":382},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"check_service_status\", \"description\": \"Current network status for a service region.\", \"parameters\": {\"properties\": {\"region\": {\"title\": \"Region\", \"type\": \"string\"}}, \"required\": [\"region\"], \"title\": \"check_service_status_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.1.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"search_knowledge_base\", \"description\": \"Ask the KB researcher a support policy question.\", \"parameters\": {\"description\": \"Default input schema for agent-as-tool calls.\", \"properties\": {\"input\": {\"title\": \"Input\", \"type\": \"string\"}}, \"required\": [\"input\"], \"title\": \"AgentAsToolInput\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.2.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"transfer_to_billing\", \"description\": \"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\", \"parameters\": {\"additionalProperties\": false, \"type\": \"object\", \"properties\": {}, \"required\": []}, \"strict\": true}}",
+    "llm.token_count.completion": 22,
+    "llm.token_count.prompt": 360,
+    "llm.token_count.total": 382,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "check_service_status",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": "{\"region\":\"us-east-3\"}",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You diagnose connectivity issues. Always do both, in order: (1) call check_service_status for the customer's region, (2) call search_knowledge_base with a question about the matching policy. Then, if the customer asked for money back or a credit, call transfer_to_billing (do not reply in text first); otherwise answer the customer directly in 2 sentences.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_005fee9bdc6d8585006abe06ec223087d1bacc290c6ea3f213\", \"created_at\": 1790838508.0, \"instructions\": \"You diagnose connectivity issues. Always do both, in order: (1) call check_service_status for the customer's region, (2) call search_knowledge_base with a question about the matching policy. Then, if the customer asked for money back or a credit, call transfer_to_billing (do not reply in text first); otherwise answer the customer directly in 2 sentences.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838509.0, \"prompt_cache_key\": \"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\"}\", \"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"name\": \"lookup_customer\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ea450087d1b8c7ae36355705f8\", \"status\": \"completed\"}, {\"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"name\\\": \\\"Dana Ortiz\\\", \\\"plan\\\": \\\"Fiber 500\\\", \\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"active\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{}\", \"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"name\": \"transfer_to_tech_support\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eba86087d18952891d9f79cb3e\", \"status\": \"completed\"}, {\"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"output\": \"{\\\"assistant\\\": \\\"tech_support\\\"}\", \"type\": \"function_call_output\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?",
+    "llm.input_messages.2.message.role": "assistant",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.name": "lookup_customer",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.3.message.role": "tool",
+    "llm.input_messages.3.message.tool_call_id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.3.message.content": "{\"account_id\": \"ACME-1042\", \"name\": \"Dana Ortiz\", \"plan\": \"Fiber 500\", \"region\": \"us-east-3\", \"status\": \"active\"}",
+    "llm.input_messages.4.message.role": "assistant",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.function.name": "transfer_to_tech_support",
+    "llm.input_messages.5.message.role": "tool",
+    "llm.input_messages.5.message.tool_call_id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.5.message.content": "{\"assistant\": \"tech_support\"}",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "e9840679b32eb29e",
+   "parent_span_id": "82f302d029939f18",
+   "name": "check_service_status",
+   "start_time_ms": 1790838509863,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "e9840679b32eb29e",
+   "parent_span_id": "82f302d029939f18",
+   "name": "check_service_status",
+   "start_time_ms": 1790838509863,
+   "end_time_ms": 1790838509864,
+   "status": "ok",
+   "attributes": {
+    "tool.name": "check_service_status",
+    "input.value": "{\"region\":\"us-east-3\"}",
+    "input.mime_type": "application/json",
+    "output.value": "{\"region\": \"us-east-3\", \"status\": \"degraded\", \"incident\": \"INC-7731\", \"since\": \"yesterday 14:05\", \"eta\": \"today 18:00\"}",
+    "output.mime_type": "application/json",
+    "tool.description": "Current network status for a service region.",
+    "tool.parameters": "{\"properties\": {\"region\": {\"title\": \"Region\", \"type\": \"string\"}}, \"required\": [\"region\"], \"title\": \"check_service_status_args\", \"type\": \"object\", \"additionalProperties\": false}",
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "82f302d029939f18",
+   "parent_span_id": "6316f77cca1d37db",
+   "name": "turn",
+   "start_time_ms": 1790838507980,
+   "end_time_ms": 1790838509864,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "f3d21310086c44db",
+   "parent_span_id": "6316f77cca1d37db",
+   "name": "turn",
+   "start_time_ms": 1790838509864,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "b6f15b25c7d3d214",
+   "parent_span_id": "f3d21310086c44db",
+   "name": "response",
+   "start_time_ms": 1790838509865,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "b6f15b25c7d3d214",
+   "parent_span_id": "f3d21310086c44db",
+   "name": "response",
+   "start_time_ms": 1790838509865,
+   "end_time_ms": 1790838511393,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_005fee9bdc6d8585006abe06ee077887d183479bc583ac9ca4\",\"access_programs\":null,\"created_at\":1790838510.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"You diagnose connectivity issues. Always do both, in order: (1) call check_service_status for the customer's region, (2) call search_knowledge_base with a question about the matching policy. Then, if the customer asked for money back or a credit, call transfer_to_billing (do not reply in text first); otherwise answer the customer directly in 2 sentences.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"input\\\":\\\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\\\"}\",\"call_id\":\"call_CLkxAqunFo7Eqz6OpFjiGcgg\",\"name\":\"search_knowledge_base\",\"type\":\"function_call\",\"id\":\"fc_005fee9bdc6d8585006abe06eeace887d18bb1da628eb7c0e3\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"check_service_status\",\"parameters\":{\"properties\":{\"region\":{\"title\":\"Region\",\"type\":\"string\"}},\"required\":[\"region\"],\"title\":\"check_service_status_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Current network status for a service region.\",\"output_schema\":null},{\"name\":\"search_knowledge_base\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Ask the KB researcher a support policy question.\",\"output_schema\":null},{\"name\":\"transfer_to_billing\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{},\"required\":[]},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838511.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":440,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":38,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":478},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"check_service_status\", \"description\": \"Current network status for a service region.\", \"parameters\": {\"properties\": {\"region\": {\"title\": \"Region\", \"type\": \"string\"}}, \"required\": [\"region\"], \"title\": \"check_service_status_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.1.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"search_knowledge_base\", \"description\": \"Ask the KB researcher a support policy question.\", \"parameters\": {\"description\": \"Default input schema for agent-as-tool calls.\", \"properties\": {\"input\": {\"title\": \"Input\", \"type\": \"string\"}}, \"required\": [\"input\"], \"title\": \"AgentAsToolInput\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.2.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"transfer_to_billing\", \"description\": \"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\", \"parameters\": {\"additionalProperties\": false, \"type\": \"object\", \"properties\": {}, \"required\": []}, \"strict\": true}}",
+    "llm.token_count.completion": 38,
+    "llm.token_count.prompt": 440,
+    "llm.token_count.total": 478,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_CLkxAqunFo7Eqz6OpFjiGcgg",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "search_knowledge_base",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": "{\"input\":\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\"}",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You diagnose connectivity issues. Always do both, in order: (1) call check_service_status for the customer's region, (2) call search_knowledge_base with a question about the matching policy. Then, if the customer asked for money back or a credit, call transfer_to_billing (do not reply in text first); otherwise answer the customer directly in 2 sentences.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_005fee9bdc6d8585006abe06ee077887d183479bc583ac9ca4\", \"created_at\": 1790838510.0, \"instructions\": \"You diagnose connectivity issues. Always do both, in order: (1) call check_service_status for the customer's region, (2) call search_knowledge_base with a question about the matching policy. Then, if the customer asked for money back or a credit, call transfer_to_billing (do not reply in text first); otherwise answer the customer directly in 2 sentences.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838511.0, \"prompt_cache_key\": \"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\"}\", \"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"name\": \"lookup_customer\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ea450087d1b8c7ae36355705f8\", \"status\": \"completed\"}, {\"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"name\\\": \\\"Dana Ortiz\\\", \\\"plan\\\": \\\"Fiber 500\\\", \\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"active\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{}\", \"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"name\": \"transfer_to_tech_support\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eba86087d18952891d9f79cb3e\", \"status\": \"completed\"}, {\"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"output\": \"{\\\"assistant\\\": \\\"tech_support\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"region\\\":\\\"us-east-3\\\"}\", \"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"name\": \"check_service_status\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ed6fb487d184eb6533ba1374c3\", \"status\": \"completed\"}, {\"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"output\": \"{\\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"degraded\\\", \\\"incident\\\": \\\"INC-7731\\\", \\\"since\\\": \\\"yesterday 14:05\\\", \\\"eta\\\": \\\"today 18:00\\\"}\", \"type\": \"function_call_output\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?",
+    "llm.input_messages.2.message.role": "assistant",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.name": "lookup_customer",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.3.message.role": "tool",
+    "llm.input_messages.3.message.tool_call_id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.3.message.content": "{\"account_id\": \"ACME-1042\", \"name\": \"Dana Ortiz\", \"plan\": \"Fiber 500\", \"region\": \"us-east-3\", \"status\": \"active\"}",
+    "llm.input_messages.4.message.role": "assistant",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.function.name": "transfer_to_tech_support",
+    "llm.input_messages.5.message.role": "tool",
+    "llm.input_messages.5.message.tool_call_id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.5.message.content": "{\"assistant\": \"tech_support\"}",
+    "llm.input_messages.6.message.role": "assistant",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.name": "check_service_status",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.arguments": "{\"region\":\"us-east-3\"}",
+    "llm.input_messages.7.message.role": "tool",
+    "llm.input_messages.7.message.tool_call_id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.7.message.content": "{\"region\": \"us-east-3\", \"status\": \"degraded\", \"incident\": \"INC-7731\", \"since\": \"yesterday 14:05\", \"eta\": \"today 18:00\"}",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "baf509dc8bd0ad6a",
+   "parent_span_id": "f3d21310086c44db",
+   "name": "search_knowledge_base",
+   "start_time_ms": 1790838511394,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "50fed0027ffba643",
+   "parent_span_id": "baf509dc8bd0ad6a",
+   "name": "support_desk",
+   "start_time_ms": 1790838511395,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "46cf9b7da41e18d2",
+   "parent_span_id": "50fed0027ffba643",
+   "name": "kb_researcher",
+   "start_time_ms": 1790838511395,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "8042ea51e6df746e",
+   "parent_span_id": "46cf9b7da41e18d2",
+   "name": "turn",
+   "start_time_ms": 1790838511395,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "cb45e08ef8fe8243",
+   "parent_span_id": "8042ea51e6df746e",
+   "name": "response",
+   "start_time_ms": 1790838511395,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "cb45e08ef8fe8243",
+   "parent_span_id": "8042ea51e6df746e",
+   "name": "response",
+   "start_time_ms": 1790838511395,
+   "end_time_ms": 1790838512804,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_02d5c6e27ad3348f006abe06ef8b7487d1994a4e5f49b0db39\",\"access_programs\":null,\"created_at\":1790838511.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Search the knowledge base with search_docs and answer in 2 sentences, citing doc ids.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"query\\\":\\\"policy granting credits customer outage during active service incident service credits\\\"}\",\"call_id\":\"call_Cm0BqmJ9IAy70UEKmIeEOmrE\",\"name\":\"search_docs\",\"type\":\"function_call\",\"id\":\"fc_02d5c6e27ad3348f006abe06f0241487d19189b141c205ca32\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"search_docs\",\"parameters\":{\"properties\":{\"query\":{\"title\":\"Query\",\"type\":\"string\"}},\"required\":[\"query\"],\"title\":\"search_docs_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Search the internal support knowledge base.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838512.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:0a97b10c498442c99b8994f5c61248ce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":92,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":28,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":120},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"search_docs\", \"description\": \"Search the internal support knowledge base.\", \"parameters\": {\"properties\": {\"query\": {\"title\": \"Query\", \"type\": \"string\"}}, \"required\": [\"query\"], \"title\": \"search_docs_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.token_count.completion": 28,
+    "llm.token_count.prompt": 92,
+    "llm.token_count.total": 120,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_Cm0BqmJ9IAy70UEKmIeEOmrE",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "search_docs",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": "{\"query\":\"policy granting credits customer outage during active service incident service credits\"}",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "Search the knowledge base with search_docs and answer in 2 sentences, citing doc ids.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_02d5c6e27ad3348f006abe06ef8b7487d1994a4e5f49b0db39\", \"created_at\": 1790838511.0, \"instructions\": \"Search the knowledge base with search_docs and answer in 2 sentences, citing doc ids.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838512.0, \"prompt_cache_key\": \"agents-sdk:run:0a97b10c498442c99b8994f5c61248ce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"What is the policy for granting credits when a customer experiences an outage during an active service incident?\", \"role\": \"user\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "What is the policy for granting credits when a customer experiences an outage during an active service incident?",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "f3e6adeea70c8001",
+   "parent_span_id": "8042ea51e6df746e",
+   "name": "search_docs",
+   "start_time_ms": 1790838512807,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "f3e6adeea70c8001",
+   "parent_span_id": "8042ea51e6df746e",
+   "name": "search_docs",
+   "start_time_ms": 1790838512807,
+   "end_time_ms": 1790838512808,
+   "status": "ok",
+   "attributes": {
+    "tool.name": "search_docs",
+    "input.value": "{\"query\":\"policy granting credits customer outage during active service incident service credits\"}",
+    "input.mime_type": "application/json",
+    "output.value": "{\"results\": [{\"doc\": \"KB-112\", \"title\": \"Regional fiber outage playbook\", \"snippet\": \"Customers affected by a declared incident get a pro-rated credit per full day of outage.\"}, {\"doc\": \"KB-208\", \"title\": \"Modem reset\", \"snippet\": \"If the region is healthy, power-cycle the ONT for 30 seconds.\"}]}",
+    "output.mime_type": "application/json",
+    "tool.description": "Search the internal support knowledge base.",
+    "tool.parameters": "{\"properties\": {\"query\": {\"title\": \"Query\", \"type\": \"string\"}}, \"required\": [\"query\"], \"title\": \"search_docs_args\", \"type\": \"object\", \"additionalProperties\": false}",
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "8042ea51e6df746e",
+   "parent_span_id": "46cf9b7da41e18d2",
+   "name": "turn",
+   "start_time_ms": 1790838511395,
+   "end_time_ms": 1790838512808,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "34f758336a33c89f",
+   "parent_span_id": "46cf9b7da41e18d2",
+   "name": "turn",
+   "start_time_ms": 1790838512809,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "0a0ed2f5948196c2",
+   "parent_span_id": "34f758336a33c89f",
+   "name": "response",
+   "start_time_ms": 1790838512810,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "0a0ed2f5948196c2",
+   "parent_span_id": "34f758336a33c89f",
+   "name": "response",
+   "start_time_ms": 1790838512810,
+   "end_time_ms": 1790838514027,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_02d5c6e27ad3348f006abe06f0f46c87d1af0467f2cc3c184e\",\"access_programs\":null,\"created_at\":1790838513.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Search the knowledge base with search_docs and answer in 2 sentences, citing doc ids.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"id\":\"msg_02d5c6e27ad3348f006abe06f16fe487d1b227a5001a8d564d\",\"content\":[{\"annotations\":[],\"text\":\"Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]\",\"type\":\"output_text\",\"logprobs\":[]}],\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\",\"phase\":\"final_answer\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"search_docs\",\"parameters\":{\"properties\":{\"query\":{\"title\":\"Query\",\"type\":\"string\"}},\"required\":[\"query\"],\"title\":\"search_docs_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Search the internal support knowledge base.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838513.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:0a97b10c498442c99b8994f5c61248ce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":212,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":28,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":240},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"search_docs\", \"description\": \"Search the internal support knowledge base.\", \"parameters\": {\"properties\": {\"query\": {\"title\": \"Query\", \"type\": \"string\"}}, \"required\": [\"query\"], \"title\": \"search_docs_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.token_count.completion": 28,
+    "llm.token_count.prompt": 212,
+    "llm.token_count.total": 240,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.contents.0.message_content.type": "text",
+    "llm.output_messages.0.message.contents.0.message_content.text": "Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]",
+    "llm.output_messages.0.message.content": "Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "Search the knowledge base with search_docs and answer in 2 sentences, citing doc ids.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_02d5c6e27ad3348f006abe06f0f46c87d1af0467f2cc3c184e\", \"created_at\": 1790838513.0, \"instructions\": \"Search the knowledge base with search_docs and answer in 2 sentences, citing doc ids.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838513.0, \"prompt_cache_key\": \"agents-sdk:run:0a97b10c498442c99b8994f5c61248ce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"What is the policy for granting credits when a customer experiences an outage during an active service incident?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"query\\\":\\\"policy granting credits customer outage during active service incident service credits\\\"}\", \"call_id\": \"call_Cm0BqmJ9IAy70UEKmIeEOmrE\", \"name\": \"search_docs\", \"type\": \"function_call\", \"id\": \"fc_02d5c6e27ad3348f006abe06f0241487d19189b141c205ca32\", \"status\": \"completed\"}, {\"call_id\": \"call_Cm0BqmJ9IAy70UEKmIeEOmrE\", \"output\": \"{\\\"results\\\": [{\\\"doc\\\": \\\"KB-112\\\", \\\"title\\\": \\\"Regional fiber outage playbook\\\", \\\"snippet\\\": \\\"Customers affected by a declared incident get a pro-rated credit per full day of outage.\\\"}, {\\\"doc\\\": \\\"KB-208\\\", \\\"title\\\": \\\"Modem reset\\\", \\\"snippet\\\": \\\"If the region is healthy, power-cycle the ONT for 30 seconds.\\\"}]}\", \"type\": \"function_call_output\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "What is the policy for granting credits when a customer experiences an outage during an active service incident?",
+    "llm.input_messages.2.message.role": "assistant",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.id": "call_Cm0BqmJ9IAy70UEKmIeEOmrE",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.name": "search_docs",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments": "{\"query\":\"policy granting credits customer outage during active service incident service credits\"}",
+    "llm.input_messages.3.message.role": "tool",
+    "llm.input_messages.3.message.tool_call_id": "call_Cm0BqmJ9IAy70UEKmIeEOmrE",
+    "llm.input_messages.3.message.content": "{\"results\": [{\"doc\": \"KB-112\", \"title\": \"Regional fiber outage playbook\", \"snippet\": \"Customers affected by a declared incident get a pro-rated credit per full day of outage.\"}, {\"doc\": \"KB-208\", \"title\": \"Modem reset\", \"snippet\": \"If the region is healthy, power-cycle the ONT for 30 seconds.\"}]}",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "34f758336a33c89f",
+   "parent_span_id": "46cf9b7da41e18d2",
+   "name": "turn",
+   "start_time_ms": 1790838512809,
+   "end_time_ms": 1790838514029,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "46cf9b7da41e18d2",
+   "parent_span_id": "50fed0027ffba643",
+   "name": "kb_researcher",
+   "start_time_ms": 1790838511395,
+   "end_time_ms": 1790838514029,
+   "status": "ok",
+   "attributes": {
+    "graph.node.id": "kb_researcher",
+    "agent.name": "kb_researcher",
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "50fed0027ffba643",
+   "parent_span_id": "baf509dc8bd0ad6a",
+   "name": "support_desk",
+   "start_time_ms": 1790838511395,
+   "end_time_ms": 1790838514029,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "baf509dc8bd0ad6a",
+   "parent_span_id": "f3d21310086c44db",
+   "name": "search_knowledge_base",
+   "start_time_ms": 1790838511394,
+   "end_time_ms": 1790838514029,
+   "status": "ok",
+   "attributes": {
+    "tool.name": "search_knowledge_base",
+    "input.value": "{\"input\":\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\"}",
+    "input.mime_type": "application/json",
+    "output.value": "Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]",
+    "tool.description": "Ask the KB researcher a support policy question.",
+    "tool.parameters": "{\"description\": \"Default input schema for agent-as-tool calls.\", \"properties\": {\"input\": {\"title\": \"Input\", \"type\": \"string\"}}, \"required\": [\"input\"], \"title\": \"AgentAsToolInput\", \"type\": \"object\", \"additionalProperties\": false}",
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "f3d21310086c44db",
+   "parent_span_id": "6316f77cca1d37db",
+   "name": "turn",
+   "start_time_ms": 1790838509864,
+   "end_time_ms": 1790838514030,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "4b970475b02095b3",
+   "parent_span_id": "6316f77cca1d37db",
+   "name": "turn",
+   "start_time_ms": 1790838514030,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "5092be26e28ef148",
+   "parent_span_id": "4b970475b02095b3",
+   "name": "response",
+   "start_time_ms": 1790838514031,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "5092be26e28ef148",
+   "parent_span_id": "4b970475b02095b3",
+   "name": "response",
+   "start_time_ms": 1790838514031,
+   "end_time_ms": 1790838515091,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_005fee9bdc6d8585006abe06f23aec87d19ff90424f5bc9b21\",\"access_programs\":null,\"created_at\":1790838514.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"You diagnose connectivity issues. Always do both, in order: (1) call check_service_status for the customer's region, (2) call search_knowledge_base with a question about the matching policy. Then, if the customer asked for money back or a credit, call transfer_to_billing (do not reply in text first); otherwise answer the customer directly in 2 sentences.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{}\",\"call_id\":\"call_58Pujjh4pnXDbEQ9PxWgIWoh\",\"name\":\"transfer_to_billing\",\"type\":\"function_call\",\"id\":\"fc_005fee9bdc6d8585006abe06f2d72487d1a3afea5014dca06a\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"check_service_status\",\"parameters\":{\"properties\":{\"region\":{\"title\":\"Region\",\"type\":\"string\"}},\"required\":[\"region\"],\"title\":\"check_service_status_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Current network status for a service region.\",\"output_schema\":null},{\"name\":\"search_knowledge_base\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Ask the KB researcher a support policy question.\",\"output_schema\":null},{\"name\":\"transfer_to_billing\",\"parameters\":{\"additionalProperties\":false,\"type\":\"object\",\"properties\":{},\"required\":[]},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838514.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":515,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":16,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":531},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"check_service_status\", \"description\": \"Current network status for a service region.\", \"parameters\": {\"properties\": {\"region\": {\"title\": \"Region\", \"type\": \"string\"}}, \"required\": [\"region\"], \"title\": \"check_service_status_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.1.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"search_knowledge_base\", \"description\": \"Ask the KB researcher a support policy question.\", \"parameters\": {\"description\": \"Default input schema for agent-as-tool calls.\", \"properties\": {\"input\": {\"title\": \"Input\", \"type\": \"string\"}}, \"required\": [\"input\"], \"title\": \"AgentAsToolInput\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.2.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"transfer_to_billing\", \"description\": \"Handoff to the billing agent to handle the request. Invoices, charges, refunds and credits.\", \"parameters\": {\"additionalProperties\": false, \"type\": \"object\", \"properties\": {}, \"required\": []}, \"strict\": true}}",
+    "llm.token_count.completion": 16,
+    "llm.token_count.prompt": 515,
+    "llm.token_count.total": 531,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_58Pujjh4pnXDbEQ9PxWgIWoh",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "transfer_to_billing",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You diagnose connectivity issues. Always do both, in order: (1) call check_service_status for the customer's region, (2) call search_knowledge_base with a question about the matching policy. Then, if the customer asked for money back or a credit, call transfer_to_billing (do not reply in text first); otherwise answer the customer directly in 2 sentences.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_005fee9bdc6d8585006abe06f23aec87d19ff90424f5bc9b21\", \"created_at\": 1790838514.0, \"instructions\": \"You diagnose connectivity issues. Always do both, in order: (1) call check_service_status for the customer's region, (2) call search_knowledge_base with a question about the matching policy. Then, if the customer asked for money back or a credit, call transfer_to_billing (do not reply in text first); otherwise answer the customer directly in 2 sentences.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838514.0, \"prompt_cache_key\": \"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\"}\", \"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"name\": \"lookup_customer\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ea450087d1b8c7ae36355705f8\", \"status\": \"completed\"}, {\"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"name\\\": \\\"Dana Ortiz\\\", \\\"plan\\\": \\\"Fiber 500\\\", \\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"active\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{}\", \"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"name\": \"transfer_to_tech_support\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eba86087d18952891d9f79cb3e\", \"status\": \"completed\"}, {\"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"output\": \"{\\\"assistant\\\": \\\"tech_support\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"region\\\":\\\"us-east-3\\\"}\", \"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"name\": \"check_service_status\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ed6fb487d184eb6533ba1374c3\", \"status\": \"completed\"}, {\"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"output\": \"{\\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"degraded\\\", \\\"incident\\\": \\\"INC-7731\\\", \\\"since\\\": \\\"yesterday 14:05\\\", \\\"eta\\\": \\\"today 18:00\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"input\\\":\\\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\\\"}\", \"call_id\": \"call_CLkxAqunFo7Eqz6OpFjiGcgg\", \"name\": \"search_knowledge_base\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eeace887d18bb1da628eb7c0e3\", \"status\": \"completed\"}, {\"call_id\": \"call_CLkxAqunFo7Eqz6OpFjiGcgg\", \"output\": \"Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]\", \"type\": \"function_call_output\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?",
+    "llm.input_messages.2.message.role": "assistant",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.name": "lookup_customer",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.3.message.role": "tool",
+    "llm.input_messages.3.message.tool_call_id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.3.message.content": "{\"account_id\": \"ACME-1042\", \"name\": \"Dana Ortiz\", \"plan\": \"Fiber 500\", \"region\": \"us-east-3\", \"status\": \"active\"}",
+    "llm.input_messages.4.message.role": "assistant",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.function.name": "transfer_to_tech_support",
+    "llm.input_messages.5.message.role": "tool",
+    "llm.input_messages.5.message.tool_call_id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.5.message.content": "{\"assistant\": \"tech_support\"}",
+    "llm.input_messages.6.message.role": "assistant",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.name": "check_service_status",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.arguments": "{\"region\":\"us-east-3\"}",
+    "llm.input_messages.7.message.role": "tool",
+    "llm.input_messages.7.message.tool_call_id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.7.message.content": "{\"region\": \"us-east-3\", \"status\": \"degraded\", \"incident\": \"INC-7731\", \"since\": \"yesterday 14:05\", \"eta\": \"today 18:00\"}",
+    "llm.input_messages.8.message.role": "assistant",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.id": "call_CLkxAqunFo7Eqz6OpFjiGcgg",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.function.name": "search_knowledge_base",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.function.arguments": "{\"input\":\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\"}",
+    "llm.input_messages.9.message.role": "tool",
+    "llm.input_messages.9.message.tool_call_id": "call_CLkxAqunFo7Eqz6OpFjiGcgg",
+    "llm.input_messages.9.message.content": "Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "736522945db381fb",
+   "parent_span_id": "4b970475b02095b3",
+   "name": "handoff",
+   "start_time_ms": 1790838515094,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "736522945db381fb",
+   "parent_span_id": "4b970475b02095b3",
+   "name": "handoff to billing",
+   "start_time_ms": 1790838515094,
+   "end_time_ms": 1790838515096,
+   "status": "ok",
+   "attributes": {
+    "input.value": "tech_support",
+    "output.value": "billing",
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "4b970475b02095b3",
+   "parent_span_id": "6316f77cca1d37db",
+   "name": "turn",
+   "start_time_ms": 1790838514030,
+   "end_time_ms": 1790838515096,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "6316f77cca1d37db",
+   "parent_span_id": "d0bd97fc49d5bdf4",
+   "name": "tech_support",
+   "start_time_ms": 1790838507979,
+   "end_time_ms": 1790838515096,
+   "status": "ok",
+   "attributes": {
+    "graph.node.id": "tech_support",
+    "agent.name": "tech_support",
+    "graph.node.parent_id": "triage",
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "d901bc8e121f23f0",
+   "parent_span_id": "d0bd97fc49d5bdf4",
+   "name": "billing",
+   "start_time_ms": 1790838515096,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "8b7f0f350f8be96d",
+   "parent_span_id": "d901bc8e121f23f0",
+   "name": "turn",
+   "start_time_ms": 1790838515097,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "fd7f9383965e668a",
+   "parent_span_id": "8b7f0f350f8be96d",
+   "name": "response",
+   "start_time_ms": 1790838515098,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "fd7f9383965e668a",
+   "parent_span_id": "8b7f0f350f8be96d",
+   "name": "response",
+   "start_time_ms": 1790838515098,
+   "end_time_ms": 1790838516179,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_005fee9bdc6d8585006abe06f3460087d1ae2a6788be14a4e2\",\"access_programs\":null,\"created_at\":1790838515.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"You handle billing. Use get_invoice, compute a fair pro-rated outage credit (monthly amount / period days \u00d7 outage days, at least 1 day), apply it with issue_credit, then reply to the customer in 3 short sentences.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"account_id\\\":\\\"ACME-1042\\\"}\",\"call_id\":\"call_y3JLbINj6WjNPCXkihxoswgA\",\"name\":\"get_invoice\",\"type\":\"function_call\",\"id\":\"fc_005fee9bdc6d8585006abe06f3ddc887d181588d2c52edac0a\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"get_invoice\",\"parameters\":{\"properties\":{\"account_id\":{\"title\":\"Account Id\",\"type\":\"string\"}},\"required\":[\"account_id\"],\"title\":\"get_invoice_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Latest invoice for an account.\",\"output_schema\":null},{\"name\":\"issue_credit\",\"parameters\":{\"properties\":{\"account_id\":{\"title\":\"Account Id\",\"type\":\"string\"},\"amount_usd\":{\"title\":\"Amount Usd\",\"type\":\"number\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"account_id\",\"amount_usd\",\"reason\"],\"title\":\"issue_credit_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Issue an account credit.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838516.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":491,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":23,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":514},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"get_invoice\", \"description\": \"Latest invoice for an account.\", \"parameters\": {\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}}, \"required\": [\"account_id\"], \"title\": \"get_invoice_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.1.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"issue_credit\", \"description\": \"Issue an account credit.\", \"parameters\": {\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}, \"amount_usd\": {\"title\": \"Amount Usd\", \"type\": \"number\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"account_id\", \"amount_usd\", \"reason\"], \"title\": \"issue_credit_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.token_count.completion": 23,
+    "llm.token_count.prompt": 491,
+    "llm.token_count.total": 514,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_y3JLbINj6WjNPCXkihxoswgA",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "get_invoice",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You handle billing. Use get_invoice, compute a fair pro-rated outage credit (monthly amount / period days \u00d7 outage days, at least 1 day), apply it with issue_credit, then reply to the customer in 3 short sentences.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_005fee9bdc6d8585006abe06f3460087d1ae2a6788be14a4e2\", \"created_at\": 1790838515.0, \"instructions\": \"You handle billing. Use get_invoice, compute a fair pro-rated outage credit (monthly amount / period days \u00d7 outage days, at least 1 day), apply it with issue_credit, then reply to the customer in 3 short sentences.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838516.0, \"prompt_cache_key\": \"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\"}\", \"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"name\": \"lookup_customer\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ea450087d1b8c7ae36355705f8\", \"status\": \"completed\"}, {\"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"name\\\": \\\"Dana Ortiz\\\", \\\"plan\\\": \\\"Fiber 500\\\", \\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"active\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{}\", \"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"name\": \"transfer_to_tech_support\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eba86087d18952891d9f79cb3e\", \"status\": \"completed\"}, {\"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"output\": \"{\\\"assistant\\\": \\\"tech_support\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"region\\\":\\\"us-east-3\\\"}\", \"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"name\": \"check_service_status\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ed6fb487d184eb6533ba1374c3\", \"status\": \"completed\"}, {\"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"output\": \"{\\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"degraded\\\", \\\"incident\\\": \\\"INC-7731\\\", \\\"since\\\": \\\"yesterday 14:05\\\", \\\"eta\\\": \\\"today 18:00\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"input\\\":\\\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\\\"}\", \"call_id\": \"call_CLkxAqunFo7Eqz6OpFjiGcgg\", \"name\": \"search_knowledge_base\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eeace887d18bb1da628eb7c0e3\", \"status\": \"completed\"}, {\"call_id\": \"call_CLkxAqunFo7Eqz6OpFjiGcgg\", \"output\": \"Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]\", \"type\": \"function_call_output\"}, {\"arguments\": \"{}\", \"call_id\": \"call_58Pujjh4pnXDbEQ9PxWgIWoh\", \"name\": \"transfer_to_billing\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06f2d72487d1a3afea5014dca06a\", \"status\": \"completed\"}, {\"call_id\": \"call_58Pujjh4pnXDbEQ9PxWgIWoh\", \"output\": \"{\\\"assistant\\\": \\\"billing\\\"}\", \"type\": \"function_call_output\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?",
+    "llm.input_messages.2.message.role": "assistant",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.name": "lookup_customer",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.3.message.role": "tool",
+    "llm.input_messages.3.message.tool_call_id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.3.message.content": "{\"account_id\": \"ACME-1042\", \"name\": \"Dana Ortiz\", \"plan\": \"Fiber 500\", \"region\": \"us-east-3\", \"status\": \"active\"}",
+    "llm.input_messages.4.message.role": "assistant",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.function.name": "transfer_to_tech_support",
+    "llm.input_messages.5.message.role": "tool",
+    "llm.input_messages.5.message.tool_call_id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.5.message.content": "{\"assistant\": \"tech_support\"}",
+    "llm.input_messages.6.message.role": "assistant",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.name": "check_service_status",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.arguments": "{\"region\":\"us-east-3\"}",
+    "llm.input_messages.7.message.role": "tool",
+    "llm.input_messages.7.message.tool_call_id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.7.message.content": "{\"region\": \"us-east-3\", \"status\": \"degraded\", \"incident\": \"INC-7731\", \"since\": \"yesterday 14:05\", \"eta\": \"today 18:00\"}",
+    "llm.input_messages.8.message.role": "assistant",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.id": "call_CLkxAqunFo7Eqz6OpFjiGcgg",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.function.name": "search_knowledge_base",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.function.arguments": "{\"input\":\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\"}",
+    "llm.input_messages.9.message.role": "tool",
+    "llm.input_messages.9.message.tool_call_id": "call_CLkxAqunFo7Eqz6OpFjiGcgg",
+    "llm.input_messages.9.message.content": "Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]",
+    "llm.input_messages.10.message.role": "assistant",
+    "llm.input_messages.10.message.tool_calls.0.tool_call.id": "call_58Pujjh4pnXDbEQ9PxWgIWoh",
+    "llm.input_messages.10.message.tool_calls.0.tool_call.function.name": "transfer_to_billing",
+    "llm.input_messages.11.message.role": "tool",
+    "llm.input_messages.11.message.tool_call_id": "call_58Pujjh4pnXDbEQ9PxWgIWoh",
+    "llm.input_messages.11.message.content": "{\"assistant\": \"billing\"}",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "fe8a272fbb882b48",
+   "parent_span_id": "8b7f0f350f8be96d",
+   "name": "get_invoice",
+   "start_time_ms": 1790838516184,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "fe8a272fbb882b48",
+   "parent_span_id": "8b7f0f350f8be96d",
+   "name": "get_invoice",
+   "start_time_ms": 1790838516184,
+   "end_time_ms": 1790838516185,
+   "status": "ok",
+   "attributes": {
+    "tool.name": "get_invoice",
+    "input.value": "{\"account_id\":\"ACME-1042\"}",
+    "input.mime_type": "application/json",
+    "output.value": "{\"account_id\": \"ACME-1042\", \"invoice\": \"INV-55120\", \"amount_usd\": 90.0, \"period_days\": 30}",
+    "output.mime_type": "application/json",
+    "tool.description": "Latest invoice for an account.",
+    "tool.parameters": "{\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}}, \"required\": [\"account_id\"], \"title\": \"get_invoice_args\", \"type\": \"object\", \"additionalProperties\": false}",
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "8b7f0f350f8be96d",
+   "parent_span_id": "d901bc8e121f23f0",
+   "name": "turn",
+   "start_time_ms": 1790838515097,
+   "end_time_ms": 1790838516185,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "04df66ab0dc49e93",
+   "parent_span_id": "d901bc8e121f23f0",
+   "name": "turn",
+   "start_time_ms": 1790838516186,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "ae143658ff6589a0",
+   "parent_span_id": "04df66ab0dc49e93",
+   "name": "response",
+   "start_time_ms": 1790838516189,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "ae143658ff6589a0",
+   "parent_span_id": "04df66ab0dc49e93",
+   "name": "response",
+   "start_time_ms": 1790838516189,
+   "end_time_ms": 1790838518349,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_005fee9bdc6d8585006abe06f45e0c87d19c69ba5f5919ed58\",\"access_programs\":null,\"created_at\":1790838516.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"You handle billing. Use get_invoice, compute a fair pro-rated outage credit (monthly amount / period days \u00d7 outage days, at least 1 day), apply it with issue_credit, then reply to the customer in 3 short sentences.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"account_id\\\":\\\"ACME-1042\\\",\\\"amount_usd\\\":3.0,\\\"reason\\\":\\\"Prorated credit for one full day of service outage under incident INC-7731.\\\"}\",\"call_id\":\"call_Qgg2rR332I8zXtXTHXhu3tgi\",\"name\":\"issue_credit\",\"type\":\"function_call\",\"id\":\"fc_005fee9bdc6d8585006abe06f55bb087d1b6c5e030bc8e87b4\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"get_invoice\",\"parameters\":{\"properties\":{\"account_id\":{\"title\":\"Account Id\",\"type\":\"string\"}},\"required\":[\"account_id\"],\"title\":\"get_invoice_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Latest invoice for an account.\",\"output_schema\":null},{\"name\":\"issue_credit\",\"parameters\":{\"properties\":{\"account_id\":{\"title\":\"Account Id\",\"type\":\"string\"},\"amount_usd\":{\"title\":\"Amount Usd\",\"type\":\"number\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"account_id\",\"amount_usd\",\"reason\"],\"title\":\"issue_credit_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Issue an account credit.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838518.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":562,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":52,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":614},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"get_invoice\", \"description\": \"Latest invoice for an account.\", \"parameters\": {\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}}, \"required\": [\"account_id\"], \"title\": \"get_invoice_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.1.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"issue_credit\", \"description\": \"Issue an account credit.\", \"parameters\": {\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}, \"amount_usd\": {\"title\": \"Amount Usd\", \"type\": \"number\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"account_id\", \"amount_usd\", \"reason\"], \"title\": \"issue_credit_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.token_count.completion": 52,
+    "llm.token_count.prompt": 562,
+    "llm.token_count.total": 614,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_Qgg2rR332I8zXtXTHXhu3tgi",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "issue_credit",
+    "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\",\"amount_usd\":3.0,\"reason\":\"Prorated credit for one full day of service outage under incident INC-7731.\"}",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You handle billing. Use get_invoice, compute a fair pro-rated outage credit (monthly amount / period days \u00d7 outage days, at least 1 day), apply it with issue_credit, then reply to the customer in 3 short sentences.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_005fee9bdc6d8585006abe06f45e0c87d19c69ba5f5919ed58\", \"created_at\": 1790838516.0, \"instructions\": \"You handle billing. Use get_invoice, compute a fair pro-rated outage credit (monthly amount / period days \u00d7 outage days, at least 1 day), apply it with issue_credit, then reply to the customer in 3 short sentences.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838518.0, \"prompt_cache_key\": \"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\"}\", \"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"name\": \"lookup_customer\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ea450087d1b8c7ae36355705f8\", \"status\": \"completed\"}, {\"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"name\\\": \\\"Dana Ortiz\\\", \\\"plan\\\": \\\"Fiber 500\\\", \\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"active\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{}\", \"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"name\": \"transfer_to_tech_support\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eba86087d18952891d9f79cb3e\", \"status\": \"completed\"}, {\"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"output\": \"{\\\"assistant\\\": \\\"tech_support\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"region\\\":\\\"us-east-3\\\"}\", \"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"name\": \"check_service_status\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ed6fb487d184eb6533ba1374c3\", \"status\": \"completed\"}, {\"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"output\": \"{\\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"degraded\\\", \\\"incident\\\": \\\"INC-7731\\\", \\\"since\\\": \\\"yesterday 14:05\\\", \\\"eta\\\": \\\"today 18:00\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"input\\\":\\\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\\\"}\", \"call_id\": \"call_CLkxAqunFo7Eqz6OpFjiGcgg\", \"name\": \"search_knowledge_base\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eeace887d18bb1da628eb7c0e3\", \"status\": \"completed\"}, {\"call_id\": \"call_CLkxAqunFo7Eqz6OpFjiGcgg\", \"output\": \"Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]\", \"type\": \"function_call_output\"}, {\"arguments\": \"{}\", \"call_id\": \"call_58Pujjh4pnXDbEQ9PxWgIWoh\", \"name\": \"transfer_to_billing\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06f2d72487d1a3afea5014dca06a\", \"status\": \"completed\"}, {\"call_id\": \"call_58Pujjh4pnXDbEQ9PxWgIWoh\", \"output\": \"{\\\"assistant\\\": \\\"billing\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\"}\", \"call_id\": \"call_y3JLbINj6WjNPCXkihxoswgA\", \"name\": \"get_invoice\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06f3ddc887d181588d2c52edac0a\", \"status\": \"completed\"}, {\"call_id\": \"call_y3JLbINj6WjNPCXkihxoswgA\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"invoice\\\": \\\"INV-55120\\\", \\\"amount_usd\\\": 90.0, \\\"period_days\\\": 30}\", \"type\": \"function_call_output\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?",
+    "llm.input_messages.2.message.role": "assistant",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.name": "lookup_customer",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.3.message.role": "tool",
+    "llm.input_messages.3.message.tool_call_id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.3.message.content": "{\"account_id\": \"ACME-1042\", \"name\": \"Dana Ortiz\", \"plan\": \"Fiber 500\", \"region\": \"us-east-3\", \"status\": \"active\"}",
+    "llm.input_messages.4.message.role": "assistant",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.function.name": "transfer_to_tech_support",
+    "llm.input_messages.5.message.role": "tool",
+    "llm.input_messages.5.message.tool_call_id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.5.message.content": "{\"assistant\": \"tech_support\"}",
+    "llm.input_messages.6.message.role": "assistant",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.name": "check_service_status",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.arguments": "{\"region\":\"us-east-3\"}",
+    "llm.input_messages.7.message.role": "tool",
+    "llm.input_messages.7.message.tool_call_id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.7.message.content": "{\"region\": \"us-east-3\", \"status\": \"degraded\", \"incident\": \"INC-7731\", \"since\": \"yesterday 14:05\", \"eta\": \"today 18:00\"}",
+    "llm.input_messages.8.message.role": "assistant",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.id": "call_CLkxAqunFo7Eqz6OpFjiGcgg",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.function.name": "search_knowledge_base",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.function.arguments": "{\"input\":\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\"}",
+    "llm.input_messages.9.message.role": "tool",
+    "llm.input_messages.9.message.tool_call_id": "call_CLkxAqunFo7Eqz6OpFjiGcgg",
+    "llm.input_messages.9.message.content": "Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]",
+    "llm.input_messages.10.message.role": "assistant",
+    "llm.input_messages.10.message.tool_calls.0.tool_call.id": "call_58Pujjh4pnXDbEQ9PxWgIWoh",
+    "llm.input_messages.10.message.tool_calls.0.tool_call.function.name": "transfer_to_billing",
+    "llm.input_messages.11.message.role": "tool",
+    "llm.input_messages.11.message.tool_call_id": "call_58Pujjh4pnXDbEQ9PxWgIWoh",
+    "llm.input_messages.11.message.content": "{\"assistant\": \"billing\"}",
+    "llm.input_messages.12.message.role": "assistant",
+    "llm.input_messages.12.message.tool_calls.0.tool_call.id": "call_y3JLbINj6WjNPCXkihxoswgA",
+    "llm.input_messages.12.message.tool_calls.0.tool_call.function.name": "get_invoice",
+    "llm.input_messages.12.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.13.message.role": "tool",
+    "llm.input_messages.13.message.tool_call_id": "call_y3JLbINj6WjNPCXkihxoswgA",
+    "llm.input_messages.13.message.content": "{\"account_id\": \"ACME-1042\", \"invoice\": \"INV-55120\", \"amount_usd\": 90.0, \"period_days\": 30}",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "423309aa96628908",
+   "parent_span_id": "04df66ab0dc49e93",
+   "name": "issue_credit",
+   "start_time_ms": 1790838518361,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "423309aa96628908",
+   "parent_span_id": "04df66ab0dc49e93",
+   "name": "issue_credit",
+   "start_time_ms": 1790838518361,
+   "end_time_ms": 1790838518363,
+   "status": "ok",
+   "attributes": {
+    "tool.name": "issue_credit",
+    "input.value": "{\"account_id\":\"ACME-1042\",\"amount_usd\":3.0,\"reason\":\"Prorated credit for one full day of service outage under incident INC-7731.\"}",
+    "input.mime_type": "application/json",
+    "output.value": "{\"account_id\": \"ACME-1042\", \"credit_id\": \"CR-9001\", \"amount_usd\": 3.0, \"reason\": \"Prorated credit for one full day of service outage under incident INC-7731.\", \"status\": \"applied\"}",
+    "output.mime_type": "application/json",
+    "tool.description": "Issue an account credit.",
+    "tool.parameters": "{\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}, \"amount_usd\": {\"title\": \"Amount Usd\", \"type\": \"number\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"account_id\", \"amount_usd\", \"reason\"], \"title\": \"issue_credit_args\", \"type\": \"object\", \"additionalProperties\": false}",
+    "openinference.span.kind": "TOOL"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "04df66ab0dc49e93",
+   "parent_span_id": "d901bc8e121f23f0",
+   "name": "turn",
+   "start_time_ms": 1790838516186,
+   "end_time_ms": 1790838518363,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "1078dee8700a60ed",
+   "parent_span_id": "d901bc8e121f23f0",
+   "name": "turn",
+   "start_time_ms": 1790838518364,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "60bd7a35595ede77",
+   "parent_span_id": "1078dee8700a60ed",
+   "name": "response",
+   "start_time_ms": 1790838518366,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "openinference.span.kind": "LLM",
+    "llm.system": "openai"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "60bd7a35595ede77",
+   "parent_span_id": "1078dee8700a60ed",
+   "name": "response",
+   "start_time_ms": 1790838518366,
+   "end_time_ms": 1790838520529,
+   "status": "ok",
+   "attributes": {
+    "llm.system": "openai",
+    "output.mime_type": "application/json",
+    "output.value": "{\"id\":\"resp_005fee9bdc6d8585006abe06f6979887d19cf8df40db5a03e4\",\"access_programs\":null,\"created_at\":1790838518.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"You handle billing. Use get_invoice, compute a fair pro-rated outage credit (monthly amount / period days \u00d7 outage days, at least 1 day), apply it with issue_credit, then reply to the customer in 3 short sentences.\",\"metadata\":{},\"model\":\"gpt-5.6-luna\",\"object\":\"response\",\"output\":[{\"id\":\"msg_005fee9bdc6d8585006abe06f7126087d1a4f2e04a38961e01\",\"content\":[{\"annotations\":[],\"text\":\"Your outage is linked to incident INC-7731 in your region, which began yesterday. I applied a $3.00 credit for one day of downtime. Credit CR-9001 is now applied to account ACME-1042.\",\"type\":\"output_text\",\"logprobs\":[]}],\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\",\"phase\":\"final_answer\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"get_invoice\",\"parameters\":{\"properties\":{\"account_id\":{\"title\":\"Account Id\",\"type\":\"string\"}},\"required\":[\"account_id\"],\"title\":\"get_invoice_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Latest invoice for an account.\",\"output_schema\":null},{\"name\":\"issue_credit\",\"parameters\":{\"properties\":{\"account_id\":{\"title\":\"Account Id\",\"type\":\"string\"},\"amount_usd\":{\"title\":\"Amount Usd\",\"type\":\"number\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"account_id\",\"amount_usd\",\"reason\"],\"title\":\"issue_credit_args\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Issue an account credit.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1790838520.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":\"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\",\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"none\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"low\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":685,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0},\"output_tokens\":52,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":737},\"user\":null,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"store\":true,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}",
+    "llm.tools.0.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"get_invoice\", \"description\": \"Latest invoice for an account.\", \"parameters\": {\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}}, \"required\": [\"account_id\"], \"title\": \"get_invoice_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.tools.1.tool.json_schema": "{\"type\": \"function\", \"function\": {\"name\": \"issue_credit\", \"description\": \"Issue an account credit.\", \"parameters\": {\"properties\": {\"account_id\": {\"title\": \"Account Id\", \"type\": \"string\"}, \"amount_usd\": {\"title\": \"Amount Usd\", \"type\": \"number\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"account_id\", \"amount_usd\", \"reason\"], \"title\": \"issue_credit_args\", \"type\": \"object\", \"additionalProperties\": false}, \"strict\": true}}",
+    "llm.token_count.completion": 52,
+    "llm.token_count.prompt": 685,
+    "llm.token_count.total": 737,
+    "llm.token_count.prompt_details.cache_read": 0,
+    "llm.token_count.prompt_details.cache_write": 0,
+    "llm.token_count.completion_details.reasoning": 0,
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.contents.0.message_content.type": "text",
+    "llm.output_messages.0.message.contents.0.message_content.text": "Your outage is linked to incident INC-7731 in your region, which began yesterday. I applied a $3.00 credit for one day of downtime. Credit CR-9001 is now applied to account ACME-1042.",
+    "llm.output_messages.0.message.content": "Your outage is linked to incident INC-7731 in your region, which began yesterday. I applied a $3.00 credit for one day of downtime. Credit CR-9001 is now applied to account ACME-1042.",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.0.message.content": "You handle billing. Use get_invoice, compute a fair pro-rated outage credit (monthly amount / period days \u00d7 outage days, at least 1 day), apply it with issue_credit, then reply to the customer in 3 short sentences.",
+    "llm.model_name": "gpt-5.6-luna",
+    "llm.finish_reason": "stop",
+    "llm.invocation_parameters": "{\"id\": \"resp_005fee9bdc6d8585006abe06f6979887d19cf8df40db5a03e4\", \"created_at\": 1790838518.0, \"instructions\": \"You handle billing. Use get_invoice, compute a fair pro-rated outage credit (monthly amount / period days \u00d7 outage days, at least 1 day), apply it with issue_credit, then reply to the customer in 3 short sentences.\", \"metadata\": {}, \"model\": \"gpt-5.6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1790838520.0, \"prompt_cache_key\": \"agents-sdk:run:ad8db83e6b0a41a49f71b61e4ad53cce\", \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"none\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"low\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"store\": true, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}",
+    "input.mime_type": "application/json",
+    "input.value": "[{\"content\": \"My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\"}\", \"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"name\": \"lookup_customer\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ea450087d1b8c7ae36355705f8\", \"status\": \"completed\"}, {\"call_id\": \"call_KcCvNJqnnjlO1l8U7lcCRMrx\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"name\\\": \\\"Dana Ortiz\\\", \\\"plan\\\": \\\"Fiber 500\\\", \\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"active\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{}\", \"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"name\": \"transfer_to_tech_support\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eba86087d18952891d9f79cb3e\", \"status\": \"completed\"}, {\"call_id\": \"call_Jg6VDMipSt1WZ2jMe3ZTgy2z\", \"output\": \"{\\\"assistant\\\": \\\"tech_support\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"region\\\":\\\"us-east-3\\\"}\", \"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"name\": \"check_service_status\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06ed6fb487d184eb6533ba1374c3\", \"status\": \"completed\"}, {\"call_id\": \"call_cOK44ew5vsq9GyfdctaIudJe\", \"output\": \"{\\\"region\\\": \\\"us-east-3\\\", \\\"status\\\": \\\"degraded\\\", \\\"incident\\\": \\\"INC-7731\\\", \\\"since\\\": \\\"yesterday 14:05\\\", \\\"eta\\\": \\\"today 18:00\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"input\\\":\\\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\\\"}\", \"call_id\": \"call_CLkxAqunFo7Eqz6OpFjiGcgg\", \"name\": \"search_knowledge_base\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06eeace887d18bb1da628eb7c0e3\", \"status\": \"completed\"}, {\"call_id\": \"call_CLkxAqunFo7Eqz6OpFjiGcgg\", \"output\": \"Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]\", \"type\": \"function_call_output\"}, {\"arguments\": \"{}\", \"call_id\": \"call_58Pujjh4pnXDbEQ9PxWgIWoh\", \"name\": \"transfer_to_billing\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06f2d72487d1a3afea5014dca06a\", \"status\": \"completed\"}, {\"call_id\": \"call_58Pujjh4pnXDbEQ9PxWgIWoh\", \"output\": \"{\\\"assistant\\\": \\\"billing\\\"}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\"}\", \"call_id\": \"call_y3JLbINj6WjNPCXkihxoswgA\", \"name\": \"get_invoice\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06f3ddc887d181588d2c52edac0a\", \"status\": \"completed\"}, {\"call_id\": \"call_y3JLbINj6WjNPCXkihxoswgA\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"invoice\\\": \\\"INV-55120\\\", \\\"amount_usd\\\": 90.0, \\\"period_days\\\": 30}\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"account_id\\\":\\\"ACME-1042\\\",\\\"amount_usd\\\":3.0,\\\"reason\\\":\\\"Prorated credit for one full day of service outage under incident INC-7731.\\\"}\", \"call_id\": \"call_Qgg2rR332I8zXtXTHXhu3tgi\", \"name\": \"issue_credit\", \"type\": \"function_call\", \"id\": \"fc_005fee9bdc6d8585006abe06f55bb087d1b6c5e030bc8e87b4\", \"status\": \"completed\"}, {\"call_id\": \"call_Qgg2rR332I8zXtXTHXhu3tgi\", \"output\": \"{\\\"account_id\\\": \\\"ACME-1042\\\", \\\"credit_id\\\": \\\"CR-9001\\\", \\\"amount_usd\\\": 3.0, \\\"reason\\\": \\\"Prorated credit for one full day of service outage under incident INC-7731.\\\", \\\"status\\\": \\\"applied\\\"}\", \"type\": \"function_call_output\"}]",
+    "llm.input_messages.1.message.role": "user",
+    "llm.input_messages.1.message.content": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?",
+    "llm.input_messages.2.message.role": "assistant",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.name": "lookup_customer",
+    "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.3.message.role": "tool",
+    "llm.input_messages.3.message.tool_call_id": "call_KcCvNJqnnjlO1l8U7lcCRMrx",
+    "llm.input_messages.3.message.content": "{\"account_id\": \"ACME-1042\", \"name\": \"Dana Ortiz\", \"plan\": \"Fiber 500\", \"region\": \"us-east-3\", \"status\": \"active\"}",
+    "llm.input_messages.4.message.role": "assistant",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.4.message.tool_calls.0.tool_call.function.name": "transfer_to_tech_support",
+    "llm.input_messages.5.message.role": "tool",
+    "llm.input_messages.5.message.tool_call_id": "call_Jg6VDMipSt1WZ2jMe3ZTgy2z",
+    "llm.input_messages.5.message.content": "{\"assistant\": \"tech_support\"}",
+    "llm.input_messages.6.message.role": "assistant",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.name": "check_service_status",
+    "llm.input_messages.6.message.tool_calls.0.tool_call.function.arguments": "{\"region\":\"us-east-3\"}",
+    "llm.input_messages.7.message.role": "tool",
+    "llm.input_messages.7.message.tool_call_id": "call_cOK44ew5vsq9GyfdctaIudJe",
+    "llm.input_messages.7.message.content": "{\"region\": \"us-east-3\", \"status\": \"degraded\", \"incident\": \"INC-7731\", \"since\": \"yesterday 14:05\", \"eta\": \"today 18:00\"}",
+    "llm.input_messages.8.message.role": "assistant",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.id": "call_CLkxAqunFo7Eqz6OpFjiGcgg",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.function.name": "search_knowledge_base",
+    "llm.input_messages.8.message.tool_calls.0.tool_call.function.arguments": "{\"input\":\"What is the policy for granting credits when a customer experiences an outage during an active service incident?\"}",
+    "llm.input_messages.9.message.role": "tool",
+    "llm.input_messages.9.message.tool_call_id": "call_CLkxAqunFo7Eqz6OpFjiGcgg",
+    "llm.input_messages.9.message.content": "Customers affected by a declared active incident receive a prorated credit for each full day of outage. [KB-112]",
+    "llm.input_messages.10.message.role": "assistant",
+    "llm.input_messages.10.message.tool_calls.0.tool_call.id": "call_58Pujjh4pnXDbEQ9PxWgIWoh",
+    "llm.input_messages.10.message.tool_calls.0.tool_call.function.name": "transfer_to_billing",
+    "llm.input_messages.11.message.role": "tool",
+    "llm.input_messages.11.message.tool_call_id": "call_58Pujjh4pnXDbEQ9PxWgIWoh",
+    "llm.input_messages.11.message.content": "{\"assistant\": \"billing\"}",
+    "llm.input_messages.12.message.role": "assistant",
+    "llm.input_messages.12.message.tool_calls.0.tool_call.id": "call_y3JLbINj6WjNPCXkihxoswgA",
+    "llm.input_messages.12.message.tool_calls.0.tool_call.function.name": "get_invoice",
+    "llm.input_messages.12.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\"}",
+    "llm.input_messages.13.message.role": "tool",
+    "llm.input_messages.13.message.tool_call_id": "call_y3JLbINj6WjNPCXkihxoswgA",
+    "llm.input_messages.13.message.content": "{\"account_id\": \"ACME-1042\", \"invoice\": \"INV-55120\", \"amount_usd\": 90.0, \"period_days\": 30}",
+    "llm.input_messages.14.message.role": "assistant",
+    "llm.input_messages.14.message.tool_calls.0.tool_call.id": "call_Qgg2rR332I8zXtXTHXhu3tgi",
+    "llm.input_messages.14.message.tool_calls.0.tool_call.function.name": "issue_credit",
+    "llm.input_messages.14.message.tool_calls.0.tool_call.function.arguments": "{\"account_id\":\"ACME-1042\",\"amount_usd\":3.0,\"reason\":\"Prorated credit for one full day of service outage under incident INC-7731.\"}",
+    "llm.input_messages.15.message.role": "tool",
+    "llm.input_messages.15.message.tool_call_id": "call_Qgg2rR332I8zXtXTHXhu3tgi",
+    "llm.input_messages.15.message.content": "{\"account_id\": \"ACME-1042\", \"credit_id\": \"CR-9001\", \"amount_usd\": 3.0, \"reason\": \"Prorated credit for one full day of service outage under incident INC-7731.\", \"status\": \"applied\"}",
+    "openinference.span.kind": "LLM"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "1078dee8700a60ed",
+   "parent_span_id": "d901bc8e121f23f0",
+   "name": "turn",
+   "start_time_ms": 1790838518364,
+   "end_time_ms": 1790838520534,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "d901bc8e121f23f0",
+   "parent_span_id": "d0bd97fc49d5bdf4",
+   "name": "billing",
+   "start_time_ms": 1790838515096,
+   "end_time_ms": 1790838520536,
+   "status": "ok",
+   "attributes": {
+    "graph.node.id": "billing",
+    "agent.name": "billing",
+    "graph.node.parent_id": "tech_support",
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "d0bd97fc49d5bdf4",
+   "parent_span_id": "576b67efd1f47ff6",
+   "name": "support_desk",
+   "start_time_ms": 1790838503633,
+   "end_time_ms": 1790838520536,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "CHAIN"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "576b67efd1f47ff6",
+   "parent_span_id": "f84f6bcfc4d60e02",
+   "name": "support_desk",
+   "start_time_ms": 1790838503632,
+   "end_time_ms": 1790838520536,
+   "status": "ok",
+   "attributes": {
+    "openinference.span.kind": "AGENT"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "cae1cdc6ea0e8bce5b1ec3a2029a90f0",
+   "span_id": "f84f6bcfc4d60e02",
+   "parent_span_id": null,
+   "name": "support_desk",
+   "start_time_ms": 1790838503631,
+   "end_time_ms": 1790838520537,
+   "status": "unset",
+   "attributes": {
+    "agentglow.run.topic": "My home internet (account ACME-1042) has been down since yesterday and I was still charged the full monthly fee. Can you figure out what's wrong and credit me for the outage?"
+   }
+  }
+ }
+]

@@ -1,0 +1,24 @@
+{
+  "name": "agentglow-react-embed",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 3210 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 3210 --strictPort",
+    "demo-spans": "node scripts/send-demo-spans.mjs"
+  },
+  "dependencies": {
+    "agentglow": "file:../../frontend",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  }
+}

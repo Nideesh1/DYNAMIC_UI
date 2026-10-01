@@ -1,0 +1,29 @@
+/* /airport — radar-scope DOM labels (data tags, airports, gates, flight strips). Scoped by ap- prefix. */
+.ap-root { background: radial-gradient(ellipse at 45% 50%, #03140e 0%, #010604 60%, #000302 100%); }
+.ap-root, .ap-tag, .ap-airport, .ap-gate, .ap-strip, .ap-wp, .ap-bearing { --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace; }
+
+.ap-bearing { font: 600 9px/1 var(--mono); color: #2fae6e; letter-spacing: 0.08em; opacity: 0.85; text-shadow: 0 0 6px rgba(70, 255, 154, 0.5); }
+
+/* ATC data tag: leader line from the blip up-right to a two-line block */
+.ap-tag { position: relative; width: 0; height: 0; pointer-events: none; transition: none; }
+.ap-leader { position: absolute; left: 6px; top: -22px; overflow: visible; }
+.ap-leader line { stroke: color-mix(in srgb, var(--c) 45%, #46ff9a); stroke-width: 1; opacity: 0.7; }
+.ap-tag-box { position: absolute; left: 28px; top: -38px; display: grid; gap: 1px; padding: 2px 6px 2px 5px; border-left: 2px solid var(--c); background: rgba(1, 12, 8, 0.62); white-space: nowrap; }
+.ap-call { font: 700 10px/1.15 var(--mono); letter-spacing: 0.06em; color: #d9ffe9; text-shadow: 0 0 8px color-mix(in srgb, var(--c) 70%, transparent); }
+.ap-data { font: 500 9px/1.15 var(--mono); letter-spacing: 0.05em; color: #57d897; }
+.ap-tag-big .ap-call { font-size: 12px; }
+.ap-tag-big .ap-data { font-size: 10px; }
+
+.ap-airport { width: max-content; display: flex; align-items: center; gap: 6px; white-space: nowrap; font: 600 10px/1 var(--mono); color: #c8f7de; letter-spacing: 0.04em; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); background: rgba(1, 10, 7, 0.7); text-shadow: 0 0 8px color-mix(in srgb, var(--c) 60%, transparent); }
+.ap-airport-code { font-weight: 800; color: var(--c); letter-spacing: 0.1em; }
+.ap-gate { white-space: nowrap; font: 500 9px/1 var(--mono); color: #a6e9c6; letter-spacing: 0.03em; padding: 2px 5px; background: rgba(1, 10, 7, 0.55); border-bottom: 1px solid color-mix(in srgb, var(--c) 50%, transparent); }
+.ap-gate.ap-hot { color: #fff; font-weight: 700; border-bottom-color: var(--c); box-shadow: 0 0 10px color-mix(in srgb, var(--c) 50%, transparent); }
+
+/* flight strip for a run */
+.ap-strip { width: max-content; display: grid; gap: 2px; text-align: left; padding: 4px 9px 4px 8px; border-left: 3px solid var(--c); background: rgba(1, 12, 8, 0.72); outline: 1px solid rgba(70, 255, 154, 0.14); max-width: 260px; }
+.ap-strip-topic { font: 600 11px/1.25 "Public Sans", system-ui, sans-serif; color: #e8fff1; white-space: normal; }
+.ap-strip-sub { font: 500 9px/1.2 var(--mono); color: #5fbf8d; letter-spacing: 0.05em; white-space: nowrap; }
+
+.ap-wp { white-space: nowrap; font: 600 9px/1 var(--mono); letter-spacing: 0.05em; color: #e9fffb; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--c, #38e8ff) 60%, transparent); background: rgba(1, 10, 10, 0.65); text-shadow: 0 0 8px var(--c, #38e8ff); }
+.ap-tag-left .ap-leader { left: -28px; transform: scaleX(-1); }
+.ap-tag-left .ap-tag-box { left: auto; right: 28px; text-align: right; border-left: 0; border-right: 2px solid var(--c); padding: 2px 5px 2px 6px; }

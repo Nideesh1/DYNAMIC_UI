@@ -12,6 +12,7 @@ import { Jellies } from "./Jellies";
 import { selection } from "./layout";
 import { Messages } from "./Packets";
 import { Reef } from "./Reef";
+import { OceanClusters } from "./Clusters";
 
 export default function Scene() {
   const galaxy = useSceneSetup();
@@ -34,6 +35,7 @@ export default function Scene() {
         <Currents />
         <Jellies onSelect={setSelected} />
         <Messages />
+        <OceanClusters />
         <Anglers />
         <OrbitControls
           makeDefault
@@ -53,7 +55,7 @@ export default function Scene() {
           <Noise opacity={0.03} />
         </EffectComposer>
       </Canvas>
-      <Hud title="Deep sea · bioluminescent agents" subtitle="jellyfish = agents · currents = Hatchet runs · coral reef = FalkorDB · anglerfish = MCP servers" selected={selected} onClose={() => setSelected(null)} />
+      <Hud title="Deep sea · bioluminescent agents" subtitle="jellyfish = agents · currents = Hatchet runs · coral reef = knowledge graph · anglerfish = MCP servers" selected={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

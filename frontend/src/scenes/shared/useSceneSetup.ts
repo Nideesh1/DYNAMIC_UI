@@ -12,7 +12,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useSceneConfig } from "./config";
 import { runWorldSimulator } from "./sim";
-import { apply, setMode, type WorldEvent } from "./world";
+import { apply, setGraphLabel, setMode, type WorldEvent } from "./world";
 
 export type GalaxyNode = { id: string; name: string; kind: string };
 export type Galaxy = { nodes: GalaxyNode[]; links: { source: string; target: string }[] };
@@ -100,6 +100,8 @@ function start(c: Conn, sim: boolean) {
       .then((g: Galaxy | null) => {
         if (!c.dead && g?.nodes?.length) {
           c.galaxy = g;
+          // the server only serves /live/graph when a real graph DB is configured (FalkorDB provider)
+          setGraphLabel((g as Galaxy & { label?: string }).label ?? "FalkorDB · knowledge graph");
           emit();
         }
       })

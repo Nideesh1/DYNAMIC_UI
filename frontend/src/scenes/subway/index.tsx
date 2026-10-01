@@ -1,4 +1,4 @@
-/** /subway — neon transit map in 3D: Hatchet runs are lines, agents are trains, FalkorDB is Graph Central. */
+/** /subway — neon transit map in 3D: Hatchet runs are lines, agents are trains, the knowledge graph is Graph Central. */
 import { Grid, OrbitControls, Stars } from "@react-three/drei";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
@@ -7,7 +7,9 @@ import { Hud } from "../shared/Hud";
 import { useSceneSetup, type Galaxy } from "../shared/useSceneSetup";
 import { tick, world } from "../shared/world";
 import { FlareLabels, GraphCentral, Transfers } from "./Hub";
-import { isScout, reduced, scoutCount, scoutLane } from "./layout";
+import { isExpanded, isRunExpanded, lod, lodTick } from "../shared/lod";
+import { SubwayClusters } from "./Clusters";
+import { displaySlot, isScout, reduced, scoutCount, scoutLane } from "./layout";
 import { RunLine } from "./Lines";
 import { Train } from "./Trains";
 import { Airports, Streaks, Tethers } from "./Transit";
@@ -19,22 +21,29 @@ type RunInfo = { id: string; slot: number; color: string; scouts: number };
 function Network({ selected, onSelect }: { selected: string | null; onSelect: (id: string) => void }) {
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [ids, setIds] = useState<string[]>([]);
-  const key = useRef("");
+  const known = useRef({ ids: new Set<string>(), runs: new Set<string>(), scouts: -1, version: -1 });
   useFrame(() => {
     tick();
+    lodTick();
+    let scouts = 0;
     for (const i of world.instances.values()) {
       if (!isScout(i.type)) continue;
-      const n = scoutLane(i.id) + 1;
+      const n = scoutLane(i) + 1;
       if (n > (scoutCount.get(i.run) ?? 0)) scoutCount.set(i.run, n);
     }
-    let k = "";
-    for (const r of world.runs.values()) k += `${r.id}:${scoutCount.get(r.id) ?? 0}|`;
-    k += "#";
-    for (const id of world.instances.keys()) k += id + "|";
-    if (k === key.current) return;
-    key.current = k;
-    setRuns([...world.runs.values()].map((r) => ({ id: r.id, slot: r.slot, color: r.color, scouts: scoutCount.get(r.id) ?? 0 })));
-    setIds([...world.instances.keys()]);
+    for (const r of world.runs.keys()) scouts += scoutCount.get(r) ?? 0;
+    // membership check without per-frame string building (hundreds of agents when crowded)
+    const kn = known.current;
+    let changed = kn.version !== lod.version || kn.scouts !== scouts || kn.ids.size !== world.instances.size || kn.runs.size !== world.runs.size;
+    if (!changed) for (const id of world.instances.keys()) if (!kn.ids.has(id)) { changed = true; break; }
+    if (!changed) for (const id of world.runs.keys()) if (!kn.runs.has(id)) { changed = true; break; }
+    if (!changed) return;
+    kn.version = lod.version;
+    kn.scouts = scouts;
+    kn.ids = new Set(world.instances.keys());
+    kn.runs = new Set(world.runs.keys());
+    setRuns([...world.runs.values()].filter((r) => isRunExpanded(r.id)).map((r) => ({ id: r.id, slot: displaySlot(r.id, r.slot), color: r.color, scouts: scoutCount.get(r.id) ?? 0 })));
+    setIds([...world.instances.values()].filter(isExpanded).map((i) => i.id));
     for (const id of scoutCount.keys()) if (!world.runs.has(id)) scoutCount.delete(id);
   });
   return (
@@ -75,6 +84,7 @@ function World({ galaxy, selected, onSelect }: { galaxy: Galaxy; selected: strin
       <Transfers galaxy={galaxy} />
       <FlareLabels galaxy={galaxy} />
       <Network selected={selected} onSelect={onSelect} />
+      <SubwayClusters />
       <Streaks />
       <Airports />
       <Tethers />
@@ -96,7 +106,7 @@ export default function Scene() {
       <Canvas camera={{ position: [0, 29, 35], fov: 46 }} dpr={[1, 2]} gl={{ antialias: false, powerPreference: "high-performance", preserveDrawingBuffer: true }} onPointerMissed={() => setSelected(null)}>
         <World galaxy={galaxy} selected={selected} onSelect={setSelected} />
       </Canvas>
-      <Hud title="subway" subtitle="neon transit map · each hatchet run is a line, each agent a train, FalkorDB is Graph Central, MCP servers are airports" selected={selected} onClose={() => setSelected(null)} />
+      <Hud title="subway" subtitle="neon transit map · each hatchet run is a line, each agent a train, the knowledge graph is Graph Central, MCP servers are airports" selected={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

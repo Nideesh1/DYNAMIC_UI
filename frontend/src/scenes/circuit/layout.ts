@@ -1,6 +1,8 @@
 /** Board layout for the /circuit scene: lanes (Hatchet runs), gates, chip homes, memory bank, I/O ports, path helpers. */
 import * as THREE from "three";
-import { world, type Instance, type StepName } from "../shared/world";
+import { hash01, world, type Instance, type StepName } from "../shared/world";
+import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
+import { laneOfSlot, laneRank, lod } from "../shared/lod";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -9,6 +11,10 @@ export const BUS_X0 = -13;
 export const GATE_X: Record<StepName, number> = { plan: -9.5, research: -1, write: 9 };
 export const LANE_GAP = 8.5;
 export const laneZ = (slot: number) => 3 - slot * LANE_GAP;
+/** Lane a run is drawn in: its slot, or (while LOD groups a crowd) slot % 6 so 200 runs never march off the board. */
+export const laneSlot = (slot: number) => (lod.grouped ? laneOfSlot(slot) : slot);
+/** Bus z of a run: its lane, fanned ±2.4 per extra expanded run sharing that lane (LOD laneRank; 0 when not grouped). */
+export const runZ = (runId: string, slot: number) => laneZ(laneSlot(slot)) + alt(laneRank(runId)) * 2.4;
 export const CHIP_DZ = 2.2; // chips sit in front of their gate
 
 // ---- FalkorDB memory bank (right side)
@@ -31,21 +37,20 @@ export const IO_SPINE_X = IO_X + 2.1;
 export const portZ = (slot: number) => 6 - slot * 6.6;
 
 // ---- chips: where each instance wants to sit
-export const isScout = (i: Instance) => i.type === "graph_scout" || i.type === "records_scout";
-const scoutK = (id: string) => Number(id.slice(id.lastIndexOf(":") + 1)) || 0;
+export const isScout = (i: Instance) => isSubRole(i.type);
 
 export function homeOf(i: Instance, out: THREE.Vector3) {
-  const slot = world.runs.get(i.run)?.slot ?? 0;
-  const cz = laneZ(slot) + CHIP_DZ;
-  if (i.type === "planner") return out.set(GATE_X.plan, 0, cz);
-  if (i.type === "writer") return out.set(GATE_X.write, 0, cz);
-  if (i.type === "researcher") return out.set(GATE_X.research, 0, cz);
-  // scouts: fan out from the researcher, spreading as more are spawned
-  let n = 1;
-  for (const o of world.instances.values()) if (o.run === i.run && isScout(o)) n = Math.max(n, scoutK(o.id) + 1);
-  const k = scoutK(i.id);
-  const a = n <= 1 ? 0.3 : -0.55 + (k / (n - 1)) * 1.65;
-  const R = 4.9;
+  const cz = runZ(i.run, world.runs.get(i.run)?.slot ?? 0) + CHIP_DZ;
+  const k = roleIndex(i); // stable slot among same-role agents of this run
+  const id = i.id;
+  if (!isScout(i)) {
+    // seeded nudge (stays in front of its gate); extra same-role chips sit beside it, never on top
+    const gx = i.type === "planner" ? GATE_X.plan : i.type === "writer" ? GATE_X.write : GATE_X.research;
+    return out.set(gx + jit(id, 51) * 0.7 + alt(k) * 2.6, 0, cz + jit(id, 52) * 0.5);
+  }
+  // scouts: fan out from the researcher; each run's fan leans its own way, each chip sits at its own reach
+  const a = 0.3 + jit(i.run, 53) * 0.5 + alt(k) * 0.6;
+  const R = 4.6 + hash01(i.run, 54) * 0.6 + jit(id, 55) * 0.4;
   return out.set(GATE_X.research + 0.4 + Math.cos(a) * R, 0, cz + 0.4 + Math.sin(a) * R * 0.62);
 }
 

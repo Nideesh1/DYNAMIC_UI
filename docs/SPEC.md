@@ -9,8 +9,7 @@ your agents ──agentglow.watch()──► agentglow serve (:8100) ──SSE w
 
 ## User experience (the whole point — keep it this simple)
 ```bash
-pip install agentglow
-agentglow serve                      # http://localhost:8100  (gallery at /, scenes at /neural, /orbit, …)
+uvx agentglow serve                  # or: uv add agentglow && uv run agentglow serve  → http://localhost:8100  (gallery at /, scenes at /neural, /orbit, …)
 ```
 ```python
 import agentglow
@@ -41,7 +40,8 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
   uses the existing global TracerProvider if it's an SDK provider (keeps Langfuse etc.), else creates one;
   adds `LiveSpanProcessor(url)` (on_start + on_end → background-thread batched POST to `/v1/live`, ~50 ms,
   never blocks, drops on failure); if `instrument`, enables OpenInference LangChain instrumentation (covers
-  LangChain/LangGraph/deepagents) and Hatchet instrumentation when those packages are installed and not
+  LangChain/LangGraph/deepagents), OpenInference OpenAI Agents instrumentation (extra `[openai-agents]`, added next
+  to the SDK's own trace processors) and Hatchet instrumentation when those packages are installed and not
   already instrumented. Idempotent. Also exports `agentglow.otel.LiveSpanProcessor`, `agentglow.register_mcp`.
 
 ## Span → world event mapping (backend `mapper.py`)
@@ -53,7 +53,9 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 | Run | first span seen for a run id | `run started` (topic: `agentglow.run.topic` or workflow/root span name); `run completed/failed` when the root span ends |
 | Step | Hatchet task/step span (or `agentglow.step`) | `step running` on start, `step done/failed` on end |
 | Agent | `agentglow.agent` attr; or `gen_ai.operation.name=invoke_agent`; or OpenInference kind `AGENT`; or a LangGraph agent graph span (determine the reliable signal for deepagents from REAL captured spans — e.g. the compiled graph's span name = agent `name=`, and deepagents subagents invoked under the `task` tool) | `spawn` on start (parent = owning agent; `subagent: true` when it runs under a tool span such as `task`) + delegation `message`; `exit` on end (+ result `message`) |
-| LLM | OpenInference kind `LLM` or `gen_ai.operation.name ∈ {chat, text_completion, generate_content}` | `agent thinking` on start; `llm` on end (tokens from `gen_ai.usage.input_tokens/output_tokens` or `llm.token_count.prompt/completion`) |
+| OpenAI Agents SDK | OpenInference `AGENT` span with no agent above it is a candidate: an agent span below it → workflow container (the SDK trace, never spawned); an LLM/tool below it → agent. Agent spans are siblings under the container | handoff = next top-level agent gets the previous one as parent (`handoff → X`); `handoff` tool span named after the model's `transfer_to_*` call; `agent.as_tool` agent under the function span → `subagent: true`, delegation text = tool input; exit text / run `final` = agent's last LLM text |
+| langgraph-supervisor | team graph whose supervisor node (`<sup>` node → `<sup>` graph) calls a `transfer_to_*` tool | ONE supervisor agent for the run (later turns alias it; exits when the team graph ends); workers (`<name>` → `call_agent` → `<name>` graph) → `subagent: true` under it, delegation text = supervisor's turn text else latest user request; supervisor `waiting` while a worker runs; `transfer_*` tools emit no `tool` event |
+| LLM | OpenInference kind `LLM` or `gen_ai.operation.name ∈ {chat, text_completion, generate_content}` | `agent thinking` on start; `llm` on end — a span guessed from its parent node but ending with a non-LLM kind (react agent's RunnableSequence/call_model/should_continue) is dropped (tokens from `gen_ai.usage.input_tokens/output_tokens` or `llm.token_count.prompt/completion`) |
 | Tool | OpenInference kind `TOOL` or `gen_ai.operation.name=execute_tool` | `tool` |
 | MCP | span with `mcp.server.name` or `agentglow.mcp.server` (+ `agentglow.mcp.resource`, `agentglow.mcp.resource_kind` ∈ db,warehouse,spark,api,storage,queue) | `mcp call` (start, pending) / `mcp result` (end); auto `mcp_register` of server+resource |
 | Graph/DB | `db.system` set | `graph` read/write (`agentglow.db.op` or inferred from query text); node names from `agentglow.graph.nodes` (list or JSON string) |

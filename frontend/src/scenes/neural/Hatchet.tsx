@@ -1,10 +1,13 @@
 /** Hatchet run = a soft aura in run.color behind its agents + one label (topic, plan › research › write). */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { RUN_LINGER_MS, STEPS, useWorld, world, type Run } from "../shared/world";
-import { clamp01, easeOut, glowSpriteMaterial, slotOf } from "./fx";
+import { Label3D, runStepsLine } from "../shared/Label3D";
+import { RUN_LINGER_MS, useWorld, world, type Run } from "../shared/world";
+import { isRunExpanded, lod } from "../shared/lod";
+import { clamp01, easeOut, glowSpriteMaterial, rankOffset, slotOf } from "./fx";
+
+const TMP = new THREE.Vector3();
 
 function RunAura({ run }: { run: Run }) {
   const S = slotOf(run.slot);
@@ -13,8 +16,11 @@ function RunAura({ run }: { run: Run }) {
   const center = useMemo(() => S.dir.clone().multiplyScalar(S.somaR + S.fanLen * 0.35).setZ(-1.5), [S]);
   const horizontal = Math.abs(S.dir.x) > 0.5;
   const aura = useRef<THREE.Sprite>(null);
+  const shift = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
     const now = performance.now();
+    // several expanded runs in one lane (LOD) fan out along the lane tangent
+    if (shift.current) shift.current.position.lerp(TMP.copy(S.tan).multiplyScalar(rankOffset(run.id)), 0.05);
     const grow = easeOut((now - run.startedAt) / 1200);
     const fade = run.endedAt ? clamp01(1 - (now - run.endedAt - (RUN_LINGER_MS - 2500)) / 2500) : 1;
     const breathe = 0.9 + 0.1 * Math.sin(clock.elapsedTime * 0.6 + run.slot);
@@ -28,46 +34,43 @@ function RunAura({ run }: { run: Run }) {
     return v;
   }, [S, horizontal]);
   return (
-    <>
+    <group ref={shift}>
       <sprite ref={aura} material={mat} position={center} />
       <RunLabel run={run} pos={labelPos} />
-    </>
+    </group>
   );
 }
 
 function RunLabel({ run, pos }: { run: Run; pos: THREE.Vector3 }) {
-  useWorld(); // DOM-only re-render on events
-  const current = STEPS.find((s) => run.steps[s] === "running");
+  useWorld(); // re-render on events (props only — no DOM)
   const done = run.status !== "started";
   return (
-    <Html center position={pos} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-      <div className="scene-label" style={{ ["--c" as string]: run.color, opacity: done ? 0.5 : 1, display: "grid", gap: 2, textAlign: "center", padding: "4px 10px" }}>
-        <span>{run.topic}</span>
-        <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.03em", color: "#94a3b8" }}>
-          hatchet ·{" "}
-          {STEPS.map((s, i) => (
-            <span key={s}>
-              {i ? " › " : ""}
-              <span style={s === current ? { color: "#fde68a", fontWeight: 800 } : run.steps[s] === "done" ? { color: "#cbd5e1" } : { opacity: 0.55 }}>{s}</span>
-            </span>
-          ))}
-          {done ? " ✓" : ""}
-        </span>
-      </div>
-    </Html>
+    <Label3D
+      position={pos}
+      text={run.topic}
+      secondary={runStepsLine(run, { base: "#94a3b8", current: "#fde68a", done: "#cbd5e1" }, ["running…", "run complete"])}
+      color={run.color}
+      size={0.34}
+      maxWidth={10}
+      opacity={done ? 0.5 : 1}
+      fadeMs={400}
+      pxRange={[10, 15]}
+    />
   );
 }
 
 export function Pathways() {
   const [list, setList] = useState<Run[]>([]);
   const known = useRef(new Set<string>());
+  const seen = useRef(-1);
   useFrame(() => {
     const m = world.runs;
-    let changed = m.size !== known.current.size;
+    let changed = m.size !== known.current.size || seen.current !== lod.version;
     if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
     if (changed) {
       known.current = new Set(m.keys());
-      setList([...m.values()]);
+      seen.current = lod.version;
+      setList([...m.values()].filter((r) => isRunExpanded(r.id)));
     }
   });
   return (

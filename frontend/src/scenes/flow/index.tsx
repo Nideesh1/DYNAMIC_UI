@@ -6,15 +6,18 @@
  * bright eddies that condense out of the field (and out of their parent), spin while working and dissolve back into
  * the current on exit. Messages are comet streams; MCP servers are pulsars at the rim with tethers while calls wait.
  */
-import { Html, OrbitControls } from "@react-three/drei";
+import { OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { Hud } from "../shared/Hud";
 import { useSceneSetup, type Galaxy } from "../shared/useSceneSetup";
-import { STEPS, TYPE_COLOR, TYPE_LABEL, tick, world, type Run } from "../shared/world";
-import { FlowEngine, RUN_CENTERS, RUN_SLOTS, attractorPos, mcpPos } from "./engine";
+import { STEPS, TYPE_COLOR, TYPE_LABEL, tick, world, type Run, useWorld } from "../shared/world";
+import { FlowEngine, RUN_CENTERS, RUN_SLOTS, attractorPos, mcpPos, runSpin } from "./engine";
+import { isRunExpanded, lod, lodTick } from "../shared/lod";
+import { FlowClusters } from "./Clusters";
 import "./flow.css";
 
 const _v = new THREE.Vector3();
@@ -26,6 +29,7 @@ function Field({ engine, onSelect }: { engine: FlowEngine; onSelect: (id: string
   }, [engine, gl]);
   useFrame((state, dt) => {
     tick();
+    lodTick();
     engine.update(dt, performance.now(), state.clock.elapsedTime);
   });
   const click = (e: ThreeEvent<MouseEvent>) => {
@@ -67,40 +71,38 @@ function Field({ engine, onSelect }: { engine: FlowEngine; onSelect: (id: string
 // ------------------------------------------------------------------ labels (few, DOM updated via refs — no per-frame renders)
 
 function RunLabel({ run }: { run: Run }) {
+  useWorld(); // re-render on events (props only — no DOM)
   const s = run.slot % RUN_SLOTS;
-  const chips = useRef<(HTMLSpanElement | null)[]>([]);
-  const steps = useRef<(HTMLDivElement | null)[]>([]);
-  const last = useRef("");
-  useFrame(() => {
-    const k = STEPS.map((st) => run.steps[st]).join();
-    if (k === last.current) return;
-    last.current = k;
-    STEPS.forEach((st, i) => {
-      chips.current[i]?.setAttribute("data-s", run.steps[st]);
-      steps.current[i]?.setAttribute("data-s", run.steps[st]);
-    });
-  });
-  const pos = useMemo(() => STEPS.map((_, k) => attractorPos(s, k, new THREE.Vector3()).toArray()), [s]);
+  const pos = useMemo(() => STEPS.map((_, k) => attractorPos(s, k, new THREE.Vector3(), runSpin(run.id)).toArray()), [s, run.id]);
+  const chip = (st: string) => (st === "running" ? run.color : st === "done" ? "#cbd5e1" : st === "failed" ? "#fecaca" : "#64748b");
   return (
     <group>
-      <Html center position={[RUN_CENTERS[s][0], 0.6, RUN_CENTERS[s][1]]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-        <div className="flow-run" style={{ ["--c" as string]: run.color }}>
-          <div className="scene-label">hatchet · {run.topic}</div>
-          <div className="flow-steps">
-            {STEPS.map((st, i) => (
-              <span key={st} ref={(el) => void (chips.current[i] = el)} data-s={run.steps[st]}>
-                {st}
-              </span>
-            ))}
-          </div>
-        </div>
-      </Html>
+      <Label3D
+        position={[RUN_CENTERS[s][0], 0.6, RUN_CENTERS[s][1]]}
+        text={`${run.hasSteps ? "hatchet · " : ""}${run.topic}`}
+        secondary={STEPS.map((st, i) => ({ text: `${i ? "  " : ""}${st.toUpperCase()}`, color: chip(run.steps[st]) }))}
+        secondarySize={0.24}
+        color={run.color}
+        size={0.34}
+        maxWidth={10}
+        fadeMs={300}
+        pxRange={[10, 14]}
+      />
       {STEPS.map((st, i) => (
-        <Html key={st} center position={[pos[i][0], pos[i][1] + 1.1, pos[i][2]]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-          <div className="flow-step" ref={(el) => void (steps.current[i] = el)} data-s={run.steps[st]} style={{ ["--c" as string]: run.color }}>
-            {st}
-          </div>
-        </Html>
+        <Label3D
+          key={st}
+          position={[pos[i][0], pos[i][1] + 1.1, pos[i][2]]}
+          text={st}
+          font="mono"
+          plate="none"
+          uppercase
+          letterSpacing={0.08}
+          textColor={run.color}
+          size={0.24}
+          opacity={run.steps[st] === "running" ? 1 : run.steps[st] === "done" ? 0.75 : 0.55}
+          fadeMs={300}
+          pxRange={[7.5, 10.5]}
+        />
       ))}
     </group>
   );
@@ -108,12 +110,17 @@ function RunLabel({ run }: { run: Run }) {
 
 function RunLabels() {
   const [runs, setRuns] = useState<Run[]>([]);
-  const key = useRef("");
+  const known = useRef(new Set<string>());
+  const seen = useRef(-1);
   useFrame(() => {
-    const k = [...world.runs.keys()].join();
-    if (k !== key.current) {
-      key.current = k;
-      setRuns([...world.runs.values()]);
+    // membership check without per-frame string building (hundreds of runs when crowded)
+    const m = world.runs;
+    let changed = m.size !== known.current.size || seen.current !== lod.version;
+    if (!changed) for (const id of m.keys()) if (!known.current.has(id)) changed = true;
+    if (changed) {
+      known.current = new Set(m.keys());
+      seen.current = lod.version;
+      setRuns([...m.values()].filter((r) => isRunExpanded(r.id)));
     }
   });
   return (
@@ -139,11 +146,7 @@ function McpLabels() {
       {names.map((s) => {
         const p = mcpPos(s.slot, new THREE.Vector3());
         return (
-          <Html key={s.name} center position={[p.x, p.y + 1.5, p.z]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-            <div className="scene-label flow-hint" style={{ ["--c" as string]: s.color }}>
-              mcp · {s.name}
-            </div>
-          </Html>
+          <Label3D key={s.name} position={[p.x, p.y + 1.5, p.z]} text={`mcp · ${s.name}`} color={s.color} size={0.3} pxRange={[9, 13]} />
         );
       })}
     </>
@@ -153,27 +156,25 @@ function McpLabels() {
 /** One floating label that follows the most recently active agent eddy. */
 function FocusLabel({ engine }: { engine: FlowEngine }) {
   const g = useRef<THREE.Group>(null);
-  const el = useRef<HTMLDivElement>(null);
+  const el = useRef<Label3DHandle>(null);
   const last = useRef("");
   useFrame(() => {
     const id = engine.selectedId ?? world.focus;
     const s = id ? engine.slotOf(id) : null;
     const show = !!s && !!s.inst && !s.inst.exitAt;
-    if (el.current) el.current.style.opacity = show ? "1" : "0";
+    el.current?.setOpacity(show ? 1 : 0);
     if (!s || !s.inst || !g.current || !el.current) return;
     g.current.position.set(s.x, s.y + 1.25, s.z);
     const txt = `${s.inst.name} · ${s.inst.status}`;
     if (txt !== last.current) {
       last.current = txt;
-      el.current.textContent = txt;
-      el.current.style.setProperty("--c", TYPE_COLOR[s.inst.type]);
+      el.current.setText(txt);
+      el.current.setColor(TYPE_COLOR[s.inst.type]);
     }
   });
   return (
     <group ref={g}>
-      <Html center zIndexRange={[6, 0]} style={{ pointerEvents: "none" }}>
-        <div ref={el} className="scene-label flow-hint" style={{ transition: "opacity .3s" }} />
-      </Html>
+      <Label3D ref={el} text="" size={0.3} opacity={0} fadeMs={300} pxRange={[9, 13]} renderOrder={24} />
     </group>
   );
 }
@@ -181,27 +182,25 @@ function FocusLabel({ engine }: { engine: FlowEngine }) {
 /** Label for the latest FalkorDB flare (node name, read/write). */
 function FlareLabel({ engine }: { engine: FlowEngine }) {
   const g = useRef<THREE.Group>(null);
-  const el = useRef<HTMLDivElement>(null);
+  const el = useRef<Label3DHandle>(null);
   const last = useRef("");
   useFrame(() => {
     const f = engine.lastFlare;
     if (!f || !g.current || !el.current) return;
     const age = (performance.now() - f.at) / 1000;
-    el.current.style.opacity = age < 2.2 ? "1" : "0";
+    el.current.setOpacity(age < 2.2 ? 1 : 0);
     engine.anchorWorld(f.idx, _v);
     g.current.position.set(_v.x, _v.y + 0.9, _v.z);
-    const txt = `${f.op === "write" ? "◆ wrote" : "read"} · ${f.name}`;
+    const txt = `${f.op === "write" ? "wrote" : "read"} · ${f.name}`;
     if (txt !== last.current) {
       last.current = txt;
-      el.current.textContent = txt;
-      el.current.style.setProperty("--c", f.op === "write" ? "#ffffff" : "#a5b4fc");
+      el.current.setText(txt);
+      el.current.setColor(f.op === "write" ? "#ffffff" : "#a5b4fc");
     }
   });
   return (
     <group ref={g}>
-      <Html center zIndexRange={[6, 0]} style={{ pointerEvents: "none" }}>
-        <div ref={el} className="scene-label flow-hint" style={{ transition: "opacity .4s" }} />
-      </Html>
+      <Label3D ref={el} text="" size={0.28} opacity={0} fadeMs={400} pxRange={[8.5, 12]} renderOrder={24} />
     </group>
   );
 }
@@ -213,15 +212,12 @@ function FlowScene({ galaxy, selected, onSelect }: { galaxy: Galaxy; selected: s
   return (
     <>
       <Field engine={engine} onSelect={onSelect} />
+      <FlowClusters />
       <RunLabels />
       <McpLabels />
       <FocusLabel engine={engine} />
       <FlareLabel engine={engine} />
-      <Html center position={[0, -1.3, 0]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-        <div className="scene-label flow-label-core" style={{ ["--c" as string]: "#a5b4fc" }}>
-          FalkorDB
-        </div>
-      </Html>
+      <Label3D position={[0, -1.3, 0]} text="FalkorDB" color="#a5b4fc" size={0.34} pxRange={[9.5, 13]} />
     </>
   );
 }
@@ -246,7 +242,7 @@ export default function Scene() {
           <Noise opacity={0.03} />
         </EffectComposer>
       </Canvas>
-      <Hud title="flow · murmuration" subtitle="agents are eddies condensing out of the current · hatchet runs are vortices · falkordb is the nebula" selected={selected} onClose={() => setSelected(null)} />
+      <Hud title="flow · murmuration" subtitle="agents are eddies condensing out of the current · hatchet runs are vortices · the knowledge graph is the nebula" selected={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

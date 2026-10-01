@@ -1,8 +1,8 @@
 /** MCP servers as anglerfish lurking at the edge of the abyss; pending calls = live lure-line tethers to the jelly. */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { waitSeconds, world, type McpServer } from "../shared/world";
 import { MOTION, arcPoint, dotTexture, jellyPos, satPos } from "./layout";
 import { makeBellMaterial } from "./materials";
@@ -28,7 +28,7 @@ function Angler({ srv }: { srv: McpServer }) {
   const bulb = useRef<THREE.Mesh>(null);
   const halo = useRef<THREE.Sprite>(null);
   const sonar = useRef<THREE.Mesh>(null);
-  const label = useRef<HTMLDivElement>(null);
+  const label = useRef<Label3DHandle>(null);
   const base = useMemo(() => new THREE.Color(srv.color), [srv.color]);
   const bodyMat = useMemo(() => makeBellMaterial(srv.color), [srv.color]);
   const bulbMat = useMemo(() => new THREE.MeshBasicMaterial({ toneMapped: false }), []);
@@ -80,7 +80,7 @@ function Angler({ srv }: { srv: McpServer }) {
     }
     // publish lure world position for packets and tethers
     if (bulb.current) bulb.current.getWorldPosition(pos);
-    if (label.current) label.current.style.opacity = String(appear * (busy ? 1 : 0.75));
+    label.current?.setOpacity(appear * (busy ? 1 : 0.75));
   });
 
   return (
@@ -110,11 +110,7 @@ function Angler({ srv }: { srv: McpServer }) {
           </mesh>
         </group>
       </group>
-      <Html center position={[0, -1.15, 0]} distanceFactor={30} style={{ pointerEvents: "none" }}>
-        <div ref={label} className="scene-label" style={{ ["--c" as string]: srv.color }}>
-          mcp · {srv.name}
-        </div>
-      </Html>
+      <Label3D ref={label} position={[0, -1.15, 0]} text={`mcp · ${srv.name}`} color={srv.color} size={0.3} opacity={0} pxRange={[9, 13]} />
     </group>
   );
 }

@@ -2,17 +2,27 @@
 
 **Live 3D views of your agent system, driven only by OpenTelemetry.** Every agent is a glowing instance that is
 born when its span starts, pulses on each LLM call, fires tool/MCP/graph packets, delegates to subagents, and fades
-when its span ends. Works with LangChain, LangGraph, deepagents (via OpenInference), Hatchet workflows, and any
-agent framework that emits OTel spans.
+when its span ends. Works with LangChain, LangGraph (incl. `langgraph-supervisor`), deepagents, the OpenAI Agents SDK
+(`agentglow[openai-agents]`), Hatchet workflows, Claude Code (via hooks), and any agent framework that emits OTel spans.
 
-![Gallery](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/agentglow-gallery.png)
-![Neural scene](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/screens/agentglow-neural.png)
+![AgentGlow — neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.gif)
+
+15 themes:
+
+| | | |
+|:-:|:-:|:-:|
+| ![neural](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/neural.jpg) **neural** | ![hive](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hive.jpg) **hive** | ![constellation](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/constellation.jpg) **constellation** |
+| ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/orbit.jpg) **orbit** | ![forest](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/forest.jpg) **forest** | ![mycelium](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/mycelium.jpg) **mycelium** |
+| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![airport](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/airport.jpg) **airport** | ![factory](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/factory.jpg) **factory** |
+| ![city](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/city.jpg) **city** | ![ocean](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/ocean.jpg) **ocean** | ![subway](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/subway.jpg) **subway** |
+| ![circuit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/circuit.jpg) **circuit** | ![tunnel](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/tunnel.jpg) **tunnel** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** |
 
 ## Quickstart
 
 ```bash
-pip install "agentglow[langchain]"
-agentglow serve                      # → http://localhost:8100 (gallery at /, scenes at /neural, /orbit, …)
+uvx agentglow serve                  # → http://localhost:8100 (gallery at /, scenes at /neural, /orbit, …)
+uv add "agentglow[langchain]"        # in your agent project (or: uv pip install "agentglow[langchain]")
+# pip install "agentglow[langchain]" also works
 ```
 
 ```python
@@ -56,10 +66,17 @@ agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/
 | `POST /v1/live` | span start/end batches from `watch()` |
 | `POST /v1/traces` | standard OTLP/HTTP (protobuf or JSON) — point any OTel SDK or Collector here (ended spans only) |
 | `GET /live/stream` | SSE world events; new viewers get MCP topology + runs still in progress |
-| `GET /live/graph` | graph sample for the scenes from FalkorDB (`--falkor` / `AGENTGLOW_FALKOR_URL`), else 404 |
+| `GET /live/graph` | graph sample for the scenes from FalkorDB (`--falkor` / `AGENTGLOW_FALKOR_URL`), else an empty graph |
+| `POST /v1/claude-code` | Claude Code HTTP hooks → its main agent + subagents in 3D (see `examples/claude-code`) |
 | `GET /live/health` | status |
+| `POST /live/run` `{topic}` | optional: forwards to `AGENTGLOW_RUN_WEBHOOK` (your trigger endpoint) and returns its JSON, e.g. `{run_id}`; health reports `run: true` and the UI shows "▶ Run agents" only when it is set |
 
 Embed in your own React app: `npm i agentglow` → `<AgentScene theme="neural" source="http://localhost:8100" />`.
+
+## Scale
+
+Above 12 live agents the scenes auto-group older runs into clickable clusters and keep the newest ~10 in full
+detail (~60 fps with 500 live agents).
 
 ## Deploying
 

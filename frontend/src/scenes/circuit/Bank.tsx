@@ -2,10 +2,10 @@
  * FalkorDB as a MEMORY BANK: a representative sample of graph nodes as instanced memory cells (colored by kind),
  * graph edges as arcing traces between cells. Reads light a cell (+ its edges); writes flash white and ripple across the bank.
  */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
 import { KIND_COLOR, world } from "../shared/world";
 import { nodeIndex, type Galaxy } from "../shared/useSceneSetup";
 import { BANK_COLS, BANK_N, BANK_PX, BANK_PZ, BANK_SPINE_X, BANK_X0, BANK_Z0, bankCell, rgb } from "./layout";
@@ -31,7 +31,7 @@ export function Bank({ galaxy }: { galaxy: Galaxy }) {
   const leds = useRef<THREE.InstancedMesh>(null);
   const rings = useRef<THREE.InstancedMesh>(null);
   const labelGroups = useRef<(THREE.Group | null)[]>([]);
-  const labelDivs = useRef<(HTMLDivElement | null)[]>([]);
+  const labelDivs = useRef<(Label3DHandle | null)[]>([]);
   const labelKeys = useRef<number[]>(Array(LABELS).fill(-1));
   const n = bankSize(galaxy);
   const rows = Math.ceil(n / BANK_COLS);
@@ -176,10 +176,10 @@ export function Bank({ galaxy }: { galaxy: Galaxy }) {
         g.visible = true;
         g.position.set(pos[i].x, 1.4, pos[i].z);
         if (labelKeys.current[li] !== i) {
-          d.textContent = `${f.op === "write" ? "WRITE" : "read"} · ${f.node}`;
-          d.style.setProperty("--c", f.op === "write" ? "#ffffff" : KIND_COLOR[galaxy.nodes[i].kind] ?? "#22d3ee");
+          d.setText(`${f.op === "write" ? "WRITE" : "read"} · ${f.node}`);
+          d.setColor(f.op === "write" ? "#ffffff" : KIND_COLOR[galaxy.nodes[i].kind] ?? "#22d3ee");
         }
-        d.style.opacity = String(Math.min(1, (1700 - age) / 400));
+        d.setOpacity(Math.min(1, (1700 - age) / 400));
       }
       labelKeys.current[li++] = i;
     }
@@ -188,7 +188,7 @@ export function Bank({ galaxy }: { galaxy: Galaxy }) {
       const g = labelGroups.current[li];
       if (g) g.visible = false;
       const d = labelDivs.current[li];
-      if (d) d.style.opacity = "0";
+      d?.setOpacity(0);
     }
     m.instanceMatrix.needsUpdate = true;
     l.instanceMatrix.needsUpdate = true;
@@ -235,16 +235,10 @@ export function Bank({ galaxy }: { galaxy: Galaxy }) {
       </instancedMesh>
       {Array.from({ length: LABELS }, (_, k) => (
         <group key={k} ref={(g) => void (labelGroups.current[k] = g)} visible={false}>
-          <Html center style={{ pointerEvents: "none" }}>
-            <div ref={(el) => void (labelDivs.current[k] = el)} className="scene-label" style={{ opacity: 0, transition: "opacity 120ms" }} />
-          </Html>
+          <Label3D ref={(el) => void (labelDivs.current[k] = el)} text="" size={0.24} opacity={0} fadeMs={120} pxRange={[8, 12]} />
         </group>
       ))}
-      <Html position={[cx, 0.4, BANK_Z0 + d + 0.7]} center style={{ pointerEvents: "none" }}>
-        <div className="scene-label" style={{ ["--c" as string]: "#22d3ee", fontSize: 14, letterSpacing: "0.06em" }}>
-          FalkorDB · knowledge graph memory bank
-        </div>
-      </Html>
+      <GraphLabel3D position={[cx, 0.4, BANK_Z0 + d + 0.7]} suffix=" · memory bank" color="#22d3ee" letterSpacing={0.06} size={0.4} pxRange={[10, 15]} />
     </group>
   );
 }

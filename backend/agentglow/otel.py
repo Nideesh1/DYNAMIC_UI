@@ -47,8 +47,22 @@ def span_to_dict(span: ReadableSpan) -> dict:
         "start_time_ms": (span.start_time or 0) // 1_000_000,
         "end_time_ms": span.end_time // 1_000_000 if span.end_time else None,
         "status": status,
-        "attributes": {k: _attr(v) for k, v in (span.attributes or {}).items()},
+        "attributes": _attrs(span.attributes or {}),
     }
+
+
+def _attrs(raw) -> dict:
+    out = {k: _attr(v) for k, v in raw.items()}
+    full = raw.get("output.value")
+    if isinstance(full, str) and len(full) > _HEAD + _TAIL:
+        # long outputs get truncated (and newer models append lots of metadata after the text), so extract the
+        # agent's final message text from the full value before it's cut
+        from .mapper import text_of
+
+        text = text_of(full, 2000)
+        if text:
+            out["agentglow.output_text"] = text
+    return out
 
 
 class LiveSpanProcessor(SpanProcessor):

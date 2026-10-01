@@ -5,7 +5,7 @@ description = "Live 3D views of agent systems, driven only by OpenTelemetry span
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-keywords = ["opentelemetry", "agents", "observability", "langgraph", "deepagents", "visualization"]
+keywords = ["opentelemetry", "agents", "observability", "langgraph", "deepagents", "openai-agents", "visualization"]
 dependencies = [
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 langchain = ["openinference-instrumentation-langchain>=0.1.30"]
+openai-agents = ["openinference-instrumentation-openai-agents>=1.0"]
 hatchet = ["hatchet-sdk[otel]>=1.0"]
 falkordb = ["falkordb>=1.0"]
 

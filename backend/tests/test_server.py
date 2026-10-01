@@ -105,10 +105,34 @@ def test_sse_stream_replays_over_real_server():
 
 def test_graph_404_without_provider_and_health_and_spa():
     c = client()
-    assert c.get("/live/graph").status_code == 404
+    assert c.get("/live/graph").json() == {"nodes": [], "links": []}
     assert c.get("/live/health").json()["ok"] is True
     for path in ("/", "/neural", "/orbit"):
         r = c.get(path)
         assert r.status_code == 200
     assert c.get("/assets/missing.js").status_code == 404
     assert c.options("/v1/live", headers={"Origin": "http://x", "Access-Control-Request-Method": "POST"}).headers["access-control-allow-origin"] in ("*", "http://x")
+
+
+def test_run_webhook_forwards_topic():
+    import httpx
+
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"], seen["body"] = str(req.url), json.loads(req.content)
+        return httpx.Response(200, json={"run_id": "r-123"})
+
+    c = TestClient(create_app(run_webhook="http://trigger:8300/run", run_transport=httpx.MockTransport(handler)))
+    assert c.get("/live/health").json()["run"] is True
+    r = c.post("/live/run", json={"topic": "Why is churn rising?"})
+    assert r.status_code == 200 and r.json() == {"run_id": "r-123"}
+    assert seen == {"url": "http://trigger:8300/run", "body": {"topic": "Why is churn rising?"}}
+    assert c.post("/live/run", json={}).status_code == 400
+
+
+def test_run_disabled_without_webhook(monkeypatch):
+    monkeypatch.delenv("AGENTGLOW_RUN_WEBHOOK", raising=False)
+    c = client()
+    assert c.get("/live/health").json()["run"] is False
+    assert c.post("/live/run", json={"topic": "x"}).status_code == 404

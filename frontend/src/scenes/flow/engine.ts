@@ -17,6 +17,7 @@ import {
   TYPE_COLOR,
   RUN_LINGER_MS,
   energy,
+  hash01,
   presence,
   waitSeconds,
   world,
@@ -24,6 +25,8 @@ import {
   type Instance,
   type Run,
 } from "../shared/world";
+import { alt, isSubRole, jit, roleIndex } from "../shared/spread";
+import { isExpanded, isRunExpanded, lod, lodScale } from "../shared/lod";
 
 export const REDUCED = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const MOTION = REDUCED ? 0.3 : 1;
@@ -53,9 +56,13 @@ export const RUN_CENTERS: [number, number][] = [
   [12, -12],
   [0, 14],
 ];
-export const runBase = (s: number) => Math.atan2(-RUN_CENTERS[s][1], -RUN_CENTERS[s][0]) + Math.PI / 3;
-export function attractorPos(s: number, k: number, out: THREE.Vector3) {
-  const a = runBase(s) + (k * TAU) / 3;
+/** seeded per-run rotation of a run's step triangle (±~26°), so each run's vortex is laid out its own way */
+export const runSpin = (runId: string) => jit(runId, 71) * 0.9;
+/** current spin per run slot (written by FlowEngine.syncRuns) */
+const RUN_SPIN = new Float32Array(6);
+export const runBase = (s: number, spin = RUN_SPIN[s]) => Math.atan2(-RUN_CENTERS[s][1], -RUN_CENTERS[s][0]) + Math.PI / 3 + spin;
+export function attractorPos(s: number, k: number, out: THREE.Vector3, spin = RUN_SPIN[s]) {
+  const a = runBase(s, spin) + (k * TAU) / 3;
   return out.set(RUN_CENTERS[s][0] + Math.cos(a) * RING_R, 0.35, RUN_CENTERS[s][1] + Math.sin(a) * RING_R);
 }
 const MCP_ANG = [-150, -30, -100, 150, 30, -62, -128, 90].map((d) => (d * Math.PI) / 180);
@@ -67,7 +74,7 @@ export function mcpPos(slot: number, out: THREE.Vector3) {
 
 const TYPE_RGB = Object.fromEntries(Object.entries(TYPE_COLOR).map(([k, v]) => [k, new THREE.Color(v)])) as Record<AgentType, THREE.Color>;
 const STEP_K = { planner: 0, researcher: 1, graph_scout: 1, records_scout: 1, data_scout: 1, writer: 2 } as const;
-const isScout = (t: AgentType) => t === "graph_scout" || t === "records_scout";
+const isScout = isSubRole;
 
 type Slot = {
   used: boolean;
@@ -89,12 +96,15 @@ type Slot = {
   count: number;
   want: number;
   rank: number;
+  /** seeded placement (set once at alloc): angle offset + radius around the run's vortex */
+  dTh: number;
+  rad: number;
   released: boolean;
   p: number;
   e: number;
   waitMcp: number;
 };
-const newSlot = (): Slot => ({ used: false, id: "", inst: null, seen: 0, x: 0, y: 0, z: 0, r: 1, g: 1, b: 1, omega: 0, bright: 0, swirl: 0, rscale: 1, tiltA: 0, tiltB: 0, count: 0, want: 0, rank: 0, released: false, p: 0, e: 0, waitMcp: 0 });
+const newSlot = (): Slot => ({ used: false, id: "", inst: null, seen: 0, x: 0, y: 0, z: 0, r: 1, g: 1, b: 1, omega: 0, bright: 0, swirl: 0, rscale: 1, tiltA: 0, tiltB: 0, count: 0, want: 0, rank: 0, dTh: 0, rad: 0, released: false, p: 0, e: 0, waitMcp: 0 });
 
 // deterministic hash → [0,1)
 const h1 = (n: number) => {
@@ -182,7 +192,6 @@ export class FlowEngine {
   // ---- slots (agent instances)
   slots: Slot[] = Array.from({ length: MAX_SLOTS }, newSlot);
   idToSlot = new Map<string, number>();
-  sib = new Map<string, number>();
   pendingByInst = new Map<string, number>();
 
   // ---- runs
@@ -445,8 +454,16 @@ export class FlowEngine {
     s.tiltB = (h1(si * 3.1 + now) - 0.5) * 0.7;
     s.rscale = isScout(inst.type) ? 0.72 : 1;
     s.want = Math.round((isScout(inst.type) ? 380 : 620) * (REDUCED ? 0.5 : 1));
-    s.rank = 0;
-    if (isScout(inst.type) && inst.parent) for (const o of this.slots) if (o.used && o !== s && o.inst?.parent === inst.parent && isScout(o.inst.type)) s.rank++;
+    // seeded per run (fan lean + side) and per agent (radius); same-role agents of one run get their own angle
+    s.rank = roleIndex(inst);
+    if (isScout(inst.type)) {
+      const side = hash01(inst.run, 72) < 0.5 ? -1 : 1;
+      s.dTh = jit(inst.run, 73) * 0.5 + side * alt(s.rank) * 0.62;
+      s.rad = 4.4 * (0.88 + 0.26 * hash01(inst.id, 74));
+    } else {
+      s.dTh = alt(s.rank) * 0.5 + jit(inst.id, 75) * 0.16;
+      s.rad = RING_R - 1.9 + jit(inst.id, 76) * 0.7;
+    }
     // birth position: out of the parent eddy, or out of the Hatchet step attractor that spawned it
     const parent = inst.parent ? this.slotOf(inst.parent) : null;
     if (parent) {
@@ -501,8 +518,11 @@ export class FlowEngine {
   }
 
   // ------------------------------------------------------------------ frame
+  /** LOD size multiplier for eddies, sampled once per frame */
+  lodK = 1;
   update(dtRaw: number, now: number, t: number) {
     const dt = Math.min(0.05, dtRaw);
+    this.lodK = lodScale();
     this.frame++;
     this.syncRuns(now, dt);
     this.syncSlots(now, dt, t);
@@ -520,10 +540,14 @@ export class FlowEngine {
     for (const r of world.runs.values()) {
       const s = r.slot % RUN_SLOTS;
       const cur = this.runRef[s];
-      if (!cur || r.startedAt > cur.startedAt) this.runRef[s] = r;
+      // LOD: a lane's vortex belongs to its expanded run when it has one (collapsed runs live in the lane's cluster)
+      const exp = !lod.grouped || isRunExpanded(r.id);
+      const curExp = !!cur && (!lod.grouped || isRunExpanded(cur.id));
+      if (!cur || (exp && !curExp) || (exp === curExp && r.startedAt > cur.startedAt)) this.runRef[s] = r;
     }
     for (let s = 0; s < RUN_SLOTS; s++) {
       const r = this.runRef[s];
+      RUN_SPIN[s] = r ? runSpin(r.id) : 0;
       let a = 0;
       if (r) {
         a = Math.min(1, (now - r.startedAt) / 1800);
@@ -540,16 +564,15 @@ export class FlowEngine {
   private syncSlots(now: number, dt: number, t: number) {
     const f = this.frame;
     for (const inst of world.instances.values()) {
+      if (lod.grouped && !isExpanded(inst)) continue;
       let si = this.idToSlot.get(inst.id);
       if (si === undefined) si = this.alloc(inst, now);
       if (si < 0) continue;
       this.slots[si].seen = f;
       this.slots[si].inst = inst;
     }
-    this.sib.clear();
     this.pendingByInst.clear();
     for (const p of world.mcpPending.values()) this.pendingByInst.set(p.instance, Math.max(this.pendingByInst.get(p.instance) ?? 0, waitSeconds(p, now)));
-    for (const s of this.slots) if (s.used && s.inst && s.inst.parent && isScout(s.inst.type)) this.sib.set(s.inst.parent, (this.sib.get(s.inst.parent) ?? 0) + 1);
     const k = 1 - Math.exp(-dt * 2.2);
     const ks = 1 - Math.exp(-dt * 4);
     for (let si = 0; si < MAX_SLOTS; si++) {
@@ -567,14 +590,15 @@ export class FlowEngine {
       const rs = (run?.slot ?? 0) % RUN_SLOTS;
       const kk = STEP_K[inst.type];
       const th = runBase(rs) + (kk * TAU) / 3;
-      const rr = RING_R - 1.9;
-      let tx = RUN_CENTERS[rs][0] + Math.cos(th) * rr;
-      let tz = RUN_CENTERS[rs][1] + Math.sin(th) * rr;
-      if (isScout(inst.type)) {
-        const n = inst.parent ? this.sib.get(inst.parent) ?? 1 : 1;
-        const a = th + (Math.min(s.rank, n - 1) - (n - 1) / 2) * 0.62;
-        tx += Math.cos(a) * 4.4;
-        tz += Math.sin(a) * 4.4;
+      const scout = isScout(inst.type);
+      const rr = scout ? RING_R - 1.9 : s.rad;
+      const th0 = scout ? th : th + s.dTh;
+      let tx = RUN_CENTERS[rs][0] + Math.cos(th0) * rr;
+      let tz = RUN_CENTERS[rs][1] + Math.sin(th0) * rr;
+      if (scout) {
+        const a = th + s.dTh;
+        tx += Math.cos(a) * s.rad;
+        tz += Math.sin(a) * s.rad;
       }
       const ty = 0.9 + Math.sin(t * 0.9 + si) * 0.18;
       if (!inst.exitAt) {
@@ -680,7 +704,7 @@ export class FlowEngine {
       const o = owner[i];
       if (o >= 0) {
         const s = slots[o];
-        const r = this.fOrb[i] * s.rscale * (0.35 + 0.65 * s.p);
+        const r = this.fOrb[i] * s.rscale * (0.35 + 0.65 * s.p) * this.lodK;
         const a = (this.fAng[i] += (s.omega * dt) / (0.3 + r));
         const ca = Math.cos(a),
           sa = Math.sin(a);
@@ -1160,13 +1184,14 @@ export class FlowEngine {
       const thinking = inst.status === "thinking" && !inst.exitAt;
       const wob = thinking ? 0.1 * Math.sin(t * 9 + si) : 0;
       const implode = xAge >= 0 ? Math.pow(s.p, 1.6) : s.p;
-      const sc = implode * (1 + s.e * 0.45 + wob) + xFlash * 0.9 + birth * 0.6;
+      const ls = lodScale();
+      const sc = (implode * (1 + s.e * 0.45 + wob) + xFlash * 0.9 + birth * 0.6) * ls;
       _c.setRGB(s.r, s.g, s.b).multiplyScalar(1.3 + s.bright * 1.5 + s.e * 1.1);
       _c.lerp(_c2.setRGB(4, 4, 4), Math.min(1, birth + xFlash));
       this.setInst(this.cores, si, s.x, s.y, s.z, sc, _c, t * s.omega * 0.3, t * s.omega, 0);
       this.setInst(this.hits, si, s.x, s.y, s.z, inst.exitAt ? 0 : 1, _c);
       _c.setRGB(s.r, s.g, s.b);
-      glow(si, s.x, s.y, s.z, _c, (0.3 + s.bright * 0.4 + s.e * 0.5 + birth * 2 + xFlash * 2.5) * s.p + xFlash, (5 + s.e * 4 + birth * 10 + xFlash * 14) * Math.max(s.p, xFlash));
+      glow(si, s.x, s.y, s.z, _c, (0.3 + s.bright * 0.4 + s.e * 0.5 + birth * 2 + xFlash * 2.5) * s.p + xFlash, (5 + s.e * 4 + birth * 10 + xFlash * 14) * Math.max(s.p, xFlash) * ls);
     }
     if (sel) {
       this.selRing.visible = true;

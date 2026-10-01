@@ -5,12 +5,13 @@
  *           waiting on an MCP tool: amber throb
  *  exit   → pins go dark sequentially, chip lifts off and derezzes into voxels
  */
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { Label3D } from "../shared/Label3D";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
-import { TYPE_COLOR, TYPE_LABEL, energy, presence, world, type Instance } from "../shared/world";
+import { TYPE_COLOR, TYPE_LABEL, energy, lingerMs, presence, world, type Instance } from "../shared/world";
+import { lodScale } from "../shared/lod";
 import { clamp01, easeInOut, getDieTexture, getGlowTexture, homeOf, isScout, livePos, reduced, rgb } from "./layout";
 
 const bodyGeo = new RoundedBoxGeometry(1.5, 0.34, 1.5, 3, 0.07);
@@ -139,17 +140,20 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
     const exiting = i.exitAt > 0;
     const e = exiting ? now - i.exitAt : -1;
     const failed = i.status === "failed";
-    const lift = e > 600 ? Math.pow(clamp01((e - 600) / 1900), 2) * 3.8 : 0;
-    const derez = e > 950 ? clamp01((e - 950) / 1300) : 0;
+    // exit choreography is authored for 2.5s; compress it when LOD shortens the linger
+    const ek = 2500 / lingerMs(i);
+    const ee = e * ek;
+    const lift = ee > 600 ? Math.pow(clamp01((ee - 600) / 1900), 2) * 3.8 : 0;
+    const derez = ee > 950 ? clamp01((ee - 950) / 1300) : 0;
     const pres = presence(i, now);
     const en = Math.min(1.3, energy(i, now));
     const thinking = i.status === "thinking" || i.status === "spawning";
     const waitingTool = !exiting && hasPending(i.id);
-    const power = exiting ? clamp01(1 - e / 700) : clamp01(sinceLand / 300);
+    const power = exiting ? clamp01(1 - ee / 700) : clamp01(sinceLand / 300);
 
     if (root.current) {
       root.current.position.set(st.pos.x, y + lift, st.pos.z);
-      root.current.scale.setScalar(sc * grow);
+      root.current.scale.setScalar(sc * grow * lodScale());
       if (!reduced && exiting) root.current.rotation.y += dt * derez * 4;
     }
     if (body.current) body.current.scale.setScalar(derez > 0 ? Math.max(0.001, 1 - derez * 4) : 1);
@@ -167,7 +171,7 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
     // pins: light one by one on spawn, go dark one by one on exit, pulse with energy while working
     if (pins.current) {
       for (let k = 0; k < PINS; k++) {
-        const on = (reduced || sinceLand > k * 40) && !(exiting && e > k * 38);
+        const on = (reduced || sinceLand > k * 40) && !(exiting && ee > k * 38);
         const chase = thinking && !reduced ? Math.max(0, Math.sin(time * 9 - k * 0.7)) * (0.6 + en) : 0;
         const v = on ? 0.55 + lvl * 0.9 + chase * 1.4 + en * 1.2 : 0.03;
         pins.current.setColorAt(k, c.copy(color).multiplyScalar(v));
@@ -194,7 +198,7 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
     }
     // heat glow on the board under the chip (counteracts lift so it stays on the board)
     if (glow.current) {
-      glow.current.position.y = (-y - lift) / (sc * grow) + 0.03;
+      glow.current.position.y = (-y - lift) / (sc * grow * lodScale()) + 0.03;
       const shimmer = thinking && !reduced ? 1 + 0.08 * Math.sin(time * 17) + 0.05 * Math.sin(time * 29) : 1;
       glow.current.scale.setScalar((2.3 + en * 0.5) * shimmer);
       mats.glow.color.copy(tint).multiplyScalar((0.05 + Math.min(lvl, 2.4) * 0.12) * pres);
@@ -204,8 +208,8 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
     let fl = 0;
     let flc = WHITE;
     if (sinceLand >= 0 && sinceLand < 520) fl = 1 - sinceLand / 520;
-    if (exiting && e < 400) {
-      fl = Math.max(fl, (1 - e / 400) * 0.6);
+    if (exiting && ee < 400) {
+      fl = Math.max(fl, (1 - ee / 400) * 0.6);
       flc = failed ? RED : WHITE;
     }
     if (derez > 0 && derez < 0.4) {
@@ -295,11 +299,7 @@ export function Chip({ inst, selected, onSelect }: { inst: Instance; selected: b
         <meshBasicMaterial toneMapped={false} side={THREE.DoubleSide} />
       </mesh>
       {selected && (
-        <Html position={[0, 2, 0]} center style={{ pointerEvents: "none" }}>
-          <div className="scene-label" style={{ ["--c" as string]: TYPE_COLOR[inst.type] }}>
-            {inst.name}
-          </div>
-        </Html>
+        <Label3D position={[0, 2, 0]} text={inst.name} color={TYPE_COLOR[inst.type]} size={0.32} pxRange={[9.5, 13.5]} />
       )}
     </group>
   );

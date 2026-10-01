@@ -1,8 +1,10 @@
 # AgentGlow + the deepagents-hatchet example stack.
 #
-#   ./scripts/gen-obs-env.sh && docker compose up -d --build     # agentglow, falkordb, hatchet, mcp, worker
+#   cp .env.example .env   # + one LLM key (GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY, AGENT_MODEL to match)
+#   docker compose up -d --build                                  # agentglow, falkordb, hatchet, mcp, worker, trigger
 #   open http://localhost:8100                                    # 3D scenes
-#   docker compose exec worker python trigger.py "Why is churn rising for Acme Corp?"
+#   docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
+#   ./scripts/gen-obs-env.sh   # only for the langfuse profile: generates its local secrets into .env
 #   LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d     # + Langfuse at :3100 (same spans, side by side)
 #
 # Ports avoid the BOOKIE stack: agentglow :8100, Hatchet UI :8180, Hatchet gRPC :7177, Langfuse :3100.
@@ -16,6 +18,7 @@ services:
     ports: ["8100:8100"]
     environment:
       AGENTGLOW_FALKOR_URL: redis://falkordb:6379
+      AGENTGLOW_RUN_WEBHOOK: http://trigger:8300/run   # "▶ Run agents" in the UI → the example's trigger service
     depends_on: [falkordb]
     restart: unless-stopped
 
@@ -35,7 +38,7 @@ services:
     build: &example-build
       context: .
       dockerfile: examples/deepagents-hatchet/Dockerfile
-    command: ["python", "-m", "app.mcp_server"]
+    command: ["uv", "run", "python", "-m", "app.mcp_server"]
     environment:
       AGENTGLOW_URL: http://agentglow:8100
     depends_on: [agentglow]
@@ -44,13 +47,15 @@ services:
   worker:       # Hatchet worker running the deepagents workflow `agent_smoke`
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
-    command: ["python", "-m", "app.worker"]
+    command: ["uv", "run", "python", "-m", "app.worker"]
     environment:
       AGENTGLOW_URL: http://agentglow:8100
       MCP_URL: http://mcp:8200/mcp
       FALKOR_HOST: falkordb
+      AGENT_MODEL: ${AGENT_MODEL:-google_genai:gemini-3.8-flash}   # provider:model (google_genai / openai / anthropic)
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      OBS_MODEL: ${OBS_MODEL:-gemini-3.8-flash}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OBS_LANGFUSE_PUBLIC_KEY: ${OBS_LANGFUSE_PUBLIC_KEY:-}
       OBS_LANGFUSE_SECRET_KEY: ${OBS_LANGFUSE_SECRET_KEY:-}
       LANGFUSE_EXPORT: ${LANGFUSE_EXPORT:-0}
@@ -59,6 +64,16 @@ services:
       agentglow: {condition: service_started}
       falkordb: {condition: service_started}
       mcp: {condition: service_started}
+      obs_hatchet_engine: {condition: service_started}
+      obs_hatchet_token: {condition: service_completed_successfully}
+    restart: unless-stopped
+
+  trigger:      # internal HTTP trigger (POST :8300/run {topic} → agent_smoke run); agentglow's POST /live/run forwards here
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["uv", "run", "python", "-m", "app.trigger_api"]
+    volumes: [obs_hatchet_token:/hatchet-token:ro]   # Hatchet API token, read automatically by app/config.py
+    depends_on:
       obs_hatchet_engine: {condition: service_started}
       obs_hatchet_token: {condition: service_completed_successfully}
     restart: unless-stopped
