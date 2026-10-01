@@ -132,12 +132,22 @@ function mkAgent(inst: Instance): KitAgent {
   };
 }
 
+/** new agent slots mounted per frame at most (ungrouping / "show all" with hundreds of agents stays smooth) */
+const MOUNTS_PER_FRAME = 16;
+
 function syncMembership() {
-  // agents
+  // agents. An agent that is already exiting is never expanded out of its cluster (a mass exit that drops the
+  // world below the grouping threshold would otherwise mount hundreds of fading agents at once).
+  let mounts = 0;
   for (const inst of world.instances.values()) {
-    if (kit.agents.has(inst.id) || !isExpanded(inst)) continue;
+    if (kit.agents.has(inst.id) || inst.exitAt || !isExpanded(inst)) continue;
+    if (mounts >= MOUNTS_PER_FRAME) break;
+    // parents first so a subagent finds its parent's slot (it is picked up next frame otherwise)
+    const par = inst.parent ? world.instances.get(inst.parent) : undefined;
+    if (par && !par.exitAt && !kit.agents.has(par.id) && isExpanded(par)) continue;
     kit.agents.set(inst.id, mkAgent(inst));
     kit.agentsVersion++;
+    mounts++;
   }
   for (const [id, a] of kit.agents)
     if (!world.instances.has(id) || !isExpanded(a.inst)) {
