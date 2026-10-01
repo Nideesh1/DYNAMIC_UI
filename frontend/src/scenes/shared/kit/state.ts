@@ -45,6 +45,12 @@ export type KitAgent = {
   kidsMax: number;
   /** set false after the first layout (pos snaps to target instead of easing) */
   fresh: boolean;
+  /**
+   * 0..1 eased "finished" amount: 1 once the agent exited done/failed (it stays at its spot until its run ends).
+   * The kit dims the Agent + Edge slots by it (darker color/emissive, lower opacity, red tint when failed) and
+   * Label3D fades agent labels with it; a theme may also read it for its own finished look.
+   */
+  dim: number;
 };
 
 /** One drawn run (expanded run with visible agents, or a just-started run). */

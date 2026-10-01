@@ -11,10 +11,10 @@
 import * as THREE from "three";
 import { clusterOf, isExpanded, isRunExpanded, LOD_LANES, lod } from "../lod";
 import { alt, jit } from "../spread";
-import { graphMix, mcpWanted, roleScale, world, type AgentType, type Instance } from "../world";
+import { graphMix, isDone, mcpWanted, roleScale, world, type AgentType, type Instance } from "../world";
 import { fit, fitTick } from "./fit";
 import { radial, type LayoutPreset, type Point2, type PresetCtx, type Slot2 } from "./presets";
-import { kit, nextUid, planePoint, type KitAgent, type KitBackend, type KitMcp, type KitRun } from "./state";
+import { kit, nextUid, planePoint, reduced, type KitAgent, type KitBackend, type KitMcp, type KitRun } from "./state";
 
 export type KitConfig = {
   preset: LayoutPreset;
@@ -129,8 +129,12 @@ function mkAgent(inst: Instance): KitAgent {
     sibs: 1,
     kidsMax: 0,
     fresh: true,
+    dim: isDone(inst) ? 1 : 0,
   };
 }
+
+/** finished agents dim over ~this many seconds */
+const DIM_S = 0.6;
 
 /** new agent slots mounted per frame at most (ungrouping / "show all" with hundreds of agents stays smooth) */
 const MOUNTS_PER_FRAME = 16;
@@ -523,7 +527,8 @@ export function kitTick(now = performance.now()) {
     }
     const r = a.run;
     a.pos.copy(r.origin).addScaledVector(r.side, a.eu - r.cu).addScaledVector(r.axis, a.ev - r.cv);
-    a.live.copy(a.pos);
+    a.live.copy(a.pos);    const dw = isDone(a.inst) ? 1 : 0;
+    a.dim = reduced ? dw : a.dim + (dw - a.dim) * Math.min(1, dt / DIM_S);
   }
   for (const lane of activeLanes) {
     if (kit.clusterFresh[lane]) kit.clusterPos[lane].copy(kit.clusterTarget[lane]), (kit.clusterFresh[lane] = false);

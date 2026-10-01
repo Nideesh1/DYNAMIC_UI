@@ -9,7 +9,8 @@
  *     recently started runs, until ~BUDGET expanded agents. Expanded runs stay expanded for ≥ DWELL_MS so
  *     the view doesn't churn while new runs keep arriving.
  *   - labels only for the ~LABEL_K busiest expanded agents + the selected one (`showLabel`)
- *   - finished agents linger shorter while crowded (world `linger` hook)
+ *   - finished agents stay dimmed until their run ends and weigh DONE_WEIGHT in the budget; they fade shorter
+ *     while crowded (world `linger` hook)
  *
  * Everything is computed ONCE per frame in `lodTick(now)` (the scene kit's ticker calls it right after `tick()`),
  * membership at most every ~250ms; helpers below are O(1) lookups and allocate nothing. The scene kit
@@ -17,7 +18,7 @@
  * shows the "grouped: N runs in K clusters · show all" chip (Hud.tsx).
  */
 import { useSyncExternalStore } from "react";
-import { RUN_COLORS, energy, hash01, linger, world, type AgentType, type Instance, FADE_MS } from "./world";
+import { RUN_COLORS, energy, hash01, isLive, linger, world, type AgentType, type Instance, FADE_MS } from "./world";
 
 /** Number of visual lanes runs are grouped by (most themes lay runs out by slot % 6). */
 export const LOD_LANES = 6;
@@ -95,7 +96,9 @@ export const lod = {
 const expRuns = new Set<string>();
 const expSince = new Map<string, number>();
 const labelSet = new Set<string>();
-const runCount = new Map<string, number>(); // instances present (alive + fading) per run
+const runCount = new Map<string, number>(); // instances present per run, weighted (finished = DONE_WEIGHT)
+/** a finished (dimmed, waiting for its run to end) agent counts this much toward the expanded-agent budget */
+const DONE_WEIGHT = 0.25;
 const runAlive = new Map<string, number>();
 const runOrder: string[] = [];
 const prio = new Map<string, number>();
@@ -192,8 +195,9 @@ function recompute(now: number) {
   runAlive.clear();
   let alive = 0;
   for (const i of world.instances.values()) {
-    runCount.set(i.run, (runCount.get(i.run) ?? 0) + 1);
-    if (!i.exitAt) {
+    // budget weight: finished (dimmed) agents still belong to their run's view but cost little room
+    runCount.set(i.run, (runCount.get(i.run) ?? 0) + (i.doneAt && !i.exitAt ? DONE_WEIGHT : 1));
+    if (isLive(i)) {
       alive++;
       runAlive.set(i.run, (runAlive.get(i.run) ?? 0) + 1);
     }
@@ -291,7 +295,7 @@ function recompute(now: number) {
   scored.length = 0;
   score.clear();
   for (const i of world.instances.values()) {
-    if (i.exitAt || !expRuns.has(i.run)) continue;
+    if (!isLive(i) || !expRuns.has(i.run)) continue;
     const s = energy(i, now) + (i.status === "thinking" ? 0.6 : 0) + (labelSet.has(i.id) ? 0.4 : 0) + (now - i.bornAt < 3000 ? 1 : 0) + (i.subagent ? 0 : 0.2);
     score.set(i.id, s);
     scored.push(i);
@@ -330,10 +334,10 @@ function stats() {
   let expAgents = 0;
   for (const i of world.instances.values()) {
     if (expRuns.has(i.run)) {
-      if (!i.exitAt) expAgents++;
+      if (isLive(i)) expAgents++;
       continue;
     }
-    if (i.exitAt) continue;
+    if (!isLive(i)) continue;
     const c = cl[laneOfInstance(i)];
     c.agents++;
     c.tokens += i.tokens;

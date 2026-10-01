@@ -6,7 +6,7 @@ import "./hud.css";
 import { startLiveRun, useRunAvailable } from "./useSceneSetup";
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
-import { getInstance, selectInstance, STEPS, TYPE_COLOR, useWorld, waitSeconds, world, type Instance, type WorldEvent } from "./world";
+import { getInstance, isDone, isLive, selectInstance, STEPS, TYPE_COLOR, useWorld, waitSeconds, world, type Instance, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -172,7 +172,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const seenAt = seen.current ? w.ticker.indexOf(seen.current) : -1;
   const unseen = side.tab === "events" && !side.collapsed ? 0 : seenAt >= 0 ? seenAt : w.ticker.length;
 
-  const alive = [...w.instances.values()].filter((i) => !i.exitAt);
+  const alive = [...w.instances.values()].filter(isLive);
   const runs = [...w.runs.values()].filter((r) => r.status === "started");
   const graph = w.stats.graphReads + w.stats.graphWrites;
   const close = () => {
@@ -441,13 +441,13 @@ const STATUS_FILTERS: StatusFilter[] = ["all", "alive", "thinking", "waiting", "
 
 function matchesStatus(i: Instance, f: StatusFilter) {
   if (f === "all") return true;
-  if (f === "alive") return !i.exitAt;
-  if (f === "done") return !!i.exitAt;
-  return !i.exitAt && i.status === f;
+  if (f === "alive") return isLive(i);
+  if (f === "done") return !isLive(i);
+  return isLive(i) && i.status === f;
 }
 
 function age(i: Instance) {
-  const s = ((i.exitAt || performance.now()) - i.bornAt) / 1000;
+  const s = ((i.doneAt || i.exitAt || performance.now()) - i.bornAt) / 1000;
   return s < 60 ? `${s.toFixed(0)}s` : `${(s / 60).toFixed(1)}m`;
 }
 
@@ -474,14 +474,14 @@ function AgentList() {
       const topic = w.runs.get(i.run)?.topic ?? "";
       return `${i.id} ${i.name} ${topic} ${[...i.nodes].join(" ")}`.toLowerCase().includes(needle);
     })
-    .sort((a, b) => Number(!!a.exitAt) - Number(!!b.exitAt) || Number(b.status === "thinking") - Number(a.status === "thinking") || b.bornAt - a.bornAt);
+    .sort((a, b) => Number(!isLive(a)) - Number(!isLive(b)) || Number(b.status === "thinking") - Number(a.status === "thinking") || b.bornAt - a.bornAt);
   const shown = rows.slice(0, 150);
   // legend = the agents actually present (by name), not fixed demo roles
   const legend = useMemo(() => {
     const m = new Map<string, { color: string; alive: number }>();
     for (const i of all) {
       const e = m.get(i.name) ?? { color: TYPE_COLOR[i.type], alive: 0 };
-      if (!i.exitAt) e.alive++;
+      if (isLive(i)) e.alive++;
       m.set(i.name, e);
     }
     return [...m].slice(0, 12);
@@ -531,8 +531,8 @@ function AgentList() {
       <ul className="ap-list">
         {shown.map((i) => (
           <li key={i.id}>
-            <button onClick={() => selectInstance(i.id)} style={{ ["--c" as string]: TYPE_COLOR[i.type] }} className={i.exitAt ? "is-done" : ""}>
-              <i data-status={i.exitAt ? "done" : i.status} />
+            <button onClick={() => selectInstance(i.id)} style={{ ["--c" as string]: TYPE_COLOR[i.type] }} className={isLive(i) ? "" : "is-done"}>
+              <i data-status={isLive(i) ? i.status : "done"} />
               <span className="ap-name">
                 {short(i.id)}
                 <small>{w.runs.get(i.run)?.topic ?? "finished run"}</small>
@@ -562,8 +562,8 @@ function AgentDetail({ i }: { i: Instance }) {
       <h3>
         <i /> {i.name} <small>{i.subagent ? "subagent" : "agent"} · {shortRun(i.run)}</small>
       </h3>
-      <div className="ap-status" data-status={i.exitAt ? "done" : i.status}>
-        {i.exitAt ? `finished (${i.status})` : i.status} · alive {age(i)}
+      <div className="ap-status" data-status={isLive(i) ? i.status : "done"}>
+        {isLive(i) ? i.status : `finished (${i.status})`} · alive {age(i)}
       </div>
       <dl className="ap-stats">
         <div>
@@ -610,7 +610,7 @@ function AgentDetail({ i }: { i: Instance }) {
           )}
           {children.map((c) => (
             <button key={c.id} className="ap-chip-link" style={{ ["--c" as string]: TYPE_COLOR[c.type] }} onClick={() => selectInstance(c.id)}>
-              ↓ {short(c.id)} {c.exitAt ? "✓" : ""}
+              ↓ {short(c.id)} {isDone(c) ? "✓" : ""}
             </button>
           ))}
         </section>

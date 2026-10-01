@@ -82,7 +82,11 @@ export type Instance = {
   /** spawned by a parent agent via the deepagents `task` tool (vs a top-level workflow-step agent) */
   subagent: boolean;
   bornAt: number; // performance.now()
-  exitAt: number; // 0 while alive
+  /** performance.now() when the agent finished (exit done/failed); 0 while working. A finished agent stays drawn DIMMED
+   * at its spot until its RUN ends (so a run reads as a chain planner -> researcher -> writer); see isDone / isLive. */
+  doneAt: number;
+  /** performance.now() when the shape starts fading out (its run ended, or it finished outside a known run); 0 before */
+  exitAt: number;
   pulse: number; // last LLM pulse strength 0..2.5
   pulseAt: number;
   tokens: number;
@@ -129,6 +133,13 @@ export const MCP_COLORS: Record<string, string> = {
 };
 
 export type Flare = { id: number; run: string; instance: string; node: string; op: "read" | "write"; start: number };
+
+/** Finished (exit done/failed) - drawn dimmed until its run ends, then faded out with the whole run. */
+export const isDone = (i: Instance) => i.doneAt > 0;
+/** Working: not finished and not fading out (HUD "alive", LOD budget, cluster counts). */
+export const isLive = (i: Instance) => !i.doneAt && !i.exitAt;
+/** A started run whose agents are all finished and that got no completion for this long fades out anyway (ms). */
+export const ORPHAN_RUN_MS = 120_000;
 
 /** How long finished instances/runs stay visible while fading out (ms). */
 export const FADE_MS = 2500;
@@ -246,6 +257,8 @@ export function apply(ev: WorldEvent) {
           r.status = ev.status;
           r.endedAt = now;
         }
+        // the run ended: its finished (dimmed) agents and any stragglers fade out together
+        for (const i of world.instances.values()) if (i.run === ev.run_id && !i.exitAt) i.exitAt = now;
       }
       break;
     }
@@ -274,6 +287,7 @@ export function apply(ev: WorldEvent) {
         status: "spawning",
         subagent,
         bornAt: now,
+        doneAt: 0,
         exitAt: 0,
         pulse: 0.8,
         pulseAt: now,
@@ -294,7 +308,10 @@ export function apply(ev: WorldEvent) {
       const i = world.instances.get(ev.id);
       if (i) {
         i.status = ev.status;
-        i.exitAt = now;
+        i.doneAt = now;
+        // stays dimmed until its run ends; no known (or an already ended) run: fade right away
+        const r = world.runs.get(i.run);
+        if (!r || r.endedAt) i.exitAt = now;
       }
       for (const [k, p] of world.mcpPending) if (p.instance === ev.id) world.mcpPending.delete(k);
       break;
@@ -404,11 +421,19 @@ export function apply(ev: WorldEvent) {
 
 /** Remove faded instances, finished runs, old comets/flares. Call once per frame (cheap). */
 const runsWithInstances = new Set<string>();
+const runsWorking = new Set<string>();
+const runLastDone = new Map<string, number>();
 export function tick(now = performance.now()) {
   let changed = false;
   runsWithInstances.clear();
+  runsWorking.clear();
+  runLastDone.clear();
   for (const [id, i] of world.instances) {
     runsWithInstances.add(i.run);
+    if (!i.exitAt) {
+      if (!i.doneAt) runsWorking.add(i.run);
+      else if (i.doneAt > (runLastDone.get(i.run) ?? 0)) runLastDone.set(i.run, i.doneAt);
+    }
     if (i.exitAt && now - i.exitAt > linger.fadeMs(i)) {
       world.instances.delete(id);
       world.archive.set(id, i);
@@ -416,6 +441,10 @@ export function tick(now = performance.now()) {
       changed = true;
     }
   }
+  // a run that never reports completion: once every agent has been finished for ORPHAN_RUN_MS, fade them out
+  for (const [run, t] of runLastDone)
+    if (!runsWorking.has(run) && now - t > ORPHAN_RUN_MS)
+      for (const i of world.instances.values()) if (i.run === run && !i.exitAt) i.exitAt = now;
   for (const [id, r] of world.runs) {
     if (r.endedAt && now - r.endedAt > RUN_LINGER_MS && !runsWithInstances.has(id)) {
       world.runs.delete(id);

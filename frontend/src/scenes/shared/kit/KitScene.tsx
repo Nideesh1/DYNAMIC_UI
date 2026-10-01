@@ -12,6 +12,7 @@ import { Hud } from "../Hud";
 import { LOD_LANES, lod, lodTick, type LodCluster } from "../lod";
 import { useSceneSetup, type Galaxy } from "../useSceneSetup";
 import { tick, useHasGraph } from "../world";
+import { applyDim } from "./dim";
 import { FitCamera, setFitProfile, type FitProfile } from "./fit";
 import { LabelScope, labels, labelTick, type LabelScopeValue } from "./labels";
 import { config, kitExtents, kitTick } from "./layout";
@@ -150,14 +151,28 @@ function AgentScope({ agent, children }: { agent: KitAgent; children: ReactNode 
   return <LabelScope.Provider value={v}>{children}</LabelScope.Provider>;
 }
 
+/** Finished look (dim.ts): dims the Agent + Edge slots of a done/failed agent while it waits for its run to end. */
+function Dim({ agent, children }: { agent: KitAgent; children: ReactNode }) {
+  const g = useRef<THREE.Group>(null);
+  const prev = useRef(0);
+  useFrame(() => {
+    if (!g.current) return;
+    applyDim(g.current, agent.dim, agent.inst.status === "failed", prev.current);
+    prev.current = agent.dim;
+  });
+  return <group ref={g}>{children}</group>;
+}
+
 function Agents({ Agent, Edge, selected, onSelect }: { Agent: ComponentType<AgentSlotProps>; Edge?: ComponentType<EdgeSlotProps>; selected: string | null; onSelect: (id: string) => void }) {
   const list = useKitAgents();
   return (
     <>
       {list.map((a) => (
         <AgentScope key={a.uid} agent={a}>
-          {Edge && a.inst.parent && <Edge child={a} />}
-          <Agent agent={a} selected={selected === a.id} onSelect={onSelect} />
+          <Dim agent={a}>
+            {Edge && a.inst.parent && <Edge child={a} />}
+            <Agent agent={a} selected={selected === a.id} onSelect={onSelect} />
+          </Dim>
         </AgentScope>
       ))}
     </>
