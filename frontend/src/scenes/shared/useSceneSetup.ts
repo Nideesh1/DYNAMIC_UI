@@ -27,6 +27,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { useSceneConfig, type SceneConfig } from "./config";
 import { runWorldSimulator } from "./sim";
 import { runHfSimulator } from "./simHf";
+import { createSseParser } from "./sse";
 import { apply, hash01, resetWorld, setGraphLabel, setMode, setUnauthorized, world, type WorldEvent } from "./world";
 
 export type GalaxyNode = { id: string; name: string; kind: string };
@@ -111,51 +112,39 @@ const sleep = (ms: number, signal: AbortSignal) =>
 
 /**
  * Minimal fetch()-based SSE client (EventSource can't send headers or expose status codes).
- * Dispatches default ("message") events' data, honours `retry:`, reconnects with exponential backoff,
+ * Dispatches default ("message") events' data, honours `retry:`, reconnects with exponential backoff and sends the
+ * last event id as Last-Event-ID (the server then resumes after it: no replayed llm/tool events counted twice),
  * stops for good on 401/403 (onUnauthorized). Returns a stop function (aborts the request).
  */
 function openStream(url: string, headers: Record<string, string>, onData: (data: string) => void, onUnauthorized: () => void): () => void {
   const ctl = new AbortController();
   const { signal } = ctl;
+  let lastId = "";
   let retry = 2000;
   let attempt = 0;
   (async () => {
     while (!signal.aborted) {
+      const sse = createSseParser(onData, lastId, retry);
       try {
-        const r = await fetch(url, { headers: { ...headers, accept: "text/event-stream" }, cache: "no-store", signal });
+        const h: Record<string, string> = { ...headers, accept: "text/event-stream" };
+        if (lastId) h["last-event-id"] = lastId;
+        const r = await fetch(url, { headers: h, cache: "no-store", signal });
         if (r.status === 401 || r.status === 403) return onUnauthorized();
         if (!r.ok || !r.body) throw new Error(`stream ${r.status}`);
         attempt = 0;
         const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
-        let buf = "";
-        let data: string[] = [];
-        let type = "";
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
-          buf += value;
-          const lines = buf.split(/\r\n|\r|\n/);
-          buf = lines.pop() ?? "";
-          for (const line of lines) {
-            if (line === "") {
-              if (data.length && (type === "" || type === "message")) onData(data.join("\n"));
-              data = [];
-              type = "";
-              continue;
-            }
-            if (line.startsWith(":")) continue;
-            const i = line.indexOf(":");
-            const field = i < 0 ? line : line.slice(0, i);
-            let val = i < 0 ? "" : line.slice(i + 1);
-            if (val.startsWith(" ")) val = val.slice(1);
-            if (field === "data") data.push(val);
-            else if (field === "event") type = val;
-            else if (field === "retry" && /^\d+$/.test(val)) retry = Number(val);
-          }
+          sse.feed(value);
+          lastId = sse.lastId;
+          retry = sse.retry;
         }
       } catch {
         if (signal.aborted) return;
       }
+      lastId = sse.lastId;
+      retry = sse.retry;
       // dropped or failed: back off (retry, 2x, 4x... capped at 30s, with jitter) and reconnect
       const wait = Math.min(retry * 2 ** attempt, 30_000) * (0.75 + Math.random() * 0.5);
       attempt = Math.min(attempt + 1, 6);

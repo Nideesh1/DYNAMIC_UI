@@ -112,9 +112,26 @@ UNIT_MS = {"s": 1000, "m": 60_000, "h": 3_600_000}
 MAX_STEP_RUNS = 20_000
 ORPHAN_MS = 10_000  # how long an MCP backend span waits for its (caller's) parent span
 MAX_ORPHANS = 5_000
+# Prompt-cache usage, one of each spelling (GenAI semconv old/new, OpenInference). Token convention: `tokens_in` = ALL
+# prompt tokens including cached ones (what `llm.token_count.prompt` / `gen_ai.usage.input_tokens` carry); these are
+# subsets of it, never added on top.
+CACHE_READ_KEYS = ("gen_ai.usage.cache_read_input_tokens", "gen_ai.usage.cache_read.input_tokens",
+                   "llm.token_count.prompt_details.cache_read")
+CACHE_WRITE_KEYS = ("gen_ai.usage.cache_creation_input_tokens", "gen_ai.usage.cache_creation.input_tokens",
+                    "llm.token_count.prompt_details.cache_write")
 
 
 MAX_SCOPED_RUNS = 20_000
+
+
+def _first_int(a: dict, keys: tuple) -> int:
+    for k in keys:
+        try:
+            if a.get(k):
+                return int(a[k])
+        except (TypeError, ValueError):
+            pass
+    return 0
 
 
 def is_lg_node(name: str) -> bool:
@@ -501,9 +518,12 @@ class Mapper:
             tout = int(a.get("gen_ai.usage.output_tokens") or a.get("llm.token_count.completion") or a.get("gen_ai.usage.completion_tokens") or 0)
             if a.get("agentglow.llm.pulse") is not False:  # False: tokens come from elsewhere (Claude Code traces)
                 ev = {"type": "llm", "run_id": s.run, "id": owner, "tokens_in": tin, "tokens_out": tout, "latency_ms": max(0, s.end - s.start), "ts": ts}
-                cached = int(a.get("gen_ai.usage.cache_read_input_tokens") or 0)
+                cached = _first_int(a, CACHE_READ_KEYS)  # a subset of tokens_in (prompt totals include cached)
                 if cached:
                     ev["tokens_cached"] = cached
+                written = _first_int(a, CACHE_WRITE_KEYS)
+                if written:
+                    ev["tokens_cache_write"] = written
                 out.append(ev)
             self._remember_tool_calls(owner, a)
             self._hosted_shell_skills(s, owner, out, ts)

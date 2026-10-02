@@ -74,6 +74,29 @@ def test_live_ingest_and_replay_excludes_completed_runs():
     assert [e["type"] for e in replay[1:]] == ["run", "spawn"]
 
 
+def test_replay_after_last_event_id_and_seq_increases():
+    from agentglow.server import sse
+    from agentglow.state import Hub
+
+    hub = Hub()
+    span = lambda sid: {"trace_id": "t", "span_id": sid, "parent_span_id": None, "name": "agent", "start_time_ms": 1,
+                        "attributes": {"agentglow.agent": sid}}
+    hub.ingest_live([{"kind": "start", "span": span("a")}])
+    hub.register_mcp("github", [], 1)
+    mid = hub.buffer[-1]["seq"]
+    assert mid == 2  # run + spawn
+    hub.ingest_live([{"kind": "start", "span": span("b")}])
+    seqs = [e["seq"] for e in hub.buffer]
+    assert seqs == list(range(1, len(seqs) + 1))
+    full, resumed = hub.replay(), hub.replay(after=hub.resume_after(hub.event_id(hub.buffer[1])))
+    assert len(full) == 1 + len(seqs)  # topology + every buffered event
+    assert resumed[0]["type"] == "mcp_register" and [e["seq"] for e in resumed[1:]] == [s for s in seqs if s > mid]
+    assert sse(hub.buffer[0], hub.event_id(hub.buffer[0])) == f"id: {hub.epoch}-1\ndata: {json.dumps(hub.buffer[0])}\n\n"
+    assert hub.event_id(resumed[0]) is None and sse(resumed[0]).startswith("data: ")  # topology: no id
+    # no / malformed / another server instance's id (restart): full replay
+    assert [hub.resume_after(x) for x in ("", "7", "abc-3", f"{hub.epoch}-x", f"{Hub().epoch}9-3")] == [0] * 5
+
+
 def test_sse_stream_replays_over_real_server():
     import socket
     import threading
@@ -99,6 +122,31 @@ def test_sse_stream_replays_over_real_server():
             assert r.headers["content-type"].startswith("text/event-stream")
             line = next(ln for ln in r.iter_lines() if ln.startswith("data: "))
             assert json.loads(line[6:])["server"] == "github"
+        hub = app.state.hub
+        hub.ingest_live([{"kind": "start", "span": {"trace_id": "t", "span_id": "a", "parent_span_id": None, "name": "agent",
+                                                    "start_time_ms": 1, "attributes": {"agentglow.agent": "a"}}}])
+        last = hub.buffer[-1]["seq"]
+
+        def ids_until(headers, seq):  # SSE ids received until the event with this seq
+            with httpx.stream("GET", f"http://127.0.0.1:{port}/live/stream", headers=headers, timeout=5) as r:
+                out = []
+                for ln in r.iter_lines():
+                    if ln.startswith("id: "):
+                        assert ln[4:].startswith(hub.epoch + "-")
+                        out.append(int(ln[4:].rpartition("-")[2]))
+                        if out[-1] == seq:
+                            return out
+            return out
+
+        ids = ids_until({}, last)
+        assert ids == [e["seq"] for e in hub.buffer] and ids == sorted(ids)
+        # a reconnect (Last-Event-ID) does not replay what the viewer already applied: only the next live event
+        threading.Timer(0.3, lambda: httpx.post(f"http://127.0.0.1:{port}/v1/live", json=[{"kind": "start", "span": {
+            "trace_id": "t", "span_id": "b", "parent_span_id": "a", "name": "llm", "start_time_ms": 2,
+            "attributes": {"openinference.span.kind": "LLM"}}}])).start()  # on the server's loop (queues aren't thread-safe)
+        nxt = last + 1
+        assert ids_until({"last-event-id": f"{hub.epoch}-{last}"}, nxt) == [nxt]
+        assert ids_until({"last-event-id": f"old-{last}"}, nxt) == [e["seq"] for e in hub.buffer]  # restart: full replay
     finally:
         server.should_exit = True
 

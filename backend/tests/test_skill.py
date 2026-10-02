@@ -33,7 +33,7 @@ def test_hooks_skill_by_main_and_subagent():
     assert skills(evs) == [(ids["claude"], "hello", "start"), (ids["claude"], "hello", "end"),
                            (ids["Explore"], "my-plugin:review", "start"), (ids["Explore"], "my-plugin:review", "end")]
     sk = [e for e in evs if e["type"] == "skill"]
-    assert set(sk[0]) == {"type", "run_id", "id", "name", "status", "ts"}
+    assert set(sk[0]) - {"seq"} == {"type", "run_id", "id", "name", "status", "ts"}  # seq: SSE event id (transport)
     # the normal tool event is still there, and never carries the skill args
     tools = [e for e in evs if e["type"] == "tool" and e["tool"] == "Skill"]
     assert [(t["id"], t["args_preview"]) for t in tools] == [(ids["claude"], "hello"), (ids["Explore"], "my-plugin:review")]

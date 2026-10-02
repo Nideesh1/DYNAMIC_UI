@@ -28,6 +28,11 @@ def now_ms() -> int:
 
 
 # ---------------------------------------------------------------------- OTLP decoding
+def sse(ev: dict, eid: str | None = None) -> str:
+    """One SSE message; buffered events carry `id: <epoch>-<seq>` so a reconnect sends it back as Last-Event-ID."""
+    return (f"id: {eid}\n" if eid else "") + f"data: {json.dumps(ev)}\n\n"
+
+
 def _any_value(v) -> object:  # protobuf AnyValue → python
     which = v.WhichOneof("value")
     if which == "array_value":
@@ -261,17 +266,18 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
         f = viewer(request)
         sub = hub.subscribe(f)
         q = sub.queue
-        replay = hub.replay(f)
+        # a reconnect: resume after what the viewer already has
+        replay = hub.replay(f, hub.resume_after(request.headers.get("last-event-id", "")))
 
         async def gen():
             try:
                 yield "retry: 2000\n\n"
                 for ev in replay:
-                    yield f"data: {json.dumps(ev)}\n\n"
+                    yield sse(ev, hub.event_id(ev))
                 while not await request.is_disconnected():
                     try:
                         ev = await asyncio.wait_for(q.get(), timeout=KEEPALIVE_S)
-                        yield f"data: {json.dumps(ev)}\n\n"
+                        yield sse(ev, hub.event_id(ev))
                     except asyncio.TimeoutError:
                         yield ": keepalive\n\n"
             finally:
