@@ -54,7 +54,11 @@ triggered them; parallel instances of one step name (fan-out) keep the step `run
 Decisions (docs/SPEC.md "Decisions"): a span with `agentglow.decision` = choice | score | noul (+ `.question`, `.result`,
 `.p`, `.options` JSON [{name, p}], `.provider`, `.purpose`, `.target`) is a fast structured decision (Jev / Laya / an
 LLM-as-judge) of its owning agent: one `decision` event when it ends (`ms` = its duration, options top 5 by p, labels
-via scrub.decision_text). It is never classified as an LLM or tool span itself.
+via scrub.decision_text). It is never classified as an LLM or tool span itself. At high rates (hv.py) a busy agent's
+decisions are aggregated into `decision_stats` once per tick; only interesting ones still go out individually.
+
+Orders (docs/SPEC.md "Orders"): a span with `agentglow.event` = order (+ `agentglow.order.side`, `.qty`, `.price`,
+`.status`, `.instrument`, `.dry_run`, `.reason`) → one `order` event of its owning agent when it ends.
 
 MCP backend spans (`agentglow.mcp.*`, from the MCP server's process) can reach the server before the caller's tool span:
 one whose parent is not known yet is held until the parent arrives, and dropped after ORPHAN_MS (never a run of its own).
@@ -69,6 +73,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from .hv import DecisionRate
 from .scrub import SKILL_KEY, decision_text, session_title, skill_name, step_name
 
 LLM_OPS = {"chat", "text_completion", "generate_content"}
@@ -84,6 +89,9 @@ MAX_SKILL_SETS = 1024
 DECISION_KEY = "agentglow.decision"
 DECISION_KINDS = {"choice", "score", "noul"}
 MAX_DECISION_OPTIONS = 5
+EVENT_KEY = "agentglow.event"
+ORDER_KEY = "agentglow.order"
+ORDER_STATUSES = {"would_place", "placed", "filled", "rejected", "cancelled"}
 SHELL_TOOLS = {"shell", "exec_command", "local_shell", "bash", "run_shell_command"}
 # a shell READ of a skill file (no redirect/pipe between the reader and the path); `sed -i` is a write, see _shell_skills
 SHELL_SKILL_RE = re.compile(r"\b(?:cat|sed|head|less|more|bat)\b[^\n>|;&]*?([A-Za-z0-9._-]+)/SKILL\.md\b")
@@ -176,6 +184,19 @@ def _deadline(v: Any) -> int | None:
             return None
         return int((dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp() * 1000)
     return int(n * 1000 if n < 1e11 else n)
+
+
+def _num(v: Any) -> float | int | None:
+    """Finite number (int kept int) or None."""
+    if isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):
+        return None
+    return int(f) if f.is_integer() and abs(f) < 1e15 else round(f, 6)
 
 
 def _prob(v: Any) -> float | None:
@@ -280,6 +301,7 @@ class Mapper:
         self.shell_calls: dict[str, None] = {}  # hosted shell_call ids already scanned (FIFO, bounded)
         self.step_runs: dict[str, str] = {}  # hatchet.step_run_id -> run id (Hatchet wait spans carry only that)
         self.orphans: dict[str, dict] = {}  # MCP backend span id -> {"start", "end", "parent", "ts"} until its parent shows
+        self.hv = DecisionRate()  # high-volume decisions: per-agent aggregation + global cap (hv.py)
 
     def _note_scope(self, s: "Span") -> None:
         if s.run in self.scopes:
@@ -351,7 +373,7 @@ class Mapper:
         return out
 
     def tick(self, now_ms: int) -> list[dict]:
-        out: list[dict] = []
+        out: list[dict] = self.hv.flush(now_ms)
         for k in [k for k, o in self.orphans.items() if now_ms - o["ts"] >= ORPHAN_MS]:  # parent never came: drop
             self.orphans.pop(k)
         for r in list(self.runs.values()):
@@ -423,8 +445,8 @@ class Mapper:
         elif parent and is_lg_node(s.name) and not parent.agent and not is_lg_node(parent.name) and not (parent.llm or parent.tool):
             self._spawn(parent, parent.name, out, parent.start)  # parent is a LangGraph agent graph
 
-        if DECISION_KEY in a:
-            pass  # a decision is shown as one `decision` event at its end, never as an LLM turn / tool call
+        if DECISION_KEY in a or a.get(EVENT_KEY) == "order":
+            pass  # a decision / order is shown as one `decision` event at its end, never as an LLM turn / tool call
         elif self._is_llm(s) or (not self._not_llm(s) and ((parent and parent.name in LLM_PARENTS) or s.name.startswith("Chat"))):
             s.llm = True
             self._thinking(self._owner(s, out), s.run, out, ts)
@@ -460,13 +482,13 @@ class Mapper:
             name = self._agent_name(s)
             if name:
                 self._spawn(s, name, out, s.start)
-        if DECISION_KEY in a:
+        if DECISION_KEY in a or a.get(EVENT_KEY) == "order":
             s.llm = s.tool = False
         elif not s.llm and self._is_llm(s):
             s.llm = True
         elif s.llm and self._not_llm(s):  # guessed from its parent (`agent` node) but it's a chain, not a model call
             s.llm = False
-        if not s.tool and not s.llm and not s.agent and DECISION_KEY not in a and self._is_tool(s):
+        if not s.tool and not s.llm and not s.agent and DECISION_KEY not in a and not s.attrs.get(EVENT_KEY) == "order" and self._is_tool(s):
             self._tool_start(s, out, s.start)
         self._mcp_call(s, out, s.start)
         if "SkillsMiddleware" in s.name:
@@ -506,6 +528,8 @@ class Mapper:
             self._graph(s, out, ts)
         if a.get(DECISION_KEY) and not s.agent:
             self._decision(s, out, ts)
+        if a.get(EVENT_KEY) == "order" and not s.agent:
+            self._order(s, out, ts)
         if "agentglow.final" in a:
             self._final(s.run, a["agentglow.final"], out, ts)
         if s.team:  # langgraph-supervisor team graph ended → its supervisor exits
@@ -1096,6 +1120,24 @@ class Mapper:
             if v:
                 ev[k] = v
         ev.update(ms=max(0, (s.end or s.start) - s.start), ts=ts)
+        important = a.get(DECISION_KEY + ".important")
+        out += self.hv.offer(ev, important is True or str(important).lower() in ("true", "1"))
+
+    def _order(self, s: Span, out: list, ts: int) -> None:
+        a, k = s.attrs, ORDER_KEY + "."
+        side = decision_text(a.get(k + "side"), 8).lower() or "buy"
+        status = decision_text(a.get(k + "status"), 16).lower()
+        ev = {"type": "order", "run_id": s.run, "id": self._owner(s, out), "side": side,
+              "qty": _num(a.get(k + "qty")) or 0, "price": _num(a.get(k + "price")),
+              "status": status if status in ORDER_STATUSES else "would_place",
+              "instrument": decision_text(a.get(k + "instrument"), 40),
+              "dry_run": a.get(k + "dry_run") is True or str(a.get(k + "dry_run")).lower() in ("true", "1")}
+        if ev["price"] is None:
+            del ev["price"]
+        reason = decision_text(a.get(k + "reason"), 80)
+        if reason:
+            ev["reason"] = reason
+        ev["ts"] = ts
         out.append(ev)
 
     @staticmethod

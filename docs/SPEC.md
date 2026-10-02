@@ -197,7 +197,8 @@ SDK provider = no-op. Context in contextvars (asyncio tasks created inside inher
 | `graph(op, nodes, system="graph")` | `db <op>` | `db.system`, `agentglow.db.op`, `agentglow.graph.nodes` |
 | `skill(name)` / `Agent.skill(name)` | tool span `<name>` | as `tool` + `agentglow.skill=name` (skill badge on the current agent while the block runs) |
 | `decision(kind, question, result=None, p=None, options=None, provider="llm", purpose=None, target=None)` / `Agent.decision(...)` | `decision <kind>` | the "Decisions" attributes; `.record(result, p, options, target)` sets the outcome before the block ends; a bool `result` → `yes`/`no`; `options` = `{name: p}` or `[(name, p)]` |
-| `decided(kind, question, result, p, ..., latency_ms=0)` / `Agent.decided(...)` | `decision <kind>` (backdated) | one finished decision in one call |
+| `decided(kind, question, result, p, ..., latency_ms=0, important=False)` / `Agent.decided(...)` | `decision <kind>` (backdated) | one finished decision in one call; `important=True` sets `agentglow.decision.important` (also on `decision(...)`) |
+| `order(side, qty, price=None, status="would_place", instrument=None, dry_run=True, reason=None)` / `Agent.order(...)` | `order <side>` (finished at once) | the "Orders" attributes |
 | `@traced_agent(name)`, `@traced_tool(name, capture_args=False)` | per call | as `agent` / `tool`; args recorded only with `capture_args=True` |
 
 A span that raises ends with status error (run → failed). Text in `say`/`final`/`task`/`args` passes the Privacy
@@ -229,6 +230,56 @@ Python: `agentglow.decision(...)` / `agentglow.decided(...)` (Manual API). Front
 gate that flicks green or slams red (a `guard` `no` is a red X: `guard: deny <target> 97%`); score = a gauge arc. The
 HUD counts decisions (`N decisions · avg X ms`, per provider in the tooltip) and the agent panel lists recent ones.
 
+### High volume (backend `hv.py`)
+Long-lived agents can decide tens of times per second (e.g. 40 market agents gating every 1 s tick). Per-decision events
+would flood the stream and the glyphs become noise, so the mapper adapts per agent:
+
+- `agentglow.decision.important` (bool, optional): always worth showing (see below).
+- **Calm** agent (<= 2 decisions in the trailing 1 s of span time, `AGENTGLOW_DECISION_HV_RATE`): every decision is an
+  individual `decision` event, emitted at once, while the global budget allows.
+- **Busy** agent (more than that): its decisions are aggregated into one `decision_stats` event per server tick (~1 s);
+  only *interesting* ones are still sent individually, ranked important > guard deny > route flip (a `route` result
+  that differs from that agent's previous route result) > low confidence (0.4 <= p <= 0.6). They carry `"hv": true`
+  and `"why": "important"|"deny"|"flip"|"low_p"` and are emitted at the tick. An agent is calm again after 3 ticks in a
+  row below the rate.
+- **Global cap**: at most 20 individual decision events per second over all agents (`AGENTGLOW_DECISION_CAP`). Calm
+  pass-through spends the budget of its 1 s of span time first (one over it is aggregated into its agent's
+  `decision_stats`); the busy agents' interesting decisions share what is left of the tick's budget, best first,
+  round-robin across agents; the rest are dropped (still counted in the stats).
+- Nothing is lost silently: every decision is an individual event or counted in a `decision_stats` (`n` counts all of
+  that agent's decisions in the window, including ones also sent individually). No decisions in a window: no event.
+- Deny = result in `no|deny|denied|false|block|blocked|reject|rejected`; check yes = `yes|true|pass|ok|allow`, no = the
+  deny words. Purpose missing: `choice` counts as `route`, others as `check`.
+
+`decision_stats` = `{"type": "decision_stats", "run_id", "id": <agent instance id>, "window_ms": <tick window, ~1000>,
+"n", "by_purpose": {"route": {"n", "results": {<result>: count}}, "guard": {"n", "allow", "deny"}, "check": {"n",
+"yes", "no"}}, "p50_ms", "p95_ms", "providers": {<provider>: count}, "ts"}` (purposes with no decisions omitted; route
+results top 6, the rest summed as `other`; providers top 6).
+Frontend: a per-agent decision halo (ring whose thickness/brightness ~ rate, arc split by outcome: allow green, deny
+red, route results in accent colours, check yes/no) + label `name 42/s · 3% deny · p50 38ms`, smoothed (EMA), fading
+when the agent goes quiet; individual `hv` decisions use the bold glyphs with short holds (~0.8 s), one per agent at a
+time (`+N` badge). HUD over 2 decisions/s: `N/s · deny X% · p50/p95` with a 60 s sparkline.
+
+## Orders
+An agent's order action (a trading bot's paper or real order, any buy/sell/yes/no ticket): a span with
+`agentglow.event` = `order` and:
+
+| Attribute | Value |
+|---|---|
+| `agentglow.order.side` | `buy` \| `sell` \| `yes` \| `no` (lower-cased, max 8 chars; default `buy`) |
+| `agentglow.order.qty` | number (default 0) |
+| `agentglow.order.price` | optional number (e.g. 0.42 = 42c) |
+| `agentglow.order.status` | `would_place` (default) \| `placed` \| `filled` \| `rejected` \| `cancelled` |
+| `agentglow.order.instrument` | short label (scrubbed, max 40) |
+| `agentglow.order.dry_run` | bool: paper trading |
+| `agentglow.order.reason` | optional short label (scrubbed, max 80) |
+
+World event (when the span ends; owned by the nearest agent): `{"type": "order", "run_id", "id", "side", "qty",
+"price"?, "status", "instrument", "dry_run", "reason"?, "ts"}`. Not an LLM turn or tool call. Python:
+`agentglow.order(...)` / `Agent.order(...)`. Frontend: a small chip popping from the agent for ~1.5 s (green BUY/YES,
+red SELL/NO, `YES 3 @ 42c`, dashed outline + `paper` when `dry_run`, grey strike-through when rejected/cancelled); the
+HUD shows `orders N (paper)` and the agent panel the agent's recent orders.
+
 ## Privacy
 One scrub (`backend/agentglow/scrub.py`) runs at the Hub ingestion boundary for every path (`/v1/live`, `/v1/traces`
 JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload before building spans):
@@ -259,18 +310,19 @@ JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload b
 
 ## World events (backend → frontend)
 Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
-`run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill, chat, decision`. `ts` = epoch ms.
+`run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill, chat, decision,
+decision_stats, order`. `ts` = epoch ms.
 `chat` (opt-in prompt capture only, see Privacy) = `{"type": "chat", "run_id", "id": <main agent instance id>,
 "role": "user"|"agent", "text", "ts"}`: the user's prompt, then Claude's reply for that turn (the agent panel shows
 them as a "you: / claude:" conversation).
 `skill` = `{"type": "skill", "run_id", "id": <agent instance id>, "name": <skill name>, "status": "start"|"end", "ts"}`:
 an agent (main or subagent) started / finished using a skill.
-`decision` = see "Decisions".
+`decision` / `decision_stats` = see "Decisions"; `order` = see "Orders".
 `llm` may carry an extra `tokens_cached` (prompt-cache reads) when known.
 `run` may carry status `renamed` (same `run_id`, new `topic`, e.g. a Claude Code session /rename): relabel only.
 `step` may carry status `waiting` with `reason` (wait label) and optional `until` (epoch ms); `agent` status `waiting` may
 carry the same `reason` / `until` (see "Waits and long-running runs").
 
 ## Frontend (`frontend/`, npm `agentglow`)
-- App build: gallery at `/`, `/<theme>`; data source = same origin `/live/stream` (`?source=<url>` override, `?sim=1` simulator, `?hud=0` hide HUD). Output copied to `backend/agentglow/static/`.
+- App build: gallery at `/`, `/<theme>`; data source = same origin `/live/stream` (`?source=<url>` override, `?sim=1` simulator, `?sim=hf` high-frequency simulator (30 market agents, ~100 decisions/s, paper orders), `?hud=0` hide HUD). Output copied to `backend/agentglow/static/`.
 - Library build: `export { AgentScene, THEMES }` - `<AgentScene theme="neural" source="http://…:8100" hud={true} sim={false} style className />`; react/react-dom are peerDependencies; ships types.
