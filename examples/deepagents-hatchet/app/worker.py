@@ -10,7 +10,6 @@ config.setup_tracing("deepagents-hatchet-worker")  # agentglow.watch() (+ Langfu
 import agentglow  # noqa: E402
 from deepagents import create_deep_agent  # noqa: E402
 from deepagents.backends import FilesystemBackend  # noqa: E402
-from langchain.chat_models import init_chat_model  # noqa: E402
 
 from . import demo_graph  # noqa: E402
 from . import email_mcp_server as email_mcp  # noqa: E402
@@ -62,7 +61,7 @@ async def vendor_agents() -> dict:
     erp_tools = await load_mcp_tools(erp_mcp.SERVER, config.ERP_MCP_URL)
     email_tools = await load_mcp_tools(email_mcp.SERVER, config.EMAIL_MCP_URL)
     erp_read = [t for t in erp_tools if t.name in ("vendor_scorecard", "renewal_calendar", "vendor_spend")]
-    routes = {route: init_chat_model(spec) if spec else make_model() for route, spec in MODEL_ROUTES.items()}
+    routes = {route: make_model(spec or None) for route, spec in MODEL_ROUTES.items()}
     agents = {
         "procurement_analyst": create_deep_agent(model=make_model(), tools=erp_tools + VENDOR_WRITE_TOOLS, system_prompt=PROCUREMENT, name="procurement_analyst"),
         "negotiator": create_deep_agent(model=make_model(), tools=email_tools, system_prompt=NEGOTIATOR, name="negotiator"),

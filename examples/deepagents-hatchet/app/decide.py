@@ -19,7 +19,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from langchain.chat_models import init_chat_model
 from opentelemetry import trace
 from pydantic import BaseModel, Field
 
@@ -49,11 +48,9 @@ def _jev():
 
 
 def _judge_model():
-    if os.environ.get("DECIDE_MODEL"):
-        return init_chat_model(os.environ["DECIDE_MODEL"])
     from .workflow import make_model
 
-    return make_model()
+    return make_model(os.environ.get("DECIDE_MODEL") or None)
 
 
 class _ChoiceOut(BaseModel):
