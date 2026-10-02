@@ -17,7 +17,7 @@ import "./city.css";
 import { DataTower, TOWER_NATURAL, towerTop } from "./DataTower";
 import { District, districtExtents } from "./Districts";
 import { blimpAlt, BLIMP_SCALE, cityGrid, reduced, roofH } from "./layout";
-import { Blimp, Comets, Drones, Tethers } from "./Sky";
+import { Blimp, Comets, Drones, GroundStation, Tethers } from "./Sky";
 import { Lineage, Skyscraper } from "./Skyscrapers";
 
 const _p = new THREE.Vector3();
@@ -86,6 +86,7 @@ export default function Scene() {
       Agent={Skyscraper}
       RunMarker={District}
       McpServer={Blimp}
+      Backend={GroundStation}
       GraphResource={DataTower}
       cluster={{ radius: 1.9, variant: "swarm", pointSize: 1.05 }}
       clusterOffset={[0, 1.9, 0]}

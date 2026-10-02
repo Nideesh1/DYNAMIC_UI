@@ -1,11 +1,11 @@
-/** Things in the air: message light-trails between rooftops, MCP blimps, drone packets and pending-call tethers. */
+/** Things in the air: message light-trails between rooftops, MCP blimps (+ their backend ground stations), drone packets and pending-call tethers. */
 import { Trail } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { Label3D } from "../shared/Label3D";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { mcpGlow, TYPE_COLOR, waitSeconds, world, type Comet, type McpCall } from "../shared/world";
-import { type McpServerSlotProps } from "../shared/kit";
+import { ResourceWire, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { blimpAlt, blimpOf, BLIMP_SCALE, clamp01, easeInOut, reduced, roofOf } from "./layout";
 import { isExpanded, lod } from "../shared/lod";
 
@@ -226,6 +226,47 @@ function Drone({ call }: { call: McpCall }) {
         <meshBasicMaterial color={c.clone().multiplyScalar(4)} toneMapped={false} />
       </mesh>
     </Trail>
+  );
+}
+
+/** Backend slot: a ground station (pedestal + dish + beacon) under its blimp, linked by an uplink beam. */
+export function GroundStation({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const at = useRef<THREE.Group>(null);
+  const dish = useRef<THREE.Group>(null);
+  const label = useRef<Label3DHandle>(null);
+  const col = useMemo(() => new THREE.Color(srv.color), [srv.color]);
+  const m = useMemo(() => ({ beacon: new THREE.MeshBasicMaterial({ toneMapped: false }), dish: new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.DoubleSide }) }), []);
+  useFrame(({ clock }, dt) => {
+    at.current?.position.set(backend.pos.x, 0, backend.pos.z);
+    const busy = res.inflight > 0;
+    const act = mcpGlow(res.activeAt, performance.now(), 3);
+    if (dish.current) dish.current.rotation.y += dt * (busy ? 3 : 0.3) * (reduced ? 0.2 : 1);
+    m.beacon.color.copy(col).multiplyScalar(1 + act * 2.5 + (busy ? 1 + Math.sin(clock.elapsedTime * 8) : 0));
+    m.dish.color.copy(col).multiplyScalar(0.45 + act * 1.2 + (busy ? 0.6 : 0));
+    label.current?.setOpacity(busy ? 1 : 0.6 + act * 0.4);
+    label.current?.setEmphasis(busy);
+  });
+  return (
+    <>
+      <ResourceWire mcp={mcp} backend={backend} y={1.3} yFrom={blimpAlt(srv.name)} gain={1.2} />
+      <group ref={at}>
+        <mesh position={[0, 0.35, 0]}>
+          <cylinderGeometry args={[0.12, 0.3, 0.7, 8]} />
+          <meshStandardMaterial color="#0b1220" emissive={srv.color} emissiveIntensity={0.25} metalness={0.6} roughness={0.4} />
+        </mesh>
+        <group ref={dish} position={[0, 0.85, 0]}>
+          <mesh material={m.dish} rotation={[-0.6, 0, 0]}>
+            <coneGeometry args={[0.45, 0.22, 16, 1, true]} />
+          </mesh>
+        </group>
+        <mesh material={m.beacon} position={[0, 1.3, 0]}>
+          <sphereGeometry args={[0.1, 10, 8]} />
+        </mesh>
+        <Label3D ref={label} position={[0, 1.75, 0]} text={res.name} color={srv.color} size={0.26} opacity={0.6} pxRange={[7.5, 11]} />
+      </group>
+    </>
   );
 }
 

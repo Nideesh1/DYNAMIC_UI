@@ -3,7 +3,7 @@
  * (flow, ocean, subway, tunnel). One pooled-free LineSegments polyline in stage space, server (t=0) -> backend
  * (t=1), with an optional arc (`lift`, stage +y) and sway (`wave`). Idle = faint; a call in flight = dashes flowing
  * out to the backend; a result = a bright pulse running back to the server; recently used = brighter (mcpGlow).
- * Theme look: `color`, `gain`, `y` (altitude of both ends on a ground plane), `lift`, `wave`.
+ * Theme look: `color`, `gain`, `y` (altitude of both ends on a ground plane; `yFrom` = server end), `lift`, `wave`.
  */
 import { useFrame } from "@react-three/fiber";
 import { useMemo } from "react";
@@ -28,6 +28,8 @@ export type ResourceWireProps = {
   gain?: number;
   /** altitude of both ends (ground-plane themes); undefined = the kit positions as they are */
   y?: number;
+  /** altitude of the server end only (overrides `y` there: a server floating above its backends) */
+  yFrom?: number;
   /** arc height at the middle (stage +y) */
   lift?: number;
   /** sideways sway amplitude (stage +y, travelling wave) */
@@ -42,7 +44,7 @@ export function wireState(srv: string, res: string, inflight: number, activeAt: 
   return { busy: inflight > 0, act: mcpGlow(activeAt, now, 1.5), head: age < 1 ? 1 - age : -1 };
 }
 
-export function ResourceWire({ mcp, backend, color, gain = 1, y, lift = 0, wave = 0 }: ResourceWireProps) {
+export function ResourceWire({ mcp, backend, color, gain = 1, y, yFrom, lift = 0, wave = 0 }: ResourceWireProps) {
   const geo = useMemo(() => {
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(SEG * 2 * 3), 3));
@@ -61,6 +63,7 @@ export function ResourceWire({ mcp, backend, color, gain = 1, y, lift = 0, wave 
     _a.copy(mcp.pos);
     _b.copy(backend.pos);
     if (y !== undefined) (_a.y = y), (_b.y = y);
+    if (yFrom !== undefined) _a.y = yFrom;
     const level = (0.18 + st.act * 0.55 + (st.busy ? 0.35 : 0)) * gain;
     for (let i = 0; i < SEG; i++)
       for (let e = 0; e < 2; e++) {

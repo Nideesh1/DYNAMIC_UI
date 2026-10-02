@@ -1,13 +1,13 @@
 /**
  * MCP server slot: an external I/O PORT on the outskirts of the board (kit periphery): a glowing PCIe-style socket with
- * a spinning holo-icon, contact fingers reaching in toward the board.
+ * a spinning holo-icon, contact fingers reaching in toward the board. Its backends are small ICs on a trace behind it.
  */
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
-import { Label3D } from "../shared/Label3D";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { mcpGlow, world } from "../shared/world";
-import { type McpServerSlotProps } from "../shared/kit";
+import { ResourceWire, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { getGlowTexture, reduced, rgb } from "./layout";
 
 /** distance from a port to its spine trace (inward, toward the board) */
@@ -97,3 +97,50 @@ export function Port({ mcp }: McpServerSlotProps) {
   );
 }
 
+
+const ic = new THREE.BoxGeometry(0.9, 0.22, 0.9);
+const icEdges = new THREE.EdgesGeometry(ic);
+
+/** Backend slot: a small IC behind its port, on a glowing trace; its die lights up while queried. */
+export function BackendChip({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const at = useRef<THREE.Group>(null);
+  const label = useRef<Label3DHandle>(null);
+  const left = useMemo(() => backend.target.x <= 0, [backend]);
+  const col = useMemo(() => rgb(srv.color), [srv.color]);
+  const m = useMemo(() => ({ die: new THREE.MeshBasicMaterial({ toneMapped: false }), edge: new THREE.LineBasicMaterial({ toneMapped: false }) }), []);
+  useFrame(({ clock }) => {
+    at.current?.position.set(backend.pos.x, 0, backend.pos.z);
+    const busy = res.inflight > 0;
+    const act = mcpGlow(res.activeAt, performance.now(), 2.5);
+    const lvl = (busy ? 1 + 0.4 * Math.sin(clock.elapsedTime * 7) : 0) + act * 1.6;
+    m.die.color.copy(col).multiplyScalar(0.5 + lvl * 1.2);
+    m.edge.color.copy(col).multiplyScalar(0.6 + lvl * 0.8);
+    label.current?.setOpacity(busy ? 1 : 0.6 + act * 0.4);
+    label.current?.setEmphasis(busy);
+  });
+  return (
+    <>
+      <ResourceWire mcp={mcp} backend={backend} y={0.05} gain={1.3} />
+      <group ref={at}>
+        <mesh geometry={ic} position={[0, 0.12, 0]}>
+          <meshStandardMaterial color="#070b16" metalness={0.8} roughness={0.28} />
+        </mesh>
+        <lineSegments geometry={icEdges} material={m.edge} position={[0, 0.12, 0]} />
+        <mesh material={m.die} position={[0, 0.24, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[0.42, 0.42]} />
+        </mesh>
+        {[-1, 1].map((sx) =>
+          [-0.27, 0, 0.27].map((z) => (
+            <mesh key={`${sx}${z}`} position={[sx * 0.55, 0.03, z]}>
+              <boxGeometry args={[0.2, 0.03, 0.08]} />
+              <meshBasicMaterial color={col.clone().multiplyScalar(0.6)} toneMapped={false} />
+            </mesh>
+          )),
+        )}
+        <Label3D ref={label} position={[left ? -0.8 : 0.8, 0.5, 0]} anchorX={left ? "right" : "left"} text={res.name} color={srv.color} size={0.26} opacity={0.6} pxRange={[7.5, 11]} />
+      </group>
+    </>
+  );
+}
