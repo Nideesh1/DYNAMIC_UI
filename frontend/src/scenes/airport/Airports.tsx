@@ -13,6 +13,9 @@ import { mcpGlow, waitSeconds, world, type McpCall, type ResourceKind } from "..
 import { kit, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { AMBER, CurvePool, GlowPool, PHOSPHOR, RED, Style, WHITE, additive, additiveLine, arcControl, bezier, blips, clamp01, easeInOut, glowSprite, reduced } from "./fx";
 
+/** full server / backend name on its label; only a very long one is cut (ellipsis) */
+const clipName = (s: string, n = 26) => (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
+
 const KIND_ICON: Record<ResourceKind, string> = { db: "◉", warehouse: "▤", spark: "✷", api: "⇄", storage: "▣", queue: "≡" };
 
 const tint = (hex: string) => new THREE.Color(hex).lerp(PHOSPHOR, 0.25);
@@ -46,12 +49,12 @@ export function Gate({ mcp, backend }: BackendSlotProps) {
     m.line.color.copy(col).multiplyScalar(k2 * 1.2);
     m.halo.color.copy(col).multiplyScalar(busy ? 0.35 + beat * 0.2 : 0.03 + act * 0.25);
     halo.current?.scale.setScalar(busy ? 2.6 + beat * 0.6 : 1.6 + act);
-    let txt = `${KIND_ICON[res.kind] ?? "·"} ${res.name}`;
+    let txt = `${KIND_ICON[res.kind] ?? "·"} ${clipName(res.name)}`;
     if (busy) {
       let tool = "";
       for (const p of world.mcpPending.values()) if (p.server === srv.name && p.resource === res.name) tool = p.tool;
-      txt = `${KIND_ICON[res.kind] ?? "·"} ${res.name} ▸ ${tool || "query"}()`;
-    } else if (act > 0.25) txt = `${KIND_ICON[res.kind] ?? "·"} ${res.name} ✓`;
+      txt = `${KIND_ICON[res.kind] ?? "·"} ${clipName(res.name)} ▸ ${tool || "query"}()`;
+    } else if (act > 0.25) txt = `${KIND_ICON[res.kind] ?? "·"} ${clipName(res.name)} ✓`;
     if (label.current) {
       if (txt !== last.current) {
         last.current = txt;
@@ -66,7 +69,7 @@ export function Gate({ mcp, backend }: BackendSlotProps) {
       <mesh geometry={GATE} material={m.fill} />
       <lineSegments geometry={GATE_EDGES} material={m.line} />
       <sprite ref={halo} material={m.halo} position={[0, 0.15, 0]} />
-      <Label3D ref={label} position={[0, -0.05, 0.62]} text={res.name} font="mono" plate="underline" color={srv.color} textColor="#a6e9c6" letterSpacing={0.03} size={0.26} pxRange={[7.5, 10.5]} />
+      <Label3D ref={label} position={[0, -0.05, 0.62]} text={clipName(res.name)} font="mono" plate="underline" color={srv.color} textColor="#a6e9c6" letterSpacing={0.03} size={0.26} pxRange={[7.5, 10.5]} />
     </group>
   );
 }
@@ -117,8 +120,8 @@ export function Airport({ mcp }: McpServerSlotProps) {
       <Label3D
         offset={[Math.sin(heading) * 1.15, Math.cos(heading) * 1.0 - 0.45]}
         text={[
-          { text: srv.name.replace(/[^a-z0-9]/gi, "").slice(0, 4).toUpperCase().padEnd(4, "X") + "  ", color: srv.color },
-          { text: `MCP · ${srv.name}`, color: "#c8f7de" },
+          { text: "MCP  ", color: srv.color },
+          { text: clipName(srv.name), color: "#c8f7de" },
         ]}
         font="mono"
         plate="box"
