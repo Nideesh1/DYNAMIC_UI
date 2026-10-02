@@ -239,7 +239,8 @@ would flood the stream and the glyphs become noise, so the mapper adapts per age
   individual `decision` event, emitted at once, while the global budget allows.
 - **Busy** agent (more than that): its decisions are aggregated into one `decision_stats` event per server tick (~1 s);
   only *interesting* ones are still sent individually, ranked important > guard deny > route flip (a `route` result
-  that differs from that agent's previous route result) > low confidence (0.4 <= p <= 0.6). They carry `"hv": true`
+  that differs from that agent's previous route result) > low-confidence guard (0.4 <= p <= 0.6; an unsure `check`
+  is routine at volume and stays in the stats). They carry `"hv": true`
   and `"why": "important"|"deny"|"flip"|"low_p"` and are emitted at the tick. An agent is calm again after 3 ticks in a
   row below the rate.
 - **Global cap**: at most 20 individual decision events per second over all agents (`AGENTGLOW_DECISION_CAP`). Calm
@@ -258,7 +259,9 @@ results top 6, the rest summed as `other`; providers top 6).
 Frontend: a per-agent decision halo (ring whose thickness/brightness ~ rate, arc split by outcome: allow green, deny
 red, route results in accent colours, check yes/no) + label `name 42/s · 3% deny · p50 38ms`, smoothed (EMA), fading
 when the agent goes quiet; individual `hv` decisions use the bold glyphs with short holds (~0.8 s), one per agent at a
-time (`+N` badge). HUD over 2 decisions/s: `N/s · deny X% · p50/p95` with a 60 s sparkline.
+time, and at most 3 such glyphs on screen at once (most important, then newest, wins; the others only flash the
+agent's halo). The halo text shows for the selected agent and the 3 busiest; the others show the ring only. Many
+subagents of one parent (> 8) wrap into staggered fan rows. HUD over 2 decisions/s: `N/s · deny X% · p50/p95` with a 60 s sparkline.
 
 ## Orders
 An agent's order action (a trading bot's paper or real order, any buy/sell/yes/no ticket): a span with

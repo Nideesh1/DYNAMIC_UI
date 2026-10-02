@@ -45,6 +45,9 @@
  *  DecisionGlyph.tsx  fast decision glyph on an agent (world `decision` events: Jev / Laya / LLM-as-judge), all
  *               themes: choice = option-ray fan, noul = gate (green open / red slam, guard deny = red X), score =
  *               gauge; snaps in ~150ms, gone by ~1.6s; stacked labels below the agent, "+N more".
+ *               High volume (`hv` decisions): ~0.8s holds, one glyph per agent at a time + "+N".
+ *  HighVolume.tsx  decision halos (one instanced mesh: ring split by outcome, thickness ~ rate, from
+ *               `decision_stats`), the halo label `jev 42/s · 3% deny · p50 38ms`, and order chips (`order`).
  *  KitScene.tsx <KitScene> + slot prop types + useKitAgents / useKitRuns / useKitMcp / useKitList,
  *               <GraphStageSpace> (stage-space drawing inside the side graph), `hudInset` (HUD dock).
  *
@@ -71,6 +74,7 @@ export type { LabelKind, LabelScopeValue } from "./labels";
 export type { FitProfile } from "./fit";
 export { ResourceWire, wireState } from "./ResourceWire";
 export { DecisionGlyph, DECISION_COLOR, DECISION_YES, DECISION_NO } from "./DecisionGlyph";
+export { DecisionHalos, HaloLabel, OrderChip } from "./HighVolume";
 export type { ResourceWireProps } from "./ResourceWire";
 export { KitScene, GraphStageSpace, useKitAgents, useKitRuns, useKitMcp, useKitList, useKitGalaxy } from "./KitScene";
 export type { KitSceneProps, AgentSlotProps, EdgeSlotProps, RunSlotProps, McpServerSlotProps, BackendSlotProps, GraphSlotProps, ClusterSlotProps } from "./KitScene";

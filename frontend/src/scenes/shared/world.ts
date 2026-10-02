@@ -42,15 +42,73 @@ export type WorldEvent =
   | { type: "skill"; run_id: string; id: string; name: string; status: "start" | "end"; ts: number }
   // a fast structured decision (Jev / Laya / LLM-as-judge) by agent instance `id`: choice (one of N options), score
   // (ordinal level) or noul (yes / no); p = probability of `result`, options = top 5 {name, p}, ms = latency
-  | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; ms: number; ts: number }
+  // `hv`: sent while the agent is in high-volume mode (its decisions are aggregated in `decision_stats`); `why` = what
+  // made it interesting (important | deny | flip | low_p)
+  | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; ms: number; ts: number; hv?: boolean; why?: string }
+  // high-volume mode: one per agent per ~1 s window (docs/SPEC.md "Decisions" > "High volume")
+  | { type: "decision_stats"; run_id: string; id: string; window_ms: number; n: number; by_purpose: DecisionStatsByPurpose; p50_ms: number; p95_ms: number; providers: Record<string, number>; ts: number }
+  // an order action (paper when dry_run) by agent instance `id`
+  | { type: "order"; run_id: string; id: string; side: string; qty: number; price?: number; status: OrderStatus; instrument: string; dry_run: boolean; reason?: string; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
   // topology: an MCP server and the backends behind it (sent at worker startup and to every new viewer)
   | { type: "mcp_register"; run_id?: string; server: string; resources: { name: string; kind: ResourceKind }[]; ts: number }
   | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number; resource?: string; resource_kind?: ResourceKind };
 
 export type DecisionKind = "choice" | "score" | "noul";
+export type DecisionStatsByPurpose = {
+  route?: { n: number; results: Record<string, number> };
+  guard?: { n: number; allow: number; deny: number };
+  check?: { n: number; yes: number; no: number };
+};
+export type OrderStatus = "would_place" | "placed" | "filled" | "rejected" | "cancelled";
+/** One order on one agent; `at` = performance.now() when it arrived (its chip plays from there). */
+export type OrderUse = Omit<Extract<WorldEvent, { type: "order" }>, "type" | "run_id" | "id"> & { at: number };
+export const ORDER_LIFE_MS = 1500;
+const ORDERS_KEPT = 8;
+
+/**
+ * High-volume decisions, per agent (from `decision_stats`): smoothed (EMA) so the halo and its label never flicker.
+ * `seg` = smoothed share of each outcome category, in HALO_CATS order.
+ */
+export type HvStats = { at: number; bump: number; bumpDeny: boolean; rate: number; deny: number; p50: number; p95: number; seg: number[]; provider: string; n: number; windows: number };
+/** outcome categories of a decision halo arc: allow, deny, check yes, check no, route result slots 0..3, other */
+export const HALO_CATS = ["allow", "deny", "yes", "no", "r0", "r1", "r2", "r3", "other"] as const;
+export const HALO_COLORS = ["#4ade80", "#fb3b5c", "#5eead4", "#fbbf24", "#60a5fa", "#c084fc", "#f472b6", "#facc15", "#94a3b8"];
+/** route result name -> accent slot 0..3 (first four names seen in this session; later ones are "other") */
+export const routeSlots = new Map<string, number>();
+const routeSlot = (name: string) => {
+  let k = routeSlots.get(name);
+  if (k === undefined && routeSlots.size < 4) routeSlots.set(name, (k = routeSlots.size));
+  return k === undefined ? 8 : 4 + k;
+};
+const HV_ALPHA = 0.35;
+/** a halo fades out once its agent sent no stats for this long (ms), over HV_FADE_MS */
+export const HV_QUIET_MS = 2500;
+export const HV_FADE_MS = 1500;
+/** 0..1 visibility of an agent's decision halo */
+export function haloMix(h: HvStats | null, now = performance.now()): number {
+  if (!h) return 0;
+  const t = now - h.at;
+  const inn = Math.min(1, (now - h.at + 1000 * h.windows) / 600);
+  if (t < HV_QUIET_MS) return inn;
+  return Math.max(0, 1 - (t - HV_QUIET_MS) / HV_FADE_MS) * inn;
+}
+/** the agent is in high-volume mode now (recent decision_stats) */
+export const hvActive = (i: Instance, now = performance.now()) => !!i.hv && now - i.hv.at < HV_QUIET_MS + HV_FADE_MS;
+/** `jev 42/s · 3% deny · p50 38ms` */
+export function haloText(h: HvStats): string {
+  const r = h.rate >= 10 ? Math.round(h.rate) : Math.round(h.rate * 10) / 10;
+  const d = h.deny * 100;
+  return `${h.provider} ${r}/s · ${d > 0 && d < 1 ? "<1" : Math.round(d)}% deny · p50 ${Math.round(h.p50)}ms`;
+}
 /** One decision on one agent; `at` (performance.now()) = when its glyph starts (staggered so a burst reads one by one). */
-export type DecisionUse = Omit<Extract<WorldEvent, { type: "decision" }>, "type" | "run_id" | "id"> & { at: number };
+export type DecisionUse = Omit<Extract<WorldEvent, { type: "decision" }>, "type" | "run_id" | "id"> & {
+  at: number;
+  /** high volume: not shown as a glyph (over the on-screen cap; it only flashed the halo) */
+  hidden?: boolean;
+  /** high volume: pre-empted by a more important glyph at this time (fades out fast) */
+  cut?: number;
+};
 /** Decision glyph timing (ms): snap in fast (much faster than LLM pulses / skill rings on purpose), then hold long
  *  enough to read on a video; a guard deny holds longer. */
 export const DECISION_SNAP_MS = 150;
@@ -60,17 +118,22 @@ export const DENY_HOLD_MS = 2500;
 export const DENY_LIFE_MS = 3100;
 /** min gap between two glyph starts on one agent (a burst of decisions plays as a quick sequence) */
 export const DECISION_STAGGER_MS = 220;
+/** high-volume mode (`hv` decisions): short holds so glyphs don't pile up */
+export const HV_HOLD_MS = 800;
+export const HV_LIFE_MS = 1150;
 /** decisions kept per agent (Selected panel) */
 const DECISIONS_KEPT = 12;
 /** how long a decision's glyph lives (ms) */
-export const decisionLife = (d: { kind: string; result: string; purpose?: string }) => (isDeny(d) ? DENY_LIFE_MS : DECISION_LIFE_MS);
+export const decisionLife = (d: { kind: string; result: string; purpose?: string; hv?: boolean }) => (d.hv ? HV_LIFE_MS + (isDeny(d) ? 300 : 0) : isDeny(d) ? DENY_LIFE_MS : DECISION_LIFE_MS);
 /** 0..1 visibility of a decision glyph: snaps in (DECISION_SNAP_MS), holds, fades out by decisionLife(d). */
 export function decisionMix(d: DecisionUse, now = performance.now()): number {
   const t = now - d.at;
   const deny = isDeny(d);
-  const hold = deny ? DENY_HOLD_MS : DECISION_HOLD_MS;
-  const life = deny ? DENY_LIFE_MS : DECISION_LIFE_MS;
-  if (t <= 0 || t >= life) return 0;
+  const hold = d.hv ? HV_HOLD_MS + (deny ? 300 : 0) : deny ? DENY_HOLD_MS : DECISION_HOLD_MS;
+  const life = decisionLife(d);
+  if (t <= 0 || t >= life || d.hidden) return 0;
+  const cut = d.cut ? Math.max(0, 1 - (now - d.cut) / 160) : 1;
+  if (cut < 1) return cut * (t < DECISION_SNAP_MS ? t / DECISION_SNAP_MS : 1);
   if (t < DECISION_SNAP_MS) return t / DECISION_SNAP_MS;
   if (t < hold) return 1;
   const o = 1 - (t - hold) / (life - hold);
@@ -83,6 +146,12 @@ export const pct = (p?: number) => (p === undefined ? "" : ` ${Math.round(p * 10
 export function decisionText(d: { kind: string; question: string; result: string; p?: number; provider: string; purpose?: string; target?: string }): string {
   if (d.kind === "noul" && d.purpose === "guard") return `guard: ${d.result === "no" ? "deny" : "allow"} ${d.target || d.question}${pct(d.p)}`;
   return `${d.provider} · ${d.purpose || d.question} → ${d.result}${pct(d.p)}`;
+}
+
+/** `YES 3 @ 42c`, `SELL 10 @ 101.5` (prices below 1 read as cents) */
+export function orderText(o: { side: string; qty: number; price?: number; status?: string }): string {
+  const p = o.price === undefined ? "" : o.price > 0 && o.price < 1 ? ` @ ${Math.round(o.price * 100)}c` : ` @ ${o.price}`;
+  return `${o.side.toUpperCase()} ${o.qty}${p}${o.status && o.status !== "would_place" ? ` ${o.status}` : ""}`;
 }
 
 /** What sits behind an MCP server (the server is a node; its backends are nodes too). */
@@ -159,6 +228,10 @@ export type Instance = {
   skillEndAt: number;
   /** recent decisions (newest last, capped); glyphs play from `at` */
   decisions: DecisionUse[];
+  /** high-volume decision stats (null until its first `decision_stats`) */
+  hv: HvStats | null;
+  /** recent orders (newest last, capped) */
+  orders: OrderUse[];
   /** the MCP server this agent called last (a guard deny flashes the agent's line to it) */
   lastMcp?: string;
   /** opt-in prompt capture: this agent's turns, oldest first (user prompt, then its reply), capped */
@@ -324,6 +397,10 @@ export const world = {
   stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0, decisions: 0, decisionMs: 0 },
   /** decisions per provider (jev / laya / llm ...): count + summed latency (HUD chip tooltip) */
   decisionProviders: new Map<string, { n: number; ms: number }>(),
+  /** session-wide decision rate (HUD): last full second's rate, deny share, p50/p95, 60 s sparkline (per second) */
+  rate: { perS: 0, deny: 0, p50: 0, p95: 0, spark: [] as number[], rollAt: 0, acc: { n: 0, deny: 0, msN: 0, p50: 0, p95: 0 } },
+  /** orders seen: total, paper (dry_run), rejected/cancelled */
+  orders: { n: 0, paper: 0, rejected: 0 },
   lastFinal: "" as string,
   simulated: false,
   mode: "connecting" as "connecting" | "sim" | "live",
@@ -387,9 +464,47 @@ function freeSlot(): number {
   return s;
 }
 
+const SEG_SCRATCH = new Array<number>(HALO_CATS.length).fill(0);
+/** high volume: most individual decision glyphs on screen at once (all agents) */
+export const HV_GLYPHS_MAX = 3;
+const hvShown: DecisionUse[] = [];
+const hvScore = (d: DecisionUse) => (d.why === "important" ? 4 : isDeny(d) ? 3 : d.why === "flip" ? 2 : 1);
+/** admit a high-volume glyph: free place, else pre-empt the least important (then oldest) one if this one is at
+ *  least as important (newest wins a tie); false = not shown (the caller flashes the agent's halo instead) */
+function admitHv(d: DecisionUse, now: number): boolean {
+  for (let k = hvShown.length - 1; k >= 0; k--) {
+    const x = hvShown[k];
+    if (x.cut || now - x.at >= decisionLife(x)) hvShown.splice(k, 1);
+  }
+  if (hvShown.length >= HV_GLYPHS_MAX) {
+    let v = 0;
+    for (let k = 1; k < hvShown.length; k++) {
+      const a = hvShown[k], b = hvShown[v];
+      if (hvScore(a) < hvScore(b) || (hvScore(a) === hvScore(b) && a.at < b.at)) v = k;
+    }
+    if (hvScore(d) < hvScore(hvShown[v])) {
+      d.hidden = true;
+      return false;
+    }
+    hvShown[v].cut = now;
+    hvShown.splice(v, 1);
+  }
+  hvShown.push(d);
+  return true;
+}
+/** high-frequency event types: no immediate React notify (the HUD catches up within HUD_NOTIFY_MS) */
+const QUIET = new Set(["decision", "decision_stats", "order"]);
+const HUD_NOTIFY_MS = 250;
+let dirty = false;
+let notifiedAt = 0;
+
 export function apply(ev: WorldEvent) {
   const now = performance.now();
-  if (ev.type !== "mcp_register") world.ticker = [ev, ...world.ticker].slice(0, 60);
+  // stats windows are not log lines (the halo shows them); everything else goes to the event log
+  if (ev.type !== "mcp_register" && ev.type !== "decision_stats") {
+    world.ticker.unshift(ev);
+    if (world.ticker.length > 60) world.ticker.length = 60;
+  }
   switch (ev.type) {
     case "run": {
       if (ev.status === "renamed") {
@@ -480,6 +595,8 @@ export function apply(ev: WorldEvent) {
         skill: "",
         skillEndAt: 0,
         decisions: [],
+        hv: null,
+        orders: [],
         chat: [],
         wait: null,
       });
@@ -577,18 +694,90 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "decision": {
-      world.stats.decisions++;
-      world.stats.decisionMs += ev.ms;
-      const pv = world.decisionProviders.get(ev.provider) ?? { n: 0, ms: 0 };
-      pv.n++;
-      pv.ms += ev.ms;
-      world.decisionProviders.set(ev.provider, pv);
       const i = world.instances.get(ev.id);
+      const hv = !!ev.hv || (!!i && hvActive(i, now));
+      if (!hv) {
+        // counted here only outside high-volume mode (there `decision_stats` counts every decision)
+        world.stats.decisions++;
+        world.stats.decisionMs += ev.ms;
+        const pv = world.decisionProviders.get(ev.provider) ?? { n: 0, ms: 0 };
+        pv.n++;
+        pv.ms += ev.ms;
+        world.decisionProviders.set(ev.provider, pv);
+        const a = world.rate.acc;
+        a.n++;
+        if (isDeny(ev)) a.deny++;
+        a.msN++;
+        a.p50 += ev.ms;
+        a.p95 += ev.ms;
+      }
       if (!i) break;
       const last = i.decisions[i.decisions.length - 1];
       const { type: _t, run_id: _r, id: _i, ...d } = ev;
-      i.decisions.push({ ...d, at: last ? Math.max(now, last.at + DECISION_STAGGER_MS) : now });
+      // high volume: no stagger (one glyph per agent at a time) and at most HV_GLYPHS_MAX on screen
+      const use: DecisionUse = { ...d, hv, at: hv || !last ? now : Math.max(now, last.at + DECISION_STAGGER_MS) };
+      if (hv && !admitHv(use, now) && i.hv) {
+        i.hv.bump = now;
+        i.hv.bumpDeny = isDeny(use);
+      }
+      i.decisions.push(use);
       if (i.decisions.length > DECISIONS_KEPT) i.decisions.shift();
+      break;
+    }
+    case "decision_stats": {
+      world.stats.decisions += ev.n;
+      world.stats.decisionMs += ev.p50_ms * ev.n;
+      for (const [p, c] of Object.entries(ev.providers)) {
+        const pv = world.decisionProviders.get(p) ?? { n: 0, ms: 0 };
+        pv.n += c;
+        pv.ms += ev.p50_ms * c;
+        world.decisionProviders.set(p, pv);
+      }
+      const b = ev.by_purpose;
+      const a = world.rate.acc;
+      a.n += ev.n;
+      a.deny += b.guard?.deny ?? 0;
+      a.msN += ev.n;
+      a.p50 += ev.p50_ms * ev.n;
+      a.p95 += ev.p95_ms * ev.n;
+      const i = world.instances.get(ev.id);
+      if (!i || ev.n <= 0) break;
+      // outcome shares this window, in HALO_CATS order
+      const seg = SEG_SCRATCH.fill(0);
+      if (b.guard) (seg[0] += b.guard.allow), (seg[1] += b.guard.deny);
+      if (b.check) (seg[2] += b.check.yes), (seg[3] += b.check.no), (seg[8] += Math.max(0, b.check.n - b.check.yes - b.check.no));
+      if (b.route) for (const [name, c] of Object.entries(b.route.results)) seg[name === "other" ? 8 : routeSlot(name)] += c;
+      const tot = seg.reduce((x, y) => x + y, 0) || 1;
+      const rate = (ev.n * 1000) / Math.max(1, ev.window_ms);
+      const deny = (b.guard?.deny ?? 0) / ev.n;
+      let top = "", topN = -1;
+      for (const [p, c] of Object.entries(ev.providers)) if (c > topN) (top = p), (topN = c);
+      const h = i.hv;
+      if (!h || now - h.at > HV_QUIET_MS + HV_FADE_MS) {
+        i.hv = { at: now, bump: h?.bump ?? 0, bumpDeny: h?.bumpDeny ?? false, rate, deny, p50: ev.p50_ms, p95: ev.p95_ms, seg: seg.map((x) => x / tot), provider: top || "llm", n: ev.n, windows: h ? h.windows : 0 };
+      } else {
+        const k = HV_ALPHA;
+        h.at = now;
+        h.rate += (rate - h.rate) * k;
+        h.deny += (deny - h.deny) * k;
+        h.p50 += (ev.p50_ms - h.p50) * k;
+        h.p95 += (ev.p95_ms - h.p95) * k;
+        for (let j = 0; j < seg.length; j++) h.seg[j] += (seg[j] / tot - h.seg[j]) * k;
+        h.provider = top || h.provider;
+        h.n = ev.n;
+        h.windows++;
+      }
+      break;
+    }
+    case "order": {
+      world.orders.n++;
+      if (ev.dry_run) world.orders.paper++;
+      if (ev.status === "rejected" || ev.status === "cancelled") world.orders.rejected++;
+      const i = world.instances.get(ev.id);
+      if (!i) break;
+      const { type: _t, run_id: _r, id: _i, ...o } = ev;
+      i.orders.push({ ...o, at: now });
+      if (i.orders.length > ORDERS_KEPT) i.orders.shift();
       break;
     }
     case "graph":
@@ -659,12 +848,37 @@ export function apply(ev: WorldEvent) {
       break;
     }
   }
-  const id = "id" in ev ? ev.id : ev.type === "message" ? ev.from_id : null;
+  const id = ev.type === "decision_stats" ? null : "id" in ev ? ev.id : ev.type === "message" ? ev.from_id : null;
   if (id) {
     const i = world.instances.get(id);
-    if (i) i.recent = [ev, ...i.recent].slice(0, 40);
+    if (i) {
+      i.recent.unshift(ev);
+      if (i.recent.length > 40) i.recent.length = 40;
+    }
   }
-  notify();
+  if (QUIET.has(ev.type) && now - notifiedAt < HUD_NOTIFY_MS) dirty = true;
+  else {
+    notifiedAt = now;
+    dirty = false;
+    notify();
+  }
+}
+
+/** roll the session decision rate once per second (HUD chip + 60 s sparkline) */
+function rollRate(now: number) {
+  const r = world.rate;
+  if (!r.rollAt) r.rollAt = now;
+  const dt = now - r.rollAt;
+  if (dt < 1000) return false;
+  const a = r.acc;
+  r.perS = (a.n * 1000) / dt;
+  r.deny = a.n ? a.deny / a.n : 0;
+  if (a.msN) (r.p50 = a.p50 / a.msN), (r.p95 = a.p95 / a.msN);
+  r.spark.push(r.perS);
+  if (r.spark.length > 60) r.spark.shift();
+  a.n = a.deny = a.msN = a.p50 = a.p95 = 0;
+  r.rollAt = now;
+  return true;
 }
 
 /** Remove faded instances, finished runs, old comets/flares. Call once per frame (cheap). */
@@ -683,7 +897,8 @@ function expireSkills(i: Instance, now: number) {
 }
 
 export function tick(now = performance.now()) {
-  let changed = false;
+  let changed = rollRate(now);
+  if (dirty && now - notifiedAt >= HUD_NOTIFY_MS) changed = true;
   runsWithInstances.clear();
   runsWorking.clear();
   runLastDone.clear();
@@ -721,7 +936,11 @@ export function tick(now = performance.now()) {
   world.mcpCalls = world.mcpCalls.filter((c) => now - c.start < c.dur + 250);
   const nf = world.flares.length;
   world.flares = world.flares.filter((f) => now - f.start < 2600);
-  if (changed || nc !== world.comets.length || nf !== world.flares.length || nm !== world.mcpCalls.length) notify();
+  if (changed || nc !== world.comets.length || nf !== world.flares.length || nm !== world.mcpCalls.length) {
+    notifiedAt = now;
+    dirty = false;
+    notify();
+  }
 }
 
 /** a run paused in a wait (approval / durable sleep) is not orphaned: its finished agents stay until it resumes */
@@ -807,6 +1026,11 @@ export function resetWorld() {
   world.mcpResolved.length = 0;
   world.ticker.length = 0;
   for (const k of Object.keys(world.stats) as (keyof typeof world.stats)[]) world.stats[k] = 0;
+  world.decisionProviders.clear();
+  world.rate = { perS: 0, deny: 0, p50: 0, p95: 0, spark: [], rollAt: 0, acc: { n: 0, deny: 0, msN: 0, p50: 0, p95: 0 } };
+  world.orders = { n: 0, paper: 0, rejected: 0 };
+  routeSlots.clear();
+  hvShown.length = 0;
   world.lastFinal = "";
   world.simulated = false;
   world.mode = "connecting";

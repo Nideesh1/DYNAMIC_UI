@@ -38,6 +38,11 @@
   100% { background: rgba(3, 5, 11, 0.4); box-shadow: 0 0 0 0 rgba(var(--dc), 0); }
 }
 @media (prefers-reduced-motion: reduce) { .hud-dec { animation: none; } }
+/* high-volume decisions chip: rate · deny · p50/p95 + 60 s sparkline */
+.hud-dec-hv { display: inline-flex; align-items: center; gap: 4px; color: #a7f3d0; background: rgba(94, 234, 212, 0.1); }
+.hud-dec-hv.is-deny { color: #fecdd3; background: rgba(251, 59, 92, 0.14); }
+.hud-spark { color: #5eead4; margin-left: 2px; }
+.hud-dec-hv.is-deny .hud-spark { color: #fb7185; }
 .scene-root :focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
 
 /* ── Right sidebar: Agents | Events | Selected tabs, collapsible to a 40px icon rail ── */
@@ -111,6 +116,10 @@
 .ap-decisions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
 .ap-decisions li { display: flex; gap: 6px; align-items: baseline; font-size: 11px; color: #e2e8f0; padding: 2px 6px; border-left: 2px solid var(--c); background: rgba(255, 255, 255, 0.03); }
 .ap-decisions li.is-deny { background: rgba(251, 59, 92, 0.12); }
+.ap-decisions li.is-strike span { text-decoration: line-through; color: #94a3b8; }
+.ap-hv { font-size: 11.5px; color: #e2e8f0; margin: 0 0 4px; font-variant-numeric: tabular-nums; }
+.ap-hv-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; gap: 1px; background: rgba(255, 255, 255, 0.05); }
+.ap-hv-bar span { flex-basis: 0; min-width: 2px; }
 .ap-decisions b { flex: 0 0 auto; font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--c); }
 .ap-decisions span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ap-decisions em { flex: 0 0 auto; font-style: normal; font-size: 10px; color: #94a3b8; font-variant-numeric: tabular-nums; }

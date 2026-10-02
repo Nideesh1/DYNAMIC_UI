@@ -26,6 +26,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useSceneConfig, type SceneConfig } from "./config";
 import { runWorldSimulator } from "./sim";
+import { runHfSimulator } from "./simHf";
 import { apply, hash01, resetWorld, setGraphLabel, setMode, setUnauthorized, world, type WorldEvent } from "./world";
 
 export type GalaxyNode = { id: string; name: string; kind: string };
@@ -252,10 +253,17 @@ async function probeRun(source: string, auth: Auth, h: Record<string, unknown>):
   }
 }
 
-function start(c: Conn, sim: boolean) {
+function start(c: Conn, sim: boolean | "hf") {
   const useSim = () => {
     if (c.dead) return;
     setMode("sim");
+    if (sim === "hf") {
+      world.hasGraph = false; // the market desks use no knowledge graph (setMode("sim") turned it on)
+      c.galaxy = EMPTY;
+      c.stop = runHfSimulator();
+      emit();
+      return;
+    }
     c.stop = runWorldSimulator();
     emit();
   };
@@ -338,14 +346,14 @@ function teardown(c: Conn) {
   }
 }
 
-function acquire(source: string, sim: boolean, auth: Auth): Conn {
-  const key = sim ? "sim" : `live:${source}|${auth.scope ?? ""}|${auth.run ?? ""}|${auth.token ?? ""}`;
+function acquire(source: string, sim: boolean | "hf", auth: Auth): Conn {
+  const key = sim ? (sim === "hf" ? "sim:hf" : "sim") : `live:${source}|${auth.scope ?? ""}|${auth.run ?? ""}|${auth.token ?? ""}`;
   if (conn && conn.key === key && !conn.dead) {
     conn.refs++;
     return conn;
   }
   if (conn) {
-    if (conn.source !== source || conn.key === "sim" || key === "sim") console.warn(`[agentglow] one data source per page: switching from "${conn.source || conn.key}" to "${source || key}"`);
+    if (conn.source !== source || conn.key.startsWith("sim") || key.startsWith("sim")) console.warn(`[agentglow] one data source per page: switching from "${conn.source || conn.key}" to "${source || key}"`);
     teardown(conn);
   }
   // a fresh connection (first one, or a different source / scope / run / token) starts from an empty world

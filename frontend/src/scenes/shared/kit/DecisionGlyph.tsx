@@ -25,7 +25,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle, type LabelSeg } from "../Label3D";
-import { DECISION_SNAP_MS, decisionLife, decisionMix, presence, world, type DecisionUse } from "../world";
+import { DECISION_SNAP_MS, decisionLife, decisionMix, hvActive, presence, world, type DecisionUse } from "../world";
 import { fit } from "./fit";
 import { labels } from "./labels";
 import { kit, reduced, serverPos, type KitAgent } from "./state";
@@ -400,7 +400,7 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
     h?.setEmphasis(kind === 1);
     (small ? lbl.current[k] : lblS.current[k])?.setOpacity(0, true);
     // a choice takes over the option ray labels
-    if (kind === 0 && o.length) {
+    if (kind === 0 && o.length && !d.hv) {
       st.optSlot = k;
       st.optN = o.length;
       st.optWin = w >= 0 ? w : 0;
@@ -426,13 +426,17 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
     // slots: keep a decision in its slot while it shows; newly started ones take free slots (oldest first)
     for (let q = 0; q < MAX_SLOTS; q++) {
       const sl = st.slots[q];
-      if (sl.d && now - sl.d.at >= decisionLife(sl.d)) {
+      if (sl.d && (now - sl.d.at >= decisionLife(sl.d) || (sl.d.cut && now - sl.d.cut > 160))) {
         sl.d = null;
         sl.mix = 0;
         if (st.optSlot === q) st.optSlot = -1;
       }
     }
     st.extra = 0;
+    // high-volume mode: one glyph at a time on this agent, the rest count as "+N"
+    const cap = hvActive(inst, now) ? 1 : MAX_SLOTS;
+    let used = 0;
+    for (let q = 0; q < MAX_SLOTS; q++) if (st.slots[q].d) used++;
     for (let j = 0; j < inst.decisions.length; j++) {
       const d = inst.decisions[j];
       if (decisionMix(d, now) <= 0) continue;
@@ -440,18 +444,19 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
       let k = -1;
       for (let q = 0; q < MAX_SLOTS; q++) {
         if (st.slots[q].d === d) has = true;
-        else if (k < 0 && !st.slots[q].d) k = q;
+        else if (k < 0 && !st.slots[q].d && used < cap) k = q;
       }
       if (has) continue;
       if (k >= 0) {
         st.slots[k].d = d;
+        used++;
         assign(k, d);
       } else st.extra++;
     }
     st.extraMix += ((st.extra > 0 ? 1 : 0) - st.extraMix) * 0.25;
     if (st.extra > 0 && st.extra !== st.shownExtra) {
       st.shownExtra = st.extra;
-      lbl.current[MAX_SLOTS]?.setText(`+${st.extra} more`);
+      lbl.current[MAX_SLOTS]?.setText(cap === 1 ? `+${st.extra}` : `+${st.extra} more`);
     }
 
     const s = agent.scale;

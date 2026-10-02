@@ -7,7 +7,7 @@ import { startLiveRun, useRunAvailable, useRunWorkflows } from "./useSceneSetup"
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
 import { decisionTint } from "./kit/DecisionGlyph";
-import { decisionText, getInstance, isDeny, isDone, isLive, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
+import { decisionText, getInstance, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -49,7 +49,11 @@ export function describe(e: WorldEvent): string {
     case "skill":
       return e.status === "start" ? `${short(e.id)} · skill: ${e.name}` : `${short(e.id)} · skill: ${e.name} done`;
     case "decision":
-      return `${short(e.id)} · ${decisionText(e)} · ${Math.round(e.ms)}ms`;
+      return `${short(e.id)} · ${decisionText(e)} · ${Math.round(e.ms)}ms${e.why ? ` · ${e.why}` : ""}`;
+    case "decision_stats":
+      return `${short(e.id)} · ${e.n} decisions in ${Math.round(e.window_ms)}ms`;
+    case "order":
+      return `${short(e.id)} · ${orderText(e)}${e.reason ? ` · ${e.reason}` : ""}`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
     case "chat":
@@ -66,12 +70,30 @@ function chipState(run: Run, s: string): [string, string] {
   return w ? ["waiting", `${s}: ${waitLabel(w)}`] : [run.steps[s], `${s}: ${run.steps[s]}`];
 }
 
+/** order accent: buy / yes green, sell / no red, rejected / cancelled grey */
+export const orderColor = (o: { side: string; status: string }) =>
+  o.status === "rejected" || o.status === "cancelled" ? "#94a3b8" : o.side === "sell" || o.side === "no" ? "#fb7185" : "#4ade80";
+
+/** 60 s decision-rate sparkline (per-second samples), inline SVG */
+function Sparkline({ data }: { data: number[] }) {
+  if (data.length < 2) return null;
+  const max = Math.max(...data, 1);
+  const W = 60, H = 14;
+  const pts = data.map((v, k) => `${((k + 60 - data.length) / 59) * W},${H - 1 - (v / max) * (H - 2)}`).join(" ");
+  return (
+    <svg className="hud-spark" width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 /** decision accent: noul yes green / no red, choice + score cyan */
 export const decisionColor = (d: { kind: string; result: string; p?: number }) => decisionTint(d);
 
 function colorOf(e: WorldEvent) {
   if (e.type === "skill") return SKILL_COLOR;
   if (e.type === "decision") return decisionColor(e);
+  if (e.type === "order") return orderColor(e);
   const id = "id" in e ? e.id : e.type === "message" ? e.from_id : null;
   const inst = id ? world.instances.get(id) : null;
   if (inst) return TYPE_COLOR[inst.type];
@@ -257,13 +279,28 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
                   <b>{graph}</b> graph
                 </span>
               )}
-              {w.stats.decisions > 0 && (
+              {w.stats.decisions > 0 && w.rate.perS > 2 && (
+                <span
+                  className={`hud-stat hud-dec-hv${w.rate.deny > 0.05 ? " is-deny" : ""}`}
+                  title={`decisions per second (last 60 s)\n${w.stats.decisions} decisions in total\n${[...w.decisionProviders].map(([p, v]) => `${p}: ${v.n}`).join("\n")}`}
+                >
+                  <b>{Math.round(w.rate.perS)}/s</b> · deny {(w.rate.deny * 100).toFixed(w.rate.deny < 0.1 ? 1 : 0)}% · {Math.round(w.rate.p50)}/{Math.round(w.rate.p95)} ms
+                  <Sparkline data={w.rate.spark} />
+                </span>
+              )}
+              {w.stats.decisions > 0 && w.rate.perS <= 2 && (
                 <span
                   key={w.stats.decisions} // re-mounts on every decision: the chip pulses once
                   className={`hud-stat hud-dec${lastDec && isDeny(lastDec) ? " is-deny" : ""}`}
                   title={[...w.decisionProviders].map(([p, v]) => `${p}: ${v.n} · avg ${Math.round(v.ms / v.n)} ms`).join("\n")}
                 >
                   <b>{w.stats.decisions}</b> decisions · avg {Math.round(w.stats.decisionMs / w.stats.decisions)} ms
+                </span>
+              )}
+              {w.orders.n > 0 && (
+                <span className="hud-stat" title={`orders: ${w.orders.n} · paper ${w.orders.paper} · rejected/cancelled ${w.orders.rejected}`}>
+                  orders <b>{w.orders.n}</b>
+                  {w.orders.paper > 0 && w.orders.paper === w.orders.n ? " (paper)" : w.orders.paper > 0 ? ` (${w.orders.paper} paper)` : ""}
                 </span>
               )}
               {w.stats.mcpCalls > 0 && (
@@ -717,13 +754,38 @@ function AgentDetail({ i }: { i: Instance }) {
           </div>
         </section>
       )}
+      {i.hv && (
+        <section>
+          <h4>Decision rate {hvActive(i) ? "" : "(quiet)"}</h4>
+          <p className="ap-hv">{haloText(i.hv)} · p95 {Math.round(i.hv.p95)}ms</p>
+          <div className="ap-hv-bar" title="outcome mix (smoothed)">
+            {i.hv.seg.map((f, k) =>
+              f > 0.005 ? <span key={k} style={{ flexGrow: f, background: HALO_COLORS[k] }} title={`${segName(k)} ${Math.round(f * 100)}%`} /> : null,
+            )}
+          </div>
+        </section>
+      )}
+      {i.orders.length > 0 && (
+        <section>
+          <h4>Orders</h4>
+          <ul className="ap-decisions">
+            {[...i.orders].reverse().map((o, k) => (
+              <li key={k} className={o.status === "rejected" || o.status === "cancelled" ? "is-strike" : undefined} style={{ ["--c" as string]: orderColor(o) }} title={o.reason || o.instrument}>
+                <b>{o.dry_run ? "paper" : o.status}</b>
+                <span>{orderText(o)}</span>
+                <em>{o.instrument}</em>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {i.decisions.length > 0 && (
         <section>
-          <h4>Decisions</h4>
+          <h4>{i.hv ? "Interesting decisions" : "Decisions"}</h4>
           <ul className="ap-decisions">
             {[...i.decisions].reverse().map((d, k) => (
               <li key={k} className={isDeny(d) ? "is-deny" : undefined} style={{ ["--c" as string]: decisionColor(d) }} title={d.options?.map((o) => `${o.name} ${Math.round(o.p * 100)}%`).join("\n") || d.question}>
-                <b>{d.kind}</b>
+                <b>{d.why || d.kind}</b>
                 <span>{decisionText(d)}</span>
                 <em>{Math.round(d.ms)}ms</em>
               </li>
@@ -763,4 +825,13 @@ function AgentDetail({ i }: { i: Instance }) {
       </section>
     </div>
   );
+}
+
+/** halo category label: route slots show the route result name */
+function segName(k: number): string {
+  const c = HALO_CATS[k];
+  if (c.startsWith("r") && c.length === 2) {
+    for (const [name, slot] of routeSlots) if (`r${slot}` === c) return name;
+  }
+  return c === "yes" ? "check yes" : c === "no" ? "check no" : c;
 }

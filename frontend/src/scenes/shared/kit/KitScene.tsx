@@ -18,6 +18,7 @@ import { LabelScope, labels, labelTick, type LabelScopeValue } from "./labels";
 import { config, kitExtents, kitTick } from "./layout";
 import { SkillSigil } from "./SkillSigil";
 import { DecisionGlyph } from "./DecisionGlyph";
+import { DecisionHalos, HaloLabel, OrderChip } from "./HighVolume";
 import { PRESETS, type LayoutPreset, type PresetName } from "./presets";
 import { kit, type KitAgent, type KitBackend, type KitMcp, type KitRun, type Plane } from "./state";
 
@@ -177,8 +178,11 @@ function Agents({ Agent, Edge, selected, onSelect, radius, height }: { Agent: Co
           </Dim>
           <SkillSigil agent={a} radius={radius} height={height} />
           <DecisionGlyph agent={a} radius={radius} height={height} />
+          <HaloLabel agent={a} radius={radius} height={height} />
+          <OrderChip agent={a} radius={radius} height={height} />
         </AgentScope>
       ))}
+      <DecisionHalos radius={radius} height={height} />
     </>
   );
 }

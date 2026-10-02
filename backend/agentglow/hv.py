@@ -9,8 +9,8 @@ buffered "interesting" individual decisions that fit the global budget.
   time has room (GLOBAL_CAP). One over the budget is aggregated instead (counted in its agent's `decision_stats`).
 - Above HV_RATE/s the agent is *busy*: its decisions are aggregated into one `decision_stats` per flush window, and
   only interesting ones are kept as individual events (`"hv": true, "why"`): important (`agentglow.decision.important`)
-  > guard deny > route flip (result differs from that agent's previous route result) > low confidence
-  (LOW_P_MIN <= p <= LOW_P_MAX). They are buffered and emitted at the flush, best first, round-robin across agents,
+  > guard deny > route flip (result differs from that agent's previous route result) > low-confidence guard
+  (LOW_P_MIN <= p <= LOW_P_MAX; unsure checks are routine at volume and are not interesting). They are buffered and emitted at the flush, best first, round-robin across agents,
   within what is left of the global budget; the rest are dropped (still counted in the stats).
 - A busy agent becomes calm again after CALM_WINDOWS flush windows in a row with fewer than HV_RATE decisions.
 - Every decision is either an individual event or counted in a `decision_stats` (`n` = all decisions of that agent in
@@ -127,8 +127,8 @@ class DecisionRate:
             return "deny"
         if flip:
             return "flip"
-        p = ev.get("p")
-        if isinstance(p, (int, float)) and LOW_P_MIN <= p <= LOW_P_MAX:
+        p = ev.get("p")  # an unsure GUARD (routine checks are often unsure: not interesting at volume)
+        if purpose == "guard" and isinstance(p, (int, float)) and LOW_P_MIN <= p <= LOW_P_MAX:
             return "low_p"
         return None
 

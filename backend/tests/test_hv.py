@@ -88,14 +88,16 @@ def test_interesting_decisions_still_pass_when_busy():
     w.decide(0, t + 140, p=0.5)  # low confidence
     w.decide(0, t + 150, p=0.99, important=True)
     w.decide(0, t + 160, p=0.39)  # not low confidence (just outside 0.4..0.6)
+    w.decide(0, t + 170, purpose="check", p=0.5)  # an unsure check is routine at volume: not interesting
     out = w.tick(T0 + 1000)
     ind = kinds(out, "decision")
     assert [e["why"] for e in ind] == ["deny", "flip", "low_p", "important"]
     assert all(e["hv"] for e in ind)
     (st,) = kinds(out, "decision_stats")
-    assert st["n"] == 12
+    assert st["n"] == 13
     assert st["by_purpose"]["route"] == {"n": 3, "results": {"haiku": 2, "sonnet": 1}}
     assert st["by_purpose"]["guard"] == {"n": 9, "allow": 8, "deny": 1}
+    assert st["by_purpose"]["check"] == {"n": 1, "yes": 1, "no": 0}
 
 
 def test_global_cap_and_least_interesting_dropped():
