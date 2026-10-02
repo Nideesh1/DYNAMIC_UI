@@ -5,6 +5,8 @@
 #   open http://localhost:8101                                    # 3D scenes
 #   docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 #   docker compose exec worker uv run python trigger.py --incident   # incident triage demo (see the example README)
+#   docker compose exec worker uv run python trigger.py --vendor     # long-running vendor consolidation demo, then:
+#   curl -X POST localhost:8300/approve                               # approve it (or: trigger.py --approve)
 #   ./scripts/gen-obs-env.sh   # only for the langfuse profile: generates its local secrets into .env
 #   LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d     # + Langfuse at :3100 (same spans, side by side)
 #
@@ -67,7 +69,27 @@ services:
     depends_on: [agentglow]
     restart: unless-stopped
 
-  worker:       # Hatchet worker running the deepagents workflows `agent_smoke` and `incident_triage`
+  mcp_erp:      # `erp` MCP server (:8203/mcp) → SAP / Coupa (simulated), vendor consolidation demo
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["uv", "run", "python", "-m", "app.erp_mcp_server"]
+    environment:
+      AGENTGLOW_URL: http://agentglow:8100
+      AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
+    depends_on: [agentglow]
+    restart: unless-stopped
+
+  mcp_email:    # `email` MCP server (:8204/mcp) → Exchange (simulated), vendor consolidation demo
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["uv", "run", "python", "-m", "app.email_mcp_server"]
+    environment:
+      AGENTGLOW_URL: http://agentglow:8100
+      AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
+    depends_on: [agentglow]
+    restart: unless-stopped
+
+  worker:       # Hatchet worker running the deepagents workflows `agent_smoke`, `incident_triage`, `vendor_consolidation`
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
     command: ["uv", "run", "python", "-m", "app.worker"]
@@ -77,6 +99,10 @@ services:
       MCP_URL: http://mcp:8200/mcp
       OBS_MCP_URL: http://mcp_obs:8201/mcp
       GITHUB_MCP_URL: http://mcp_github:8202/mcp
+      ERP_MCP_URL: http://mcp_erp:8203/mcp
+      EMAIL_MCP_URL: http://mcp_email:8204/mcp
+      DEMO_SLEEP_S: ${DEMO_SLEEP_S:-20}                 # vendor demo: durable sleep between negotiation rounds
+      APPROVAL_TIMEOUT_S: ${APPROVAL_TIMEOUT_S:-1800}   # vendor demo: auto-approve after 30 min
       FALKOR_HOST: falkordb
       AGENT_MODEL: ${AGENT_MODEL:-google_genai:gemini-3.8-flash}   # provider:model (google_genai / openai / anthropic)
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -92,14 +118,17 @@ services:
       mcp: {condition: service_started}
       mcp_obs: {condition: service_started}
       mcp_github: {condition: service_started}
+      mcp_erp: {condition: service_started}
+      mcp_email: {condition: service_started}
       obs_hatchet_engine: {condition: service_started}
       obs_hatchet_token: {condition: service_completed_successfully}
     restart: unless-stopped
 
-  trigger:      # internal HTTP trigger (POST :8300/run {topic, workflow?} → agent_smoke or incident_triage run); agentglow's POST /live/run forwards here
+  trigger:      # HTTP trigger (POST :8300/run {topic, workflow?} → agent_smoke / incident_triage / vendor_consolidation run; POST :8300/approve); agentglow's POST /live/run forwards here
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
     command: ["uv", "run", "python", "-m", "app.trigger_api"]
+    ports: ["127.0.0.1:8300:8300"]   # host: curl -X POST localhost:8300/approve (vendor demo)
     volumes: [obs_hatchet_token:/hatchet-token:ro]   # Hatchet API token, read automatically by app/config.py
     depends_on:
       obs_hatchet_engine: {condition: service_started}

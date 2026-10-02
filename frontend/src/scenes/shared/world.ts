@@ -25,10 +25,11 @@ export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "fai
 // ------------------------------------------------------------------ event contract (v2)
 export type WorldEvent =
   | { type: "run"; run_id: string; status: "started" | "renamed" | "completed" | "failed"; topic: string; workflow: string; ts: number }
-  | { type: "step"; run_id: string; step: StepName; status: "running" | "done" | "failed"; ts: number }
+  // "waiting": the step is paused in a wait (approval, durable sleep, ...); `reason` = what it waits on, `until` = epoch ms
+  | { type: "step"; run_id: string; step: StepName; status: "running" | "waiting" | "done" | "failed"; reason?: string; until?: number; ts: number }
   | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; ts: number }
   | { type: "exit"; run_id: string; id: string; status: "done" | "failed"; ts: number }
-  | { type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; ts: number }
+  | { type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; reason?: string; until?: number; ts: number }
   | { type: "llm"; run_id: string; id: string; tokens_in: number; tokens_out: number; latency_ms: number; ts: number }
   | { type: "message"; run_id: string; from_id: string; to_id: string; text: string; ts: number }
   | { type: "tool"; run_id: string; id: string; tool: string; args_preview: string; ts: number }
@@ -113,7 +114,11 @@ export type Instance = {
   /** newest started skill ("" = none yet) and when the last active one ended (0 while one is active) */
   skill: string;
   skillEndAt: number;
+  /** what it is waiting on (status "waiting" with a reason), else null */
+  wait: Wait | null;
 };
+/** A declared wait: what it waits on ("approval", "sleep", an event key) and its deadline / wake-up (epoch ms, 0 = none). */
+export type Wait = { reason: string; until: number };
 /** one skill on one agent; startAt / endAt (performance.now()) drive its sigil ring (endAt 0 while active) */
 export type SkillUse = { active: boolean; count: number; last: number; startAt: number; endAt: number };
 /** Skill sigil timing (ms): fade in, minimum time shown after a start (Claude Code skills are instantaneous tool
@@ -152,8 +157,11 @@ export type Run = {
   color: string;
   slot: number; // 0..N stable lane/position for scenes
   status: "started" | "completed" | "failed";
-  /** status of every step seen so far; a step is only known once its first event arrives */
+  /** status of every step seen so far; a step is only known once its first event arrives. A waiting step stays
+   * "running" here (running but paused) and is listed in `waits`. */
   steps: Record<StepName, StepStatus>;
+  /** steps paused in a wait (durable approval / sleep): step -> what it waits on */
+  waits: Record<StepName, Wait>;
   /** step names in first-seen order */
   stepOrder: StepName[];
   /** true once a step event arrives (e.g. Hatchet); plain agent runs have no steps */
@@ -189,6 +197,18 @@ export function slotLabel(r: Run, k: number): string {
   return `${cur} +${names.length - 1}`;
 }
 /** Steps for chips / label lines: the first MAX_STEP_CHIPS in order, plus how many more are hidden. */
+/** The run's first waiting step (in step order), or null. */
+export function runWait(r: Run): (Wait & { step: StepName }) | null {
+  for (const s of r.stepOrder) if (r.waits[s] && r.steps[s] === "running") return { step: s, ...r.waits[s] };
+  return null;
+}
+const hhmm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** "sleeping until 14:05" / "waiting on approval" / "waiting on approval (until Oct 3, 09:00)" */
+export function waitLabel(w: Wait, now = Date.now()): string {
+  const when = !w.until ? "" : Math.abs(w.until - now) < 20 * 3600_000 ? hhmm(w.until) : `${new Date(w.until).toLocaleDateString([], { month: "short", day: "numeric" })}, ${hhmm(w.until)}`;
+  if (w.reason === "sleep") return when ? `sleeping until ${when}` : "sleeping";
+  return `waiting on ${w.reason}${when ? ` (until ${when})` : ""}`;
+}
 export function stepChips(r: Run, max = MAX_STEP_CHIPS): { shown: StepName[]; more: number } {
   const n = r.stepOrder.length;
   const cut = n > max ? max - 1 : n; // the "+N" chip takes the last place
@@ -332,6 +352,7 @@ export function apply(ev: WorldEvent) {
           slot,
           status: "started",
           steps: {},
+          waits: {},
           stepOrder: [],
           hasSteps: false,
           startedAt: now,
@@ -360,9 +381,12 @@ export function apply(ev: WorldEvent) {
       r.hasSteps = true;
       if (!(ev.step in r.steps)) r.stepOrder.push(ev.step);
       const was = r.steps[ev.step];
-      r.steps[ev.step] = ev.status; // a retry just overwrites: failed → running → done
-      if (ev.status === "done") r.lastDone = ev.step;
-      if (ev.status === "running" && was !== "running") {
+      const status = ev.status === "waiting" ? "running" : ev.status; // waiting = running but paused
+      r.steps[ev.step] = status; // a retry just overwrites: failed → running → done
+      if (ev.status === "waiting") r.waits[ev.step] = { reason: ev.reason || "wait", until: ev.until ?? 0 };
+      else delete r.waits[ev.step];
+      if (status === "done") r.lastDone = ev.step;
+      if (status === "running" && was !== "running") {
         // hand off from the step that finished last, else from one still running; skipped within a slot
         // (parallel siblings, retries in place)
         const prev = r.lastDone || r.stepOrder.find((s) => s !== ev.step && r.steps[s] === "running");
@@ -402,6 +426,7 @@ export function apply(ev: WorldEvent) {
         skills: new Map(),
         skill: "",
         skillEndAt: 0,
+        wait: null,
       });
       world.stats.spawned++;
       world.focus = ev.id;
@@ -412,6 +437,7 @@ export function apply(ev: WorldEvent) {
       const i = world.instances.get(ev.id);
       if (i) {
         i.status = ev.status;
+        i.wait = null;
         i.doneAt = now;
         // stays dimmed until its run ends; no known (or an already ended) run, or a subagent replayed (e.g. on
         // page refresh) already genuinely old in real wall-clock time: fade right away instead of waiting again.
@@ -431,7 +457,10 @@ export function apply(ev: WorldEvent) {
     }
     case "agent": {
       const i = world.instances.get(ev.id);
-      if (i) i.status = ev.status;
+      if (i) {
+        i.status = ev.status;
+        i.wait = ev.status === "waiting" && ev.reason ? { reason: ev.reason, until: ev.until ?? 0 } : null;
+      }
       if (ev.status === "thinking") {
         world.focus = ev.id;
         world.focusAt = now;
@@ -601,7 +630,7 @@ export function tick(now = performance.now()) {
   }
   // a run that never reports completion: once every agent has been finished for ORPHAN_RUN_MS, fade them out
   for (const [run, t] of runLastDone)
-    if (!runsWorking.has(run) && now - t > ORPHAN_RUN_MS)
+    if (!runsWorking.has(run) && now - t > ORPHAN_RUN_MS && !isWaiting(world.runs.get(run)))
       for (const i of world.instances.values()) if (i.run === run && !i.exitAt) i.exitAt = now;
   for (const [id, r] of world.runs) {
     if (r.endedAt && now - r.endedAt > RUN_LINGER_MS && !runsWithInstances.has(id)) {
@@ -618,6 +647,9 @@ export function tick(now = performance.now()) {
   world.flares = world.flares.filter((f) => now - f.start < 2600);
   if (changed || nc !== world.comets.length || nf !== world.flares.length || nm !== world.mcpCalls.length) notify();
 }
+
+/** a run paused in a wait (approval / durable sleep) is not orphaned: its finished agents stay until it resumes */
+const isWaiting = (r: Run | undefined) => !!r && r.status === "started" && runWait(r) !== null;
 
 /** 0..1 visibility for an instance: grows in on spawn, fades out after exit. */
 export function presence(i: Instance, now = performance.now()) {

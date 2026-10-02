@@ -112,3 +112,35 @@ def seed_services() -> int:
     for a, b, rel in SERVICE_EDGES:
         g().query(f"MATCH (a:Entity {{name: $a}}), (b:Entity {{name: $b}}) MERGE (a)-[:{rel}]->(b)", {"a": a, "b": b})
     return len(SERVICES)
+
+
+# ---- vendor consolidation demo: vendor / category nodes written by the inventory agent ------------------------
+VENDOR_Q = (
+    "MERGE (c:Entity:Category {name: $c}) SET c.kind = 'Category' "
+    "MERGE (v:Entity:Vendor {name: $v}) SET v.kind = 'Vendor', v.annual_spend_usd = $s "
+    "MERGE (v)-[:IN_CATEGORY]->(c)"
+)
+CATEGORY_VENDORS_Q = (
+    "MATCH (v:Vendor)-[:IN_CATEGORY]->(c:Category) WHERE toLower(c.name) CONTAINS $c "
+    "RETURN v.name AS vendor, c.name AS category, v.annual_spend_usd AS annual_spend_usd ORDER BY annual_spend_usd DESC LIMIT 20"
+)
+PLAN_Q = "MERGE (p:Entity:Plan {name: $n}) SET p.kind = 'Plan', p.summary = $s"
+PLAN_LINK_Q = "MATCH (p:Entity {name: $n}), (v:Vendor {name: $v}) MERGE (p)-[:CONSOLIDATES]->(v)"
+
+
+def write_vendor(vendor: str, category: str, spend: int) -> None:
+    rows(VENDOR_Q, {"v": vendor, "c": category, "s": int(spend)})
+
+
+def category_vendors(category: str) -> list[dict]:
+    return rows(CATEGORY_VENDORS_Q, {"c": category.lower().strip()})
+
+
+def write_plan(name: str, summary: str, vendors: list[str]) -> list[str]:
+    rows(PLAN_Q, {"n": name, "s": summary})
+    linked = []
+    for v in vendors:
+        if rows("MATCH (v:Vendor {name: $v}) RETURN v.name AS n", {"v": v}):
+            rows(PLAN_LINK_Q, {"n": name, "v": v})
+            linked.append(v)
+    return linked
