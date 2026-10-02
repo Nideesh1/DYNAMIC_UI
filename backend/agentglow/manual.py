@@ -345,7 +345,10 @@ def decided(kind: str, question: str, result: Any, p: float | None = None, optio
             purpose: str | None = None, target: str | None = None, latency_ms: float = 0,
             parent: _Span | None = None) -> None:
     """Record one finished decision (backdated by `latency_ms`), e.g. after `jev.noul(...)` returned."""
-    start = time.time_ns() - int(latency_ms * 1e6) if latency_ms else None
+    start = None
+    if latency_ms:  # backdate, but never before the enclosing span started (keeps ended-span replay ordered)
+        around = parent.span if parent is not None else trace.get_current_span()
+        start = max(time.time_ns() - int(latency_ms * 1e6), getattr(around, "start_time", None) or 0)
     Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, start_ns=start).start().end()
 
 

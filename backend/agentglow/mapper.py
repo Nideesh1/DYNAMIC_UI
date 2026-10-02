@@ -51,6 +51,11 @@ with no span activity for RUN_MAX_IDLE_MS (default 24 h) is completed so nothing
 when a task triggers it, is in another open Hatchet run) fold into their parent run as subagents of the agent that
 triggered them; parallel instances of one step name (fan-out) keep the step `running` until the last one ends.
 
+Decisions (docs/SPEC.md "Decisions"): a span with `agentglow.decision` = choice | score | noul (+ `.question`, `.result`,
+`.p`, `.options` JSON [{name, p}], `.provider`, `.purpose`, `.target`) is a fast structured decision (Jev / Laya / an
+LLM-as-judge) of its owning agent: one `decision` event when it ends (`ms` = its duration, options top 5 by p, labels
+via scrub.decision_text). It is never classified as an LLM or tool span itself.
+
 MCP backend spans (`agentglow.mcp.*`, from the MCP server's process) can reach the server before the caller's tool span:
 one whose parent is not known yet is held until the parent arrives, and dropped after ORPHAN_MS (never a run of its own).
 """
@@ -64,7 +69,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from .scrub import SKILL_KEY, session_title, skill_name, step_name
+from .scrub import SKILL_KEY, decision_text, session_title, skill_name, step_name
 
 LLM_OPS = {"chat", "text_completion", "generate_content"}
 LG_NODES = {"model", "tools", "agent", "call_model", "__start__", "__end__"}
@@ -76,6 +81,9 @@ TEXT_RE = re.compile(r'"(?:content|text)":\s*"((?:[^"\\]|\\.)+)"')
 SKILL_MD_RE = re.compile(r"^(.*/)?(?P<skill>[^/]+)/SKILL\.md$")  # deepagents: read_file of <skill dir>/SKILL.md
 FILE_PATH_RE = re.compile(r"""['"]file_path['"]\s*:\s*['"]([^'"]+)['"]""")
 MAX_SKILL_SETS = 1024
+DECISION_KEY = "agentglow.decision"
+DECISION_KINDS = {"choice", "score", "noul"}
+MAX_DECISION_OPTIONS = 5
 SHELL_TOOLS = {"shell", "exec_command", "local_shell", "bash", "run_shell_command"}
 # a shell READ of a skill file (no redirect/pipe between the reader and the path); `sed -i` is a write, see _shell_skills
 SHELL_SKILL_RE = re.compile(r"\b(?:cat|sed|head|less|more|bat)\b[^\n>|;&]*?([A-Za-z0-9._-]+)/SKILL\.md\b")
@@ -168,6 +176,17 @@ def _deadline(v: Any) -> int | None:
             return None
         return int((dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp() * 1000)
     return int(n * 1000 if n < 1e11 else n)
+
+
+def _prob(v: Any) -> float | None:
+    """Probability → float clamped to 0..1 (None if missing / not a number)."""
+    if isinstance(v, bool) or v is None or v == "":
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return min(1.0, max(0.0, f)) if f == f else None
 
 
 @dataclass
@@ -404,7 +423,9 @@ class Mapper:
         elif parent and is_lg_node(s.name) and not parent.agent and not is_lg_node(parent.name) and not (parent.llm or parent.tool):
             self._spawn(parent, parent.name, out, parent.start)  # parent is a LangGraph agent graph
 
-        if self._is_llm(s) or (not self._not_llm(s) and ((parent and parent.name in LLM_PARENTS) or s.name.startswith("Chat"))):
+        if DECISION_KEY in a:
+            pass  # a decision is shown as one `decision` event at its end, never as an LLM turn / tool call
+        elif self._is_llm(s) or (not self._not_llm(s) and ((parent and parent.name in LLM_PARENTS) or s.name.startswith("Chat"))):
             s.llm = True
             self._thinking(self._owner(s, out), s.run, out, ts)
         elif self._is_tool(s) or (parent and parent.name == "tools"):
@@ -439,11 +460,13 @@ class Mapper:
             name = self._agent_name(s)
             if name:
                 self._spawn(s, name, out, s.start)
-        if not s.llm and self._is_llm(s):
+        if DECISION_KEY in a:
+            s.llm = s.tool = False
+        elif not s.llm and self._is_llm(s):
             s.llm = True
         elif s.llm and self._not_llm(s):  # guessed from its parent (`agent` node) but it's a chain, not a model call
             s.llm = False
-        if not s.tool and not s.llm and not s.agent and self._is_tool(s):
+        if not s.tool and not s.llm and not s.agent and DECISION_KEY not in a and self._is_tool(s):
             self._tool_start(s, out, s.start)
         self._mcp_call(s, out, s.start)
         if "SkillsMiddleware" in s.name:
@@ -481,6 +504,8 @@ class Mapper:
             out.append({"type": "skill", "run_id": s.run, "id": self._owner(s, out), "name": s.skill, "status": "end", "ts": ts})
         if a.get("db.system"):
             self._graph(s, out, ts)
+        if a.get(DECISION_KEY) and not s.agent:
+            self._decision(s, out, ts)
         if "agentglow.final" in a:
             self._final(s.run, a["agentglow.final"], out, ts)
         if s.team:  # langgraph-supervisor team graph ended → its supervisor exits
@@ -1050,6 +1075,46 @@ class Mapper:
                 if self._first_use(s, out, "skill:" + n, owner):
                     out.append({"type": "skill", "run_id": s.run, "id": owner, "name": n, "status": "start", "ts": ts})
                     out.append({"type": "skill", "run_id": s.run, "id": owner, "name": n, "status": "end", "ts": ts})
+
+    def _decision(self, s: Span, out: list, ts: int) -> None:
+        a = s.attrs
+        kind = str(a.get(DECISION_KEY)).strip().lower()
+        opts = self._decision_options(a.get(DECISION_KEY + ".options"))
+        result = decision_text(a.get(DECISION_KEY + ".result"), 40) or (opts[0]["name"] if opts else "")
+        p = _prob(a.get(DECISION_KEY + ".p"))
+        if p is None:
+            p = next((o["p"] for o in opts if o["name"] == result), None)
+        ev = {"type": "decision", "run_id": s.run, "id": self._owner(s, out), "kind": kind if kind in DECISION_KINDS else "choice",
+              "question": decision_text(a.get(DECISION_KEY + ".question"), 80) or kind, "result": result}
+        if p is not None:
+            ev["p"] = round(p, 3)
+        if opts:
+            ev["options"] = opts
+        ev["provider"] = decision_text(a.get(DECISION_KEY + ".provider"), 40) or "llm"
+        for k in ("purpose", "target"):
+            v = decision_text(a.get(f"{DECISION_KEY}.{k}"), 40)
+            if v:
+                ev[k] = v
+        ev.update(ms=max(0, (s.end or s.start) - s.start), ts=ts)
+        out.append(ev)
+
+    @staticmethod
+    def _decision_options(v: Any) -> list[dict]:
+        """`agentglow.decision.options` (JSON string, list of {name, p}, or {name: p}) → top MAX_DECISION_OPTIONS by p."""
+        data = _json(v)
+        if isinstance(data, dict):
+            data = [{"name": k, "p": x} for k, x in data.items()]
+        rows = []
+        for it in data if isinstance(data, list) else []:
+            if isinstance(it, str):
+                it = _json(it)
+            if not isinstance(it, dict):
+                continue
+            name, p = decision_text(it.get("name"), 40), _prob(it.get("p"))
+            if name and p is not None:
+                rows.append({"name": name, "p": round(p, 3)})
+        rows.sort(key=lambda r: -r["p"])
+        return rows[:MAX_DECISION_OPTIONS]
 
     def _graph(self, s: Span, out: list, ts: int) -> None:
         a = s.attrs

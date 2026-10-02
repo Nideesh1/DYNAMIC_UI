@@ -12,6 +12,9 @@ put identity data, raw user prompts or secrets into world events. See docs/SPEC.
   redacted, max PROMPT_MAX chars). OTel prompt keys stay dropped either way.
 - A skill name (`agentglow.skill`) is reduced to `[A-Za-z0-9:_.-]`, max 64 chars (`skill_name`); nothing else
   about a skill use (args, prompt text) is ever carried in the skill event.
+- Decision labels (`agentglow.decision.*`, see docs/SPEC.md "Decisions"): `decision_text`: secrets redacted, control
+  chars and whitespace runs collapsed, the question max 80 chars, result / provider / purpose / target / option names
+  max 40.
 - A Claude Code session title (`session_title`: the user's /rename name, else Claude Code's auto title) is a run
   label: secrets redacted, control chars and whitespace runs collapsed, max 60 chars.
 - Secret-looking substrings are replaced with `[redacted]` in every remaining string value (API keys, tokens,
@@ -67,6 +70,16 @@ def session_title(v: object) -> str:
         return ""
     s = TITLE_WS_RE.sub(" ", redact(v)).strip()
     return s if len(s) <= TITLE_MAX else s[: TITLE_MAX - 1].rstrip() + "…"
+
+
+def decision_text(v: object, n: int = 80) -> str:
+    """Decision question / label → secrets redacted, whitespace/control runs → one space, max `n` chars."""
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    if v is None or not isinstance(v, (str, int, float)):
+        return ""
+    s = TITLE_WS_RE.sub(" ", redact(str(v))).strip()
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 
 def prompt_text(v: object) -> str:

@@ -220,7 +220,7 @@ duration) with these attributes (all set at start or by end; the event is emitte
 | `agentglow.decision.target` | optional: the tool being gated, the model routed to, ... |
 
 World event: `{"type": "decision", "run_id", "id": <owning agent instance id>, "kind", "question", "result", "p",
-"options"?, "provider", "purpose"?, "target"?, "ms", "ts"}` (`ms` = span duration, `p` rounded to 3 places,
+"options"?, "provider", "purpose"?, "target"?, "ms", "ts"}` (`ms` = span duration, `p` rounded to 3 places (if missing: the result's option p, else omitted),
 `options` only when given). A decision span is not an agent, LLM or tool itself: an LLM-as-judge call nested inside it
 still pulses as an LLM turn of the same agent. Scrub: `question` secrets redacted, whitespace collapsed, max 80 chars;
 `result`, `provider`, `purpose`, `target` and option names the same, max 40 chars; `p` clamped to 0..1.
