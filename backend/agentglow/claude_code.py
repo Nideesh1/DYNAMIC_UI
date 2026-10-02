@@ -270,6 +270,9 @@ class ClaudeCodeAdapter:
             self._spawn_sub(s, *s.held.pop(str(aid)), now, out)
         if aid and str(aid) in s.revivable and ev != "SubagentStart":  # closed on silence but alive after all
             self._revive(s, str(aid), now, out)
+        if (aid and ev not in ("SubagentStart", "SubagentStop") and str(aid) not in s.agents
+                and str(aid) not in s.named):  # started before this server saw it (e.g. a restart): adopt it
+            self._spawn_sub(s, p, _meta(p.get("agent_transcript_path")), now, now, out)
         if aid and str(aid) in s.agents:
             s.agents[str(aid)].last = now
         if ev == "UserPromptSubmit":  # a /rename shows on the next prompt; the first run gets the title too
