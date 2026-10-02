@@ -11,7 +11,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpServer } from "../shared/world";
+import { MCP_GLOW_HOLD_MS, waitSeconds, world, type McpServer } from "../shared/world";
 import { backendPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { additive, ArcLines, BOX, CONE, CYL, emissive, glowSprite, hazardTexture, Pool } from "./fx";
 import { AMBER, archControl, bezier, clamp01, dockDoor, dockFloor, easeInOut, machineTop, RED, reduced, rgb, WHITE } from "./layout";
@@ -32,7 +32,7 @@ const doorMat = () => {
 
 const WALK = new THREE.MeshBasicMaterial({ color: new THREE.Color("#ffb020").multiplyScalar(0.32), toneMapped: false });
 
-const isActive = (activeAt: number, inflight: number, now: number) => (inflight > 0 ? 1 : clamp01(1 - (now - activeAt) / 1400));
+const isActive = (activeAt: number, inflight: number, now: number) => (inflight > 0 ? 1 : clamp01(1 - (now - activeAt - MCP_GLOW_HOLD_MS) / 1400));
 
 export function Backend({ mcp, backend }: BackendSlotProps) {
   const srv = mcp.srv;

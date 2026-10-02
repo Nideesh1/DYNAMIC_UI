@@ -11,7 +11,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { mcpGlow, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
 import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import {
   ARROW_GEO,
@@ -130,7 +130,7 @@ export function Backend({ mcp, backend }: BackendSlotProps) {
     at.current?.position.copy(backend.pos);
     const now = performance.now();
     const busy = res.inflight > 0;
-    const act = Math.exp(-((now - res.activeAt) / 1000) * 1.5);
+    const act = mcpGlow(res.activeAt, now, 1.5);
     const beat = busy && !reduced ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 5) : busy ? 0.5 : 0;
     const k2 = busy ? 1.5 + beat * 0.9 : 0.16 + act * 0.9;
     m.cap.color.copy(col).multiplyScalar(k2 * 0.5);
@@ -220,7 +220,7 @@ export function Server({ mcp }: McpServerSlotProps) {
     at.current?.position.copy(mcp.pos);
     const now = performance.now();
     const busy = srv.inflight > 0;
-    const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.5);
+    const act = mcpGlow(srv.activeAt, now, 1.5);
     const beat = busy && !reduced ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 3) : 0;
     const k = (busy ? 0.8 + beat * 0.3 : 0.3) + act * 0.45;
     m.cap.color.copy(col).multiplyScalar(k * 0.55);

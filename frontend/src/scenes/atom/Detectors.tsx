@@ -9,7 +9,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { mcpGlow, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
 import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { AMBER, ARROW_GEO, ArrowPool, CurvePool, RED, TUBE_GEO, WHITE, additive, bezier, bow, clamp01, easeInOut, easeOut, glowSprite, lineMat, reduced, tubeMaterial } from "./fx";
 
@@ -85,7 +85,7 @@ export function Sensor({ mcp, backend }: BackendSlotProps) {
     eu.uP2.value.copy(backend.pos);
     eu.uP1.value.copy(mcp.pos).add(backend.pos).multiplyScalar(0.5);
     const busy = res.inflight > 0;
-    const act = Math.exp(-((now - res.activeAt) / 1000) * 1.5);
+    const act = mcpGlow(res.activeAt, now, 1.5);
     const beat = busy && !reduced ? 0.5 + 0.5 * Math.sin(t * 5) : busy ? 0.5 : 0;
     const k2 = busy ? 1.5 + beat * 0.8 : 0.14 + act * 0.9;
     m.fill.color.copy(col).multiplyScalar(k2 * 0.22);
@@ -191,7 +191,7 @@ export function Detector({ mcp }: McpServerSlotProps) {
     if (srv.calls !== lastCalls.current) (lastCalls.current = srv.calls), (hitAt.current = now);
     aim.current?.lookAt(ORIGIN); // beam axis points at the agents (stage centre)
     const busy = srv.inflight > 0;
-    const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.4);
+    const act = mcpGlow(srv.activeAt, now, 1.4);
     const k = (busy ? 0.8 : 0.32) + act * 0.5;
     m.line.color.copy(col).multiplyScalar(k * 1.4);
     m.fill.color.copy(col).multiplyScalar(k * 0.05);

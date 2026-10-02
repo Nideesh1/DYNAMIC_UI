@@ -9,7 +9,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { mcpGlow, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
 import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { AMBER, ArrowPool, CREAM, GOLD, HONEY, RED, SPHERE_GEO, TUBE_GEO, WHITE, arcControl, bezier, clamp01, easeInOut, easeOut, glowSprite, lineMat, reduced, tubeMaterial } from "./fx";
 
@@ -76,7 +76,7 @@ export function Petal({ mcp, backend }: BackendSlotProps) {
     petal.current?.position.set(L * 0.98, 0, 0.05);
     petal.current?.scale.set(L, 0.52, 0.12);
     const busy = res.inflight > 0;
-    const act = Math.exp(-((now - res.activeAt) / 1000) * 1.4);
+    const act = mcpGlow(res.activeAt, now, 1.4);
     let latest: McpCall | null = null;
     for (const c of world.mcpCalls) if (c.server === srv.name && c.resource === res.name && (!latest || c.start > latest.start)) latest = c;
     const age = latest ? (now - latest.start) / latest.dur : 9;
@@ -169,7 +169,7 @@ export function Flower({ mcp }: McpServerSlotProps) {
     su.uP2.value.set(pos.x + dirx * 1.5, pos.y - 9, pos.z - 2.5);
     const now = performance.now();
     const busy = srv.inflight > 0;
-    const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.4);
+    const act = mcpGlow(srv.activeAt, now, 1.4);
     m.halo.color.copy(col).multiplyScalar(busy ? 0.3 : 0.08 + act * 0.18);
     hs.current?.scale.setScalar(busy ? 7 : 5.5);
     (m.seeds.material as THREE.MeshBasicMaterial).color.copy(GOLD).multiplyScalar(busy ? 1.4 : 0.6 + act * 0.6);

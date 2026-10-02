@@ -730,6 +730,18 @@ export function setHasGraph(v: boolean, doNotify = true) {
   if (doNotify) notify();
 }
 
+/** An MCP server / backend stays fully lit this long after its last call or result, then its glow decays. */
+export const MCP_GLOW_HOLD_MS = 2500;
+/**
+ * 0..1 "recently active" glow of an MCP server or backend (its `activeAt`): 1 for MCP_GLOW_HOLD_MS after the last
+ * call/result, then exp(-rate * seconds). Shared by every theme so MCP activity stays visible alongside the graph
+ * reads that usually follow it.
+ */
+export function mcpGlow(activeAt: number, now: number, rate = 1.5): number {
+  const s = (now - activeAt - MCP_GLOW_HOLD_MS) / 1000;
+  return s <= 0 ? 1 : Math.exp(-s * rate);
+}
+
 /** An MCP server with no calls for this long (and none in flight) fades out; the next call fades it back in. */
 export const MCP_IDLE_MS = 90_000;
 /** Should this MCP server (and its used backends) be drawn now? Shared "only show resources while used" rule. */

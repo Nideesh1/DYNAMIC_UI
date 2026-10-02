@@ -3,7 +3,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D } from "../shared/Label3D";
-import { MCP_COLORS, TYPE_COLOR, waitSeconds, world } from "../shared/world";
+import { mcpGlow, MCP_COLORS, TYPE_COLOR, waitSeconds, world } from "../shared/world";
 import { agentLive, serverPos, type McpServerSlotProps } from "../shared/kit";
 import { hdr, reduced } from "./layout";
 
@@ -117,7 +117,7 @@ export function Airport({ mcp }: McpServerSlotProps) {
       at.current.rotation.y = Math.atan2(-mcp.out.z, mcp.out.x);
     }
     const now = performance.now();
-    const act = Math.exp(-(now - srv.activeAt) / 450);
+    const act = mcpGlow(srv.activeAt, now, 2.2);
     const busy = srv.inflight > 0;
     if (spin.current) spin.current.rotation.y += dt * (reduced ? 0.1 : busy ? 2.4 : 0.25);
     if (beacon.current) {

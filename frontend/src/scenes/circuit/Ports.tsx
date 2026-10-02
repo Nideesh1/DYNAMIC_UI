@@ -6,7 +6,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D } from "../shared/Label3D";
-import { world } from "../shared/world";
+import { mcpGlow, world } from "../shared/world";
 import { type McpServerSlotProps } from "../shared/kit";
 import { getGlowTexture, reduced, rgb } from "./layout";
 
@@ -38,7 +38,7 @@ export function Port({ mcp }: McpServerSlotProps) {
     const now = performance.now();
     const s = world.mcpServers.get(srv.name) ?? srv;
     const busy = s.inflight > 0;
-    const act = Math.exp(-((now - s.activeAt) / 1000) * 2.5);
+    const act = mcpGlow(s.activeAt, now, 2.5);
     const t = clock.elapsedTime;
     const throb = busy ? 0.75 + 0.25 * Math.sin(t * 7) : 0.5 + 0.1 * Math.sin(t * 1.3);
     const lvl = throb + act * 2.5 + (busy ? 1 : 0);

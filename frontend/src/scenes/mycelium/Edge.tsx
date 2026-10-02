@@ -10,7 +10,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { hash01, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { mcpGlow, hash01, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
 import { agentLive, kit, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { AMBER, ArrowPool, RED, TEAL, TUBE_GEO, WHITE, additiveBasic, clamp01, easeInOut, easeOut, glowSpriteMaterial, hyphaMaterial, reduced, type TubeMat } from "./fx";
 
@@ -146,7 +146,7 @@ export function McpBackend({ mcp, backend }: BackendSlotProps) {
     const now = performance.now();
     const t = reduced ? 0 : clock.elapsedTime;
     const busy = res.inflight > 0;
-    const act = Math.exp(-((now - res.activeAt) / 1000) * 1.5);
+    const act = mcpGlow(res.activeAt, now, 1.5);
     const beat = busy ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 5) : 0;
     const k2 = busy ? 1.6 + beat * 0.9 : 0.14 + act * 0.9;
     m.fill.color.copy(col).multiplyScalar(k2 * 0.5);
@@ -231,7 +231,7 @@ export function McpStore({ mcp }: McpServerSlotProps) {
     const now = performance.now();
     const t = reduced ? 0 : clock.elapsedTime;
     const busy = srv.inflight > 0;
-    const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.5);
+    const act = mcpGlow(srv.activeAt, now, 1.5);
     const beat = 0.5 + 0.5 * Math.sin(clock.elapsedTime * (busy ? 4 : 1.2) + seed * 5);
     m.body.uniforms.uK.value = (busy ? 1.1 + beat * 0.4 : 0.5 + beat * 0.1) + act * 0.5;
     m.core.color.copy(col).lerp(WHITE, 0.4).multiplyScalar((busy ? 0.55 : 0.18) + act * 0.3);

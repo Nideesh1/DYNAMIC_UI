@@ -4,7 +4,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D } from "../shared/Label3D";
-import { TYPE_COLOR, waitSeconds, world, type Comet, type McpCall } from "../shared/world";
+import { mcpGlow, TYPE_COLOR, waitSeconds, world, type Comet, type McpCall } from "../shared/world";
 import { type McpServerSlotProps } from "../shared/kit";
 import { blimpAlt, blimpOf, BLIMP_SCALE, clamp01, easeInOut, reduced, roofOf } from "./layout";
 import { isExpanded, lod } from "../shared/lod";
@@ -129,7 +129,7 @@ export function Blimp({ mcp }: McpServerSlotProps) {
       g.scale.setScalar(BLIMP_SCALE * easeInOut(clamp01((now - born) / 1200)));
     }
     const busy = server.inflight > 0;
-    const ping = Math.exp(-((now - server.activeAt) / 1000) * 3);
+    const ping = mcpGlow(server.activeAt, now, 3);
     spin.current += dt * (busy ? 6 : 0.6) * (reduced ? 0.2 : 1);
     if (dish.current) dish.current.rotation.y = spin.current;
     if (screenMat.current) {

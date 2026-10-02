@@ -3,7 +3,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world } from "../shared/world";
+import { mcpGlow, waitSeconds, world } from "../shared/world";
 import { agentLive, type McpServerSlotProps } from "../shared/kit";
 import { ANGLER_SCALE, MOTION, arcPoint, dotTexture, lurePos } from "./layout";
 import { makeBellMaterial } from "./materials";
@@ -37,7 +37,7 @@ export function Angler({ mcp }: McpServerSlotProps) {
     const t = clock.elapsedTime * MOTION;
     const s = world.mcpServers.get(srv.name) ?? srv;
     const busy = s.inflight > 0;
-    const act = Math.exp(-(now - s.activeAt) / 500);
+    const act = mcpGlow(s.activeAt, now, 2);
     const appear = Math.min(1, (now - born) / 1200);
     const g = group.current;
     const f = fish.current;

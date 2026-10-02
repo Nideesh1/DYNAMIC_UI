@@ -9,7 +9,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { mcpGlow, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
 import { kit, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { AMBER, CurvePool, GlowPool, PHOSPHOR, RED, Style, WHITE, additive, additiveLine, arcControl, bezier, blips, clamp01, easeInOut, glowSprite, reduced } from "./fx";
 
@@ -39,7 +39,7 @@ export function Gate({ mcp, backend }: BackendSlotProps) {
     at.current?.position.set(backend.pos.x, 0, backend.pos.z);
     const now = performance.now();
     const busy = res.inflight > 0;
-    const act = Math.exp(-((now - res.activeAt) / 1000) * 1.4);
+    const act = mcpGlow(res.activeAt, now, 1.4);
     const beat = busy && !reduced ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 6) : 0.5;
     const k2 = busy ? 1.4 + beat * 0.8 : 0.25 + act * 1.0;
     m.fill.color.copy(col).multiplyScalar(k2 * 0.35);
@@ -86,7 +86,7 @@ export function Airport({ mcp }: McpServerSlotProps) {
     if (rot.current) rot.current.rotation.y = -Math.atan2(mcp.pos.x, -mcp.pos.z);
     const now = performance.now();
     const busy = srv.inflight > 0;
-    const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.3);
+    const act = mcpGlow(srv.activeAt, now, 1.3);
     // tower beacon blinks slowly at idle, fast while serving
     const blink = reduced ? 0.6 : Math.pow(0.5 + 0.5 * Math.sin(clock.elapsedTime * (busy ? 7 : 1.6) + srv.slot), 4);
     const k = 0.35 + act * 0.7 + (busy ? 0.5 : 0);
@@ -162,7 +162,7 @@ export function McpRoutes() {
         gp.copy(be.pos);
         ap.y = gp.y = 0.03;
         c.copy(ap).add(gp).multiplyScalar(0.5);
-        const act = Math.exp(-((now - res.activeAt) / 1000) * 1.4);
+        const act = mcpGlow(res.activeAt, now, 1.4);
         const cl = latest.get(srv.name + "|" + res.name);
         const back = cl && cl.phase === "result" ? (now - cl.start) / cl.dur : 9;
         if (back < 1) {

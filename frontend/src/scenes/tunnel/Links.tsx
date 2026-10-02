@@ -4,7 +4,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D } from "../shared/Label3D";
-import { TYPE_COLOR, waitSeconds, world } from "../shared/world";
+import { mcpGlow, TYPE_COLOR, waitSeconds, world } from "../shared/world";
 import { agentLive, serverPos, type McpServerSlotProps } from "../shared/kit";
 import { MOTION, glowTexture, ships, tube } from "./lanes";
 
@@ -264,7 +264,7 @@ export function Station({ mcp }: McpServerSlotProps) {
     if (!s) return;
     const now = performance.now();
     const t = clock.elapsedTime;
-    const act = Math.exp(-(now - s.activeAt) / 450);
+    const act = mcpGlow(s.activeAt, now, 2.2);
     const busy = s.inflight > 0 ? 1 : 0;
     const spin = (busy * 2.6 + act * 2) * Math.max(0.2, MOTION);
     if (ring1.current) ring1.current.rotation.z += dt * spin;
