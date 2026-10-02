@@ -1,13 +1,13 @@
 /**
  * A run is a grove: a soft pool of its run colour on the forest floor + a floating label (topic, status).
- * Hatchet runs (run.hasSteps) also get three lantern stones behind the grove - plan › research › write -
+ * Hatchet runs (run.hasSteps) also get three lantern stones behind the grove (the step slots, e.g. plan › research › write):
  * the running step's lantern burns amber, finished ones glow teal.
  */
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, useWorld, world, type Run } from "../shared/world";
+import { RUN_LINGER_MS, STEP_SLOTS, slotStatus, useWorld, world, type Run } from "../shared/world";
 import { fit, runLocal, type KitRun, type RunSlotProps } from "../shared/kit";
 import { C_AMBER, C_RED, C_TEAL, PLANE_FLAT, clamp01, easeOut, glowSpriteMaterial, groundGlowMaterial, reduced } from "./fx";
 
@@ -39,7 +39,7 @@ const _e = { w: 0, d: 0 };
 export function Grove({ run: kr }: RunSlotProps) {
   const col = useMemo(() => new THREE.Color(kr.color).lerp(C_TEAL, 0.35), [kr.color]);
   const mat = useMemo(() => groundGlowMaterial("#000"), []);
-  const lamps = useMemo(() => STEPS.map(() => glowSpriteMaterial("#000")), []);
+  const lamps = useMemo(() => STEP_SLOTS.map(() => glowSpriteMaterial("#000")), []);
   const pool = useRef<THREE.Mesh>(null);
   const labelG = useRef<THREE.Group>(null);
   const lampRefs = useRef<(THREE.Sprite | null)[]>([]);
@@ -66,10 +66,10 @@ export function Grove({ run: kr }: RunSlotProps) {
     const has = !!r?.hasSteps;
     if (has !== steps) setSteps(has);
     if (r && has)
-      STEPS.forEach((st0, i) => {
+      STEP_SLOTS.forEach((i) => {
         const g = lampG.current[i];
         if (g) runLocal(kr, kr.cu + (i - 1) * 1.7 * fit.spread, LAMP_V * fit.spread, g.position).setY(0);
-        const st = r.steps[st0];
+        const st = slotStatus(r, i);
         const flick = reduced ? 1 : 0.8 + 0.2 * Math.sin(clock.elapsedTime * 7 + i * 2) * Math.sin(clock.elapsedTime * 3.1 + i);
         const m = lamps[i];
         if (st === "running") m.color.copy(C_AMBER).multiplyScalar(0.9 * flick);
@@ -84,7 +84,7 @@ export function Grove({ run: kr }: RunSlotProps) {
     <>
       <mesh ref={pool} geometry={PLANE_FLAT} material={mat} />
       {steps &&
-        STEPS.map((_, i) => (
+        STEP_SLOTS.map((i) => (
           <group key={i} ref={(x) => void (lampG.current[i] = x)}>
             <mesh geometry={LANTERN_GEO} material={LANTERN_MAT} position={[0, 0.22, 0]} scale={[1, 0.8, 1]} />
             <sprite ref={(x) => void (lampRefs.current[i] = x)} material={lamps[i]} position={[0, 0.62, 0]} />

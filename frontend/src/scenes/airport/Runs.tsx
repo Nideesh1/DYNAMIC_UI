@@ -7,7 +7,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, useWorld, type Run } from "../shared/world";
+import { RUN_LINGER_MS, STEP_SLOTS, slotStatus, useWorld, type Run } from "../shared/world";
 import { kit, type KitRun, type RunSlotProps } from "../shared/kit";
 import { CurvePool, PHOSPHOR, WHITE, bearingOf, clamp01, easeOut, polar, reduced, scope } from "./fx";
 
@@ -73,8 +73,8 @@ export function RunSectors() {
       const r = scope.r + 0.3;
       if (run.hasSteps) {
         const w = (2 * HALF * grow) / 3;
-        for (let i = 0; i < STEPS.length; i++) {
-          const st = run.steps[STEPS[i]];
+        for (let i = 0; i < STEP_SLOTS.length; i++) {
+          const st = slotStatus(run, i);
           const beat = reduced ? 0.7 : 0.5 + 0.5 * Math.sin(t * 4);
           const lum = st === "running" ? 1.1 + beat * 0.8 : st === "done" ? 0.75 : st === "failed" ? 0.9 : 0.18;
           const b0 = b - HALF * grow + i * w + 0.02;

@@ -18,7 +18,7 @@ import * as THREE from "three";
 import type { Galaxy } from "../shared/useSceneSetup";
 import {
   KIND_COLOR,
-  STEPS,
+  slotStatus,
   TYPE_COLOR,
   RUN_LINGER_MS,
   energy,
@@ -981,13 +981,13 @@ export class FlowEngine {
         const dx = this.rAt[s * 6 + k * 2] - cx;
         const dz = this.rAt[s * 6 + k * 2 + 1] - cz;
         stTh[k] = dx * dx + dz * dz < 0.6 ? -Math.PI / 2 : Math.atan2(dz, dx);
-        const st = r.steps[STEPS[k]];
+        const st = slotStatus(r, k);
         stB[k] = this.rSteps[s] ? (st === "running" ? 2.2 : st === "done" ? 0.5 : 0) : 0;
       }
       const hAge = (now - r.handoffAt) / 1000;
       const hOn = this.rSteps[s] === 1 && r.handoffAt > 0 && hAge < 2.4;
-      const hFrom = stTh[STEPS.indexOf(r.handoffFrom)];
-      let hSpan = (stTh[STEPS.indexOf(r.handoffTo)] - hFrom) % TAU;
+      const hFrom = stTh[r.handoffFrom];
+      let hSpan = (stTh[r.handoffTo] - hFrom) % TAU;
       if (hSpan < 0) hSpan += TAU;
       const front = hSpan * Math.min(1, 1 - Math.pow(1 - Math.min(1, hAge / 1.4), 3));
       const hGain = hOn ? 3.2 * (1 - hAge / 2.4) : 0;
@@ -1061,8 +1061,8 @@ export class FlowEngine {
       const age = (now - r.handoffAt) / 1000;
       if (age > 2.4) continue;
       if (!this.rSteps[s] || this.rAlpha[s] < 0.01) continue;
-      this.attractor(s, STEPS.indexOf(r.handoffFrom), _v);
-      this.attractor(s, STEPS.indexOf(r.handoffTo), _w);
+      this.attractor(s, r.handoffFrom, _v);
+      this.attractor(s, r.handoffTo, _w);
       const col = this.rCol[s];
       const N = 220;
       for (let j = 0; j < N; j++) {
@@ -1286,7 +1286,7 @@ export class FlowEngine {
           continue;
         }
         this.attractor(s, k, _v);
-        const st = r.steps[STEPS[k]];
+        const st = slotStatus(r, k);
         const col = this.rCol[s];
         let sc = 0.6,
           b = 0.5,
@@ -1313,7 +1313,7 @@ export class FlowEngine {
           gs = 6;
         } else if (st === "failed") _c.copy(STEP_FAILED);
         // handoff arrival kick
-        if (r.handoffAt && STEPS[k] === r.handoffTo) {
+        if (r.handoffAt && k === r.handoffTo) {
           const ha = (now - r.handoffAt) / 1000 - 1.2;
           if (ha > 0 && ha < 1) {
             const kick = Math.exp(-ha * 4);

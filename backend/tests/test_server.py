@@ -129,6 +129,32 @@ def test_run_webhook_forwards_topic():
     assert r.status_code == 200 and r.json() == {"run_id": "r-123"}
     assert seen == {"url": "http://trigger:8300/run", "body": {"topic": "Why is churn rising?"}}
     assert c.post("/live/run", json={}).status_code == 400
+    c.post("/live/run", json={"topic": "Checkout latency spiked", "workflow": "incident"})
+    assert seen["body"] == {"topic": "Checkout latency spiked", "workflow": "incident"}  # optional workflow passes through
+
+
+def test_run_workflows_proxied_from_webhook():
+    import httpx
+
+    listing = {"workflows": [{"id": "brief", "label": "Churn brief", "topic": "Why?"}, {"id": "incident"}, {"label": "no id"}, "junk"]}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.method == "GET" and str(req.url) == "http://trigger:8300/run"
+        return httpx.Response(200, json=listing)
+
+    c = TestClient(create_app(run_webhook="http://trigger:8300/run", run_transport=httpx.MockTransport(handler)))
+    assert c.get("/live/run").json() == {"workflows": [{"id": "brief", "label": "Churn brief", "topic": "Why?"},
+                                                       {"id": "incident", "label": "incident", "topic": ""}]}
+    # a webhook without a listing (405, not JSON, unreachable) → empty list: the UI shows just the button
+    for resp in (httpx.Response(405), httpx.Response(200, text="ok"), httpx.Response(200, json=[1])):
+        c = TestClient(create_app(run_webhook="http://t/run", run_transport=httpx.MockTransport(lambda r, x=resp: x)))
+        assert c.get("/live/run").json() == {"workflows": []}
+
+    def down(req):
+        raise httpx.ConnectError("down")
+
+    c = TestClient(create_app(run_webhook="http://t/run", run_transport=httpx.MockTransport(down)))
+    assert c.get("/live/run").json() == {"workflows": []}
 
 
 def test_run_disabled_without_webhook(monkeypatch):
@@ -136,3 +162,4 @@ def test_run_disabled_without_webhook(monkeypatch):
     c = client()
     assert c.get("/live/health").json()["run"] is False
     assert c.post("/live/run", json={"topic": "x"}).status_code == 404
+    assert c.get("/live/run").status_code == 404

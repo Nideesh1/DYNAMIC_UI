@@ -3,10 +3,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { useSceneConfig } from "./config";
 import { HUD_LAYOUT_EVENT } from "./kit/fit";
 import "./hud.css";
-import { startLiveRun, useRunAvailable } from "./useSceneSetup";
+import { startLiveRun, useRunAvailable, useRunWorkflows } from "./useSceneSetup";
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
-import { getInstance, isDone, isLive, selectInstance, STEPS, TYPE_COLOR, useWorld, waitSeconds, world, type Instance, type WorldEvent } from "./world";
+import { getInstance, isDone, isLive, selectInstance, stepChips, TYPE_COLOR, useWorld, waitSeconds, world, type Instance, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -420,22 +420,57 @@ function FilterChip({ label, value }: { label: string; value: string }) {
   );
 }
 
+const WORKFLOW_KEY = "agentglow.hud.workflow";
+
+function loadWorkflow(): string {
+  try {
+    return localStorage.getItem(WORKFLOW_KEY) ?? "";
+  } catch {
+    return ""; // storage blocked: no remembered choice
+  }
+}
+
+function saveWorkflow(id: string) {
+  try {
+    localStorage.setItem(WORKFLOW_KEY, id);
+  } catch {
+    /* storage blocked: not persisted */
+  }
+}
+
+/** "▶ Run agents", plus a workflow picker when the server lists the run webhook's workflows (GET /live/run). */
 export function RunButton() {
+  const workflows = useRunWorkflows();
+  const [picked, setPicked] = useState(loadWorkflow);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const wf = workflows.find((w) => w.id === picked) ?? workflows[0];
   const run = async () => {
-    const topic = TOPICS[topicIdx++ % TOPICS.length];
+    const topic = wf?.topic || TOPICS[topicIdx++ % TOPICS.length];
     setBusy(true);
     try {
-      setMsg((await startLiveRun(topic)) ? `started · ${topic}` : "failed to start");
+      setMsg((await startLiveRun(topic, wf?.id)) ? `started · ${topic}` : "failed to start");
       window.setTimeout(() => setMsg(""), 6000);
     } finally {
       setBusy(false);
     }
   };
+  const pick = (id: string) => {
+    setPicked(id);
+    saveWorkflow(id);
+  };
   return (
     <div className="hud-run">
-      <button onClick={run} disabled={busy}>{busy ? "Starting…" : "▶ Run agents"}</button>
+      {workflows.length > 1 && (
+        <select value={wf?.id} onChange={(e) => pick(e.target.value)} disabled={busy} aria-label="Workflow to run" title={wf?.topic}>
+          {workflows.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.label}
+            </option>
+          ))}
+        </select>
+      )}
+      <button onClick={run} disabled={busy} title={wf?.topic || undefined}>{busy ? "Starting…" : "▶ Run agents"}</button>
       {msg && <span>{msg}</span>}
     </div>
   );
@@ -574,6 +609,7 @@ function AgentList() {
 function AgentDetail({ i }: { i: Instance }) {
   const w = useWorld();
   const run = w.runs.get(i.run);
+  const chips = run?.hasSteps ? stepChips(run) : null;
   const parent = getInstance(i.parent);
   const children = [...w.instances.values(), ...w.archive.values()].filter((c) => c.parent === i.id);
   const pending = [...w.mcpPending.values()].filter((p) => p.instance === i.id);
@@ -606,13 +642,14 @@ function AgentDetail({ i }: { i: Instance }) {
       <section>
         <h4>Run</h4>
         <p>{run ? run.topic : i.run}</p>
-        {run?.hasSteps && (
+        {run && chips && (
           <div className="ap-steps">
-            {STEPS.map((s) => (
-              <span key={s} data-status={run.steps[s]}>
+            {chips.shown.map((s) => (
+              <span key={s} data-status={run.steps[s]} title={`${s}: ${run.steps[s]}`}>
                 {s}
               </span>
             ))}
+            {chips.more > 0 && <span title={run.stepOrder.slice(-chips.more).map((s) => `${s}: ${run.steps[s]}`).join("\n")}>+{chips.more}</span>}
           </div>
         )}
       </section>

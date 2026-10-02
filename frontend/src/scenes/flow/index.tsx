@@ -12,7 +12,7 @@ import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocess
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
-import { STEPS, TYPE_COLOR, useWorld, world, type AgentType } from "../shared/world";
+import { STEP_SLOTS, slotLabel, slotStatus, stepChips, TYPE_COLOR, useWorld, world, type AgentType } from "../shared/world";
 import { KitScene, fit, kit, kitRoleU, runLocal, useKitGalaxy, type AgentSlotProps, type GraphSlotProps, type McpServerSlotProps, type RunSlotProps } from "../shared/kit";
 import { FlowEngine, NEB_R, PULSAR_Y } from "./engine";
 import "./flow.css";
@@ -121,12 +121,18 @@ function RunLabel({ run: kr }: RunSlotProps) {
   // small embeds: just the topic (the step chips + per-attractor names would pile up)
   const compact = fit.w < 900;
   const chip = (st: string) => (st === "running" ? run.color : st === "done" ? "#cbd5e1" : st === "failed" ? "#fecaca" : "#64748b");
+  const stepLine = () => {
+    const { shown, more } = stepChips(run);
+    const segs = shown.map((st, i) => ({ text: `${i ? "  " : ""}${st.toUpperCase()}`, color: chip(run.steps[st]) }));
+    if (more) segs.push({ text: `  +${more}`, color: chip("queued") });
+    return segs;
+  };
   return (
     <>
       <group ref={g}>
         <Label3D
           text={`${run.hasSteps ? "hatchet · " : ""}${run.topic}`}
-          secondary={compact ? undefined : run.hasSteps ? STEPS.map((st, i) => ({ text: `${i ? "  " : ""}${st.toUpperCase()}`, color: chip(run.steps[st]) })) : run.status === "started" ? "running…" : "run complete"}
+          secondary={compact ? undefined : run.hasSteps ? stepLine() : run.status === "started" ? "running…" : "run complete"}
           secondarySize={0.24}
           color={run.color}
           size={0.32}
@@ -137,17 +143,17 @@ function RunLabel({ run: kr }: RunSlotProps) {
       </group>
       {run.hasSteps &&
         !compact &&
-        STEPS.map((st, i) => (
-          <group key={st} ref={(x) => void (steps.current[i] = x)}>
+        STEP_SLOTS.map((i) => (
+          <group key={i} ref={(x) => void (steps.current[i] = x)}>
             <Label3D
-              text={st}
+              text={slotLabel(run, i)}
               font="mono"
               plate="none"
               uppercase
               letterSpacing={0.08}
               textColor={run.color}
               size={0.24}
-              opacity={run.steps[st] === "running" ? 1 : run.steps[st] === "done" ? 0.75 : 0.55}
+              opacity={slotStatus(run, i) === "running" ? 1 : slotStatus(run, i) === "done" ? 0.75 : 0.55}
               fadeMs={300}
               pxRange={[7.5, 10.5]}
             />

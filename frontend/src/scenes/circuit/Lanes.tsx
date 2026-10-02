@@ -5,8 +5,8 @@
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
-import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, world, type AgentType, type Run, type StepName } from "../shared/world";
+import { Label3D, SlotLabel3D, type Label3DHandle } from "../shared/Label3D";
+import { RUN_LINGER_MS, STEP_SLOTS, slotStatus, stepChips, world, type AgentType, type Run } from "../shared/world";
 import { fit, kit, kitRoleU, runLocal, type KitRun, type RunSlotProps } from "../shared/kit";
 import { busSpan, busV, clamp01, easeOut, reduced, rgb, type BusSpan } from "./layout";
 
@@ -14,7 +14,8 @@ const STEP_TINT = { queued: "#64748b", running: "#fde68a", done: "#5eead4", fail
 const QUEUED = new THREE.Color("#334155");
 const DONE = new THREE.Color("#5eead4");
 const FAILED = new THREE.Color("#ef4444");
-export const STEP_ROLE: Record<StepName, AgentType> = { plan: "planner", research: "researcher", write: "writer" };
+/** step slot → the role position its gate sits at */
+export const STEP_ROLE: AgentType[] = ["planner", "researcher", "writer"];
 
 const gateBox = new THREE.BoxGeometry(1.5, 0.55, 1.25);
 const gateEdges = new THREE.EdgesGeometry(gateBox);
@@ -24,6 +25,14 @@ const _x = new THREE.Vector3();
 const _z = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+
+/** bus label sub-line: every step (up to MAX_STEP_CHIPS, then +N) tinted by status */
+function stepLine(run: Run) {
+  const { shown, more } = stepChips(run);
+  const segs = shown.map((s, i) => ({ text: `${i ? "   " : ""}${s}${run.steps[s] === "done" ? " ·" : run.steps[s] === "failed" ? " ×" : ""}`, color: STEP_TINT[run.steps[s]] as string }));
+  if (more) segs.push({ text: `   +${more}`, color: STEP_TINT.queued });
+  return segs;
+}
 
 /** 0..1 lane visibility (fade after the run ends). */
 export function laneAlpha(r: Run, now: number) {
@@ -97,14 +106,14 @@ function Lane({ kr, run }: { kr: KitRun; run: Run }) {
     labelG.current?.position.set(span.u0 + 0.2, 0.3, vz - 1.5 * w * flip);
 
     const gs = Math.max(0.7, fit.spread * 0.9);
-    STEPS.forEach((s, k) => {
+    STEP_SLOTS.forEach((k) => {
       const gg = gateG.current[k];
       if (gg) {
-        gg.position.set(kitRoleU(STEP_ROLE[s]), 0, vz);
+        gg.position.set(kitRoleU(STEP_ROLE[k]), 0, vz);
         gg.scale.setScalar(gs);
         gg.visible = run.hasSteps;
       }
-      const st = run.steps[s];
+      const st = slotStatus(run, k);
       const gt = gates.current[k];
       const m = gateMats.current[k];
       const e = edgeMats.current[k];
@@ -127,13 +136,13 @@ function Lane({ kr, run }: { kr: KitRun; run: Run }) {
       }
     });
     if (label.current) {
-      const txt = STEPS.map((s) => `${s}:${run.steps[s]}`).join(" ") + run.hasSteps;
+      const txt = run.stepOrder.map((s) => `${s}:${run.steps[s]}`).join(" ") + run.hasSteps;
       if (txt !== lastLabel.current) {
         lastLabel.current = txt;
         label.current.setText(
           `${run.hasSteps ? "hatchet · " : ""}${run.topic}`,
           run.hasSteps
-            ? STEPS.map((s, i) => ({ text: `${i ? "   " : ""}${s}${run.steps[s] === "done" ? " ·" : run.steps[s] === "failed" ? " ×" : ""}`, color: STEP_TINT[run.steps[s]] }))
+            ? stepLine(run)
             : [{ text: run.status === "started" ? "bus active" : "bus idle", color: "#64748b" }],
         );
       }
@@ -151,8 +160,8 @@ function Lane({ kr, run }: { kr: KitRun; run: Run }) {
         {/* terminal pad at the bus origin */}
         <mesh ref={pad} geometry={UNIT} material={padMat} position={[0, 0.04, 0]} />
       </group>
-      {STEPS.map((s, k) => (
-        <group key={s} ref={(g) => void (gateG.current[k] = g)} visible={false}>
+      {STEP_SLOTS.map((k) => (
+        <group key={k} ref={(g) => void (gateG.current[k] = g)} visible={false}>
           <group ref={(g) => void (gates.current[k] = g)}>
             <mesh geometry={gateBox}>
               <meshStandardMaterial ref={(m) => void (gateMats.current[k] = m)} color="#070b16" metalness={0.75} roughness={0.3} toneMapped={false} />
@@ -167,7 +176,7 @@ function Lane({ kr, run }: { kr: KitRun; run: Run }) {
             <meshBasicMaterial toneMapped={false} transparent blending={THREE.AdditiveBlending} depthWrite={false} />
           </mesh>
           {/* silkscreen gate name */}
-          <Label3D position={[0, 0.05, -1.05]} text={`gate · ${s}`} color="#5eead4" uppercase letterSpacing={0.12} size={0.18} opacity={0.6} pxRange={[6.5, 9]} />
+          <SlotLabel3D run={run} slot={k} prefix="gate · " position={[0, 0.05, -1.05]} color="#5eead4" uppercase letterSpacing={0.12} size={0.18} opacity={0.6} pxRange={[6.5, 9]} />
         </group>
       ))}
       <group ref={labelG}>

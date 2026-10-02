@@ -6,7 +6,7 @@
  */
 import * as THREE from "three";
 import { agentLive, fit, kit, kitRoleU, serverPos, type KitRun } from "../shared/kit";
-import { hash01, type StepName } from "../shared/world";
+import { hash01 } from "../shared/world";
 
 export { reduced } from "../shared/kit";
 
@@ -24,7 +24,7 @@ export function laneSpan(r: KitRun, out: LaneSpan): LaneSpan {
   out.v1 = r.cv + r.hv + LANE_PAD_V * sp;
   return out;
 }
-const ROLE: Record<StepName, "planner" | "researcher" | "writer"> = { plan: "planner", research: "researcher", write: "writer" };
+const ROLE = { plan: "planner", research: "researcher", write: "writer" } as const;
 /** Stage boundaries along a line (run-local u): plan | research at b1, research | write at b2 (scouts stay in research). */
 export function stageBounds(out: { b1: number; b2: number }) {
   const p = kitRoleU(ROLE.plan);
@@ -34,9 +34,9 @@ export function stageBounds(out: { b1: number; b2: number }) {
   out.b2 = r + (w - r) * 0.8;
   return out;
 }
-/** Run-local u of the middle of a stage on a line. */
-export function stageMid(s: StepName, span: LaneSpan, b: { b1: number; b2: number }) {
-  return s === "plan" ? (span.u0 + b.b1) / 2 : s === "research" ? (b.b1 + b.b2) / 2 : (b.b2 + span.u1) / 2;
+/** Run-local u of the middle of a stage (step slot 0 / 1 / 2) on a line. */
+export function stageMid(k: number, span: LaneSpan, b: { b1: number; b2: number }) {
+  return k === 0 ? (span.u0 + b.b1) / 2 : k === 1 ? (b.b1 + b.b2) / 2 : (b.b2 + span.u1) / 2;
 }
 
 // ---------------------------------------------------------------- machines

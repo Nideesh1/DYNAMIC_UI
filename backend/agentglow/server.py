@@ -151,7 +151,8 @@ def ingest_key_ok(keys: tuple[bytes, ...], request: Request) -> bool:
 def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_webhook: str | None = None,
                run_transport=None, secret: str | None = None, ingest_key: str | list[str] | None = None) -> FastAPI:
     """`run_webhook` (or AGENTGLOW_RUN_WEBHOOK): URL that POST /live/run forwards `{topic, scope?}` to (your trigger
-    endpoint); the UI shows "Run agents" only when it is set. `run_transport` is an optional httpx transport (tests).
+    endpoint); the UI shows "Run agents" only when it is set. GET /live/run proxies `GET <webhook>` for an optional
+    `{workflows: [{id, label, topic}]}` listing (the UI's workflow picker). `run_transport` is an optional httpx transport (tests).
     `secret` (or AGENTGLOW_SECRET): viewer endpoints require `Authorization: Bearer <token>` (agentglow.make_token)
     and the token alone decides what the viewer sees. Without it (dev), X-AgentGlow-Scope / X-AgentGlow-Run headers
     (and `?run=` on /live/stream) pick the filter.
@@ -305,9 +306,31 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
             out["scope"], out["run_id"] = f.scope, f.run
         return out
 
+    @app.get("/live/run")
+    async def run_workflows(request: Request):
+        """Workflows the run webhook offers (the HUD picker): proxies `GET <webhook>` → `{workflows: [{id, label, topic}]}`.
+        Empty list when the webhook does not list any (the UI then shows just the button)."""
+        viewer(request)
+        if not run_webhook:
+            raise HTTPException(404, "no run webhook (set AGENTGLOW_RUN_WEBHOOK)")
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(transport=run_transport, timeout=3) as c:
+                r = await c.get(run_webhook)
+            items = r.json().get("workflows") if r.status_code < 400 else None
+        except (httpx.HTTPError, ValueError, AttributeError):
+            items = None
+        out = []
+        for w in items if isinstance(items, list) else []:
+            if isinstance(w, dict) and w.get("id"):
+                wid = str(w["id"])[:64]
+                out.append({"id": wid, "label": str(w.get("label") or wid)[:64], "topic": str(w.get("topic") or "")[:300]})
+        return {"workflows": out[:20]}
+
     @app.post("/live/run")
     async def run(body: dict, request: Request):
-        """Start a run of the user's agents: forwards `{topic, scope?}` to AGENTGLOW_RUN_WEBHOOK, returns its JSON
+        """Start a run of the user's agents: forwards `{topic, scope?, workflow?}` to AGENTGLOW_RUN_WEBHOOK, returns its JSON
         (e.g. `{run_id}`). Secure mode: the scope comes from the token only; dev: X-AgentGlow-Scope or body `scope`."""
         f = viewer(request)
         if secret:
@@ -321,11 +344,13 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
         topic = str(body.get("topic") or "").strip()
         if not topic:
             raise HTTPException(400, "topic is required")
+        workflow = str(body.get("workflow") or "").strip()[:64]  # optional: which of the webhook's workflows to run
         import httpx
 
+        payload = {"topic": topic, **({"scope": scope} if scope else {}), **({"workflow": workflow} if workflow else {})}
         try:
             async with httpx.AsyncClient(transport=run_transport, timeout=30) as c:
-                r = await c.post(run_webhook, json={"topic": topic, **({"scope": scope} if scope else {})})
+                r = await c.post(run_webhook, json=payload)
         except httpx.HTTPError as e:
             raise HTTPException(502, f"run webhook unreachable: {e}")
         if r.status_code >= 400:

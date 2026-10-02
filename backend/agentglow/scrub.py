@@ -38,6 +38,7 @@ HOOK_PROMPT_KEYS = {"prompt", "user_message"}
 SKILL_KEY = "agentglow.skill"
 SKILL_BAD_RE = re.compile(r"[^A-Za-z0-9:_.-]+")
 TITLE_MAX = 60
+STEP_MAX = 40
 TITLE_WS_RE = re.compile(r"[\s\x00-\x1f\x7f]+")
 
 
@@ -47,6 +48,13 @@ def skill_name(v: object) -> str:
         return ""
     s = SKILL_BAD_RE.sub("-", redact(str(v).strip().lstrip("/"))).strip("-")
     return s[:64]
+
+
+def step_name(v: object) -> str:
+    """Workflow step name (any identifier the workflow defines) → safe label: disallowed runs become `-`, max STEP_MAX chars."""
+    if v is None or isinstance(v, bool) or not isinstance(v, (str, int, float)):
+        return ""
+    return SKILL_BAD_RE.sub("-", redact(str(v).strip())).strip("-")[:STEP_MAX]
 
 
 def session_title(v: object) -> str:

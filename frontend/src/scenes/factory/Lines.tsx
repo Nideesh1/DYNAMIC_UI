@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, useWorld, world, type Run } from "../shared/world";
+import { RUN_LINGER_MS, STEP_SLOTS, slotLabel, slotStatus, useWorld, world, type Run } from "../shared/world";
 import { fit, kit, runLocal, type KitRun, type RunSlotProps } from "../shared/kit";
 import { BOX, CYL, emissive, glowSprite } from "./fx";
 import { AMBER, clamp01, easeOut, laneSpan, reduced, rgb, stageBounds, stageMid, WHITE, YELLOW, type LaneSpan } from "./layout";
@@ -91,7 +91,7 @@ function Lane({ kr, run }: { kr: KitRun; run: Run }) {
     [run.color],
   );
   useEffect(() => () => mat.dispose(), [mat]);
-  const lamps = useMemo(() => STEPS.map(() => ({ lamp: emissive(AMBER), glow: glowSprite(AMBER) })), []);
+  const lamps = useMemo(() => STEP_SLOTS.map(() => ({ lamp: emissive(AMBER), glow: glowSprite(AMBER) })), []);
   const frame = useRef<THREE.Group>(null);
   const floor = useRef<THREE.Mesh>(null);
   const signs = useRef<(THREE.Group | null)[]>([]);
@@ -135,7 +135,7 @@ function Lane({ kr, run }: { kr: KitRun; run: Run }) {
     u.uOp.value = grow * fade;
     u.uTime.value += reduced ? 0 : dt;
     u.uSteps.value = run.hasSteps ? 1 : 0;
-    u.uStage.value.set(STATE_N[run.steps.plan], STATE_N[run.steps.research], STATE_N[run.steps.write]);
+    u.uStage.value.set(STATE_N[slotStatus(run, 0)], STATE_N[slotStatus(run, 1)], STATE_N[slotStatus(run, 2)]);
     const ha = (now - run.handoffAt) / 1000;
     if (run.handoffAt && ha < 1.4) {
       const a = (stageMid(run.handoffFrom, span, B) - span.u0) / len;
@@ -145,9 +145,8 @@ function Lane({ kr, run }: { kr: KitRun; run: Run }) {
     } else u.uSweepK.value = 0;
     const t = reduced ? 0 : clock.elapsedTime;
     const sc = Math.max(0.75, fit.spread * 0.9);
-    for (let k = 0; k < STEPS.length; k++) {
-      const st = STEPS[k];
-      const state = run.steps[st];
+    for (let k = 0; k < STEP_SLOTS.length; k++) {
+      const state = slotStatus(run, k);
       const L = lamps[k];
       const c = state === "running" ? YELLOW : state === "done" ? WHITE : state === "failed" ? rgb("#ff2d2d") : AMBER;
       const lvl = state === "running" ? 1.2 + 0.4 * Math.sin(t * 5) : state === "done" ? 0.55 : state === "failed" ? 1 : 0.12;
@@ -165,8 +164,8 @@ function Lane({ kr, run }: { kr: KitRun; run: Run }) {
   return (
     <group ref={frame}>
       <mesh ref={floor} geometry={LANE_PLANE} material={mat} />
-      {STEPS.map((st, k) => (
-        <group key={st} ref={(g) => void (signs.current[k] = g)} visible={false}>
+      {STEP_SLOTS.map((k) => (
+        <group key={k} ref={(g) => void (signs.current[k] = g)} visible={false}>
           <mesh geometry={CYL} material={POLE} scale={[0.06, 1.6, 0.06]} position-y={0.8} />
           <mesh geometry={BOX} material={POLE} scale={[0.5, 0.18, 0.08]} position-y={1.55} />
           <mesh geometry={CYL} material={lamps[k].lamp} scale={[0.1, 0.14, 0.1]} position-y={1.72} />
@@ -183,8 +182,9 @@ function Lane({ kr, run }: { kr: KitRun; run: Run }) {
 
 function StageLabel({ run, k }: { run: Run; k: number }) {
   useWorld();
-  const st = STEPS[k];
-  const state = run.steps[st];
+  const st = slotLabel(run, k);
+  const state = slotStatus(run, k);
+  if (!st) return null;
   return (
     <Label3D
       position={[0, 2.25, 0]}

@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine } from "../shared/Label3D";
-import { RUN_LINGER_MS, useWorld, world, type Run } from "../shared/world";
+import { RUN_LINGER_MS, slotStatus, useWorld, world, type Run } from "../shared/world";
 import { kit, type KitRun, type RunSlotProps } from "../shared/kit";
 import { clamp01, easeOut, reduced } from "./fx";
 
@@ -79,7 +79,7 @@ export function FairyRing({ run: kr }: RunSlotProps) {
     u.uK.value = 0.55 * fade * (!run || run.status === "started" ? 1 : 0.6);
     if (run?.hasSteps) {
       const lvl = (st: string) => (st === "running" ? 1.5 + 0.5 * Math.sin(t * 3) : st === "done" ? 0.9 : st === "failed" ? 0.5 : 0.22);
-      u.uSteps.value.set(lvl(run.steps.plan), lvl(run.steps.research), lvl(run.steps.write));
+      u.uSteps.value.set(lvl(slotStatus(run, 0)), lvl(slotStatus(run, 1)), lvl(slotStatus(run, 2)));
     } else u.uSteps.value.set(1, 1, 1);
     u.uGaps.value = run?.hasSteps ? 1 : 0;
     // the ring sweeps in starting behind the colony (opposite the fan direction)

@@ -190,6 +190,35 @@ function setRunAvailable(v: boolean) {
   }
 }
 
+/** A workflow the run webhook offers (GET /live/run); `topic` is its example topic. */
+export type RunWorkflow = { id: string; label: string; topic: string };
+const NO_WORKFLOWS: RunWorkflow[] = [];
+let runWorkflows = NO_WORKFLOWS;
+
+function setRunWorkflows(v: RunWorkflow[]) {
+  runWorkflows = v.length ? v : NO_WORKFLOWS;
+  emit();
+}
+
+/** Workflows the HUD picker offers; empty (no picker) when the server or its webhook lists none. */
+export function useRunWorkflows(): RunWorkflow[] {
+  return useSyncExternalStore(
+    (f) => (subs.add(f), () => subs.delete(f)),
+    () => runWorkflows,
+    () => NO_WORKFLOWS,
+  );
+}
+
+async function fetchWorkflows(source: string, auth: Auth): Promise<RunWorkflow[]> {
+  try {
+    const r = await fetch(`${source}/live/run`, { headers: { ...authHeaders(auth), accept: "application/json" }, signal: AbortSignal.timeout(5000) });
+    const j = r.ok ? ((await r.json()) as { workflows?: unknown }) : {};
+    return Array.isArray(j.workflows) ? (j.workflows as RunWorkflow[]).filter((w) => w && typeof w.id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /** True when the server exposes POST /live/run (the HUD shows a "Run agents" button). */
 export function useRunAvailable(): boolean {
   return useSyncExternalStore(
@@ -263,7 +292,11 @@ function start(c: Conn, sim: boolean) {
     }
     setMode("live");
     const headers = authHeaders(c.auth);
-    probeRun(c.source, c.auth, h).then((ok) => !c.dead && setRunAvailable(ok));
+    probeRun(c.source, c.auth, h).then((ok) => {
+      if (c.dead) return;
+      setRunAvailable(ok);
+      if (ok) fetchWorkflows(c.source, c.auth).then((ws) => !c.dead && setRunWorkflows(ws));
+    });
     fetch(`${c.source}/live/graph`, { headers })
       .then((r) => (r.status === 401 || r.status === 403 ? (denied(), null) : r.ok ? r.json() : null))
       .then((g: Galaxy | null) => {
@@ -301,6 +334,7 @@ function teardown(c: Conn) {
   if (conn === c) {
     conn = null;
     setRunAvailable(false);
+    setRunWorkflows([]);
   }
 }
 
@@ -329,11 +363,12 @@ function release(c: Conn) {
   }, 0);
 }
 
-/** Trigger a run via the server's optional POST /live/run. Returns the run id, or null (404 → button hides). */
-export async function startLiveRun(topic: string): Promise<string | null> {
+/** Trigger a run via the server's optional POST /live/run (`workflow`: one of useRunWorkflows' ids, sent only when
+ * chosen). Returns the run id, or null (404 → button hides). */
+export async function startLiveRun(topic: string, workflow?: string): Promise<string | null> {
   const source = conn?.source ?? "";
   const auth = conn?.auth ?? {};
-  const body = auth.scope ? { topic, scope: auth.scope } : { topic };
+  const body = { topic, ...(auth.scope ? { scope: auth.scope } : {}), ...(workflow ? { workflow } : {}) };
   const r = await fetch(`${source}/live/run`, { method: "POST", headers: { ...authHeaders(auth), "content-type": "application/json" }, body: JSON.stringify(body) });
   if (r.status === 404 || r.status === 405) setRunAvailable(false);
   if (r.status === 401 || r.status === 403) setUnauthorized(true);

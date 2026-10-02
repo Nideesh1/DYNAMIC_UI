@@ -6,13 +6,14 @@
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
-import { Label3D, type LabelSeg } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, useWorld, world, type AgentType, type StepName } from "../shared/world";
+import { Label3D, SlotLabel3D, type LabelSeg } from "../shared/Label3D";
+import { RUN_LINGER_MS, STEP_SLOTS, slotStatus, stepChips, useWorld, world, type AgentType } from "../shared/world";
 import { kit, kitRoleU, type RunSlotProps } from "../shared/kit";
 import { hdr, reduced, spurOf, trunkSpan, TRACK_Y, type Spur } from "./layout";
 
 const STEP_COLOR: Record<string, string> = { queued: "#64748b", running: "#fbbf24", done: "#22c55e", failed: "#ef4444" };
-const STEP_ROLE: Record<StepName, AgentType> = { plan: "planner", research: "researcher", write: "writer" };
+/** step slot → the role position its station sits at */
+const STEP_ROLE: AgentType[] = ["planner", "researcher", "writer"];
 const MAX_SPURS = 10;
 const SEG_GEO = new THREE.CylinderGeometry(1, 1, 1, 8, 1, true);
 const UPV = new THREE.Vector3(0, 1, 0);
@@ -51,6 +52,7 @@ export function RunLine({ run: kr }: RunSlotProps) {
   const bumpB = useRef<THREE.Mesh>(null);
   const labelG = useRef<THREE.Group>(null);
   const c = useMemo(() => new THREE.Color(), []);
+  const liveRun = kr.run ?? world.runs.get(kr.id);
 
   const mats = useMemo(
     () => ({
@@ -130,20 +132,20 @@ export function RunLine({ run: kr }: RunSlotProps) {
 
     mats.trunk.opacity = fade;
     mats.glow.opacity = 0.22 * fade;
-    mats.spur.opacity = fade * (run && run.hasSteps && run.steps.research === "queued" ? 0.25 : 1);
+    mats.spur.opacity = fade * (run && run.hasSteps && slotStatus(run, 1) === "queued" ? 0.25 : 1);
     mats.platform.opacity = 0.6 * fade;
 
     // ---- stations (Hatchet steps) at the role slots on the trunk
     const hasSteps = !!run?.hasSteps;
-    STEPS.forEach((s, i) => {
+    STEP_SLOTS.forEach((i) => {
       const sg = stations.current[i];
       if (sg) {
         sg.visible = hasSteps;
-        sg.position.set(kitRoleU(STEP_ROLE[s]), TRACK_Y, 0);
+        sg.position.set(kitRoleU(STEP_ROLE[i]), TRACK_Y, 0);
         sg.scale.setScalar(Math.max(0.001, Math.min(1, (grow - 0.3) * 1.6)));
       }
       if (!run || !hasSteps) return;
-      const st = run.steps[s];
+      const st = slotStatus(run, i);
       const ring = rings.current[i];
       const running = st === "running";
       const beat = running ? (reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * 5.5)) : 0;
@@ -197,8 +199,8 @@ export function RunLine({ run: kr }: RunSlotProps) {
           <boxGeometry args={[0.12, 0.25, 0.9]} />
         </mesh>
       </group>
-      {STEPS.map((s, i) => (
-        <group key={s} ref={(g) => void (stations.current[i] = g)} visible={false}>
+      {STEP_SLOTS.map((i) => (
+        <group key={i} ref={(g) => void (stations.current[i] = g)} visible={false}>
           <mesh ref={(m) => void (rings.current[i] = m)} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]}>
             <ringGeometry args={[0.62, 0.86, 48]} />
             <meshBasicMaterial color="#64748b" toneMapped={false} transparent side={THREE.DoubleSide} />
@@ -215,7 +217,7 @@ export function RunLine({ run: kr }: RunSlotProps) {
             <cylinderGeometry args={[0.07, 0.3, 3.2, 12, 1, true]} />
             <meshBasicMaterial toneMapped={false} transparent blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
           </mesh>
-          <Label3D position={[0, 0, -1.75]} text={s} color={color} textColor="#cbd5e1" uppercase letterSpacing={0.08} size={0.26} opacity={0.85} pxRange={[7.5, 11]} />
+          {liveRun && <SlotLabel3D run={liveRun} slot={i} position={[0, 0, -1.75]} color={color} textColor="#cbd5e1" uppercase letterSpacing={0.08} size={0.26} opacity={0.85} pxRange={[7.5, 11]} />}
         </group>
       ))}
       <group ref={labelG}>
@@ -239,7 +241,9 @@ function RunLabel({ runId, color }: { runId: string; color: string }) {
   const run = w.runs.get(runId);
   if (!run) return null;
   const steps: LabelSeg[] = [];
-  STEPS.forEach((s, i) => steps.push({ text: `${i ? "  " : ""}${s.toUpperCase()}`, color: SUBWAY_STEP[run.steps[s]] ?? "#94a3b8" }));
+  const { shown, more } = stepChips(run);
+  shown.forEach((s, i) => steps.push({ text: `${i ? "  " : ""}${s.toUpperCase()}`, color: SUBWAY_STEP[run.steps[s]] ?? "#94a3b8" }));
+  if (more) steps.push({ text: `  +${more}`, color: SUBWAY_STEP.queued });
   return (
     <Label3D
       anchorX="left"

@@ -1,6 +1,6 @@
 /**
  * Run marker slot: each Hatchet run is an elliptical orbit drawn around its agents (the kit run frame: semi-axes
- * follow the run's half extents), with plan / research / write beads on it, a handoff light that travels the orbit
+ * follow the run's half extents), with step beads on it (the 3 step slots, e.g. plan / research / write), a handoff light that travels the orbit
  * from the finished step to the next one, and the run label above it.
  */
 import { Trail } from "@react-three/drei";
@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type LabelSeg } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, hash01, useWorld, world, type Run } from "../shared/world";
+import { RUN_LINGER_MS, STEP_SLOTS, hash01, slotStatus, stepChips, useWorld, world, type Run } from "../shared/world";
 import type { RunSlotProps } from "../shared/kit";
 import { reduced, runSpin, STEP_ANGLE } from "./layout";
 
@@ -52,8 +52,11 @@ function RunLabel({ run, color }: { run: Run; color: string }) {
   useWorld();
   const done = run.status !== "started";
   const segs: LabelSeg[] = [{ text: "hatchet  ", color }];
-  if (run.hasSteps) for (const s of STEPS) segs.push({ text: ` ${run.steps[s] === "running" ? "›" : "·"}${s}`, color: STEP_COLOR[run.steps[s]] });
-  else segs.push({ text: done ? "complete" : "running…", color: "#94a3b8" });
+  if (run.hasSteps) {
+    const { shown, more } = stepChips(run);
+    for (const s of shown) segs.push({ text: ` ${run.steps[s] === "running" ? "›" : "·"}${s}`, color: STEP_COLOR[run.steps[s]] });
+    if (more) segs.push({ text: ` +${more}`, color: STEP_COLOR.queued });
+  } else segs.push({ text: done ? "complete" : "running…", color: "#94a3b8" });
   if (done) segs.push({ text: "  brief ready", color: "#4ade80" });
   return <Label3D text={run.topic} secondary={segs} textColor="#f1f5f9" color={color} size={0.32} maxWidth={9} opacity={done ? 0.65 : 1} fadeMs={300} anchorY="bottom" pxRange={[9.5, 14]} />;
 }
@@ -74,8 +77,8 @@ export function RunOrbit({ run: kr }: RunSlotProps) {
   const m = useMemo(
     () => ({
       orbit: orbitMaterial(),
-      beads: STEPS.map(() => new THREE.MeshBasicMaterial({ transparent: true, toneMapped: false })),
-      halos: STEPS.map(() => new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })),
+      beads: STEP_SLOTS.map(() => new THREE.MeshBasicMaterial({ transparent: true, toneMapped: false })),
+      halos: STEP_SLOTS.map(() => new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })),
       runner: new THREE.MeshBasicMaterial({ color: new THREE.Color("#fde68a").multiplyScalar(5), toneMapped: false }),
     }),
     [],
@@ -108,14 +111,13 @@ export function RunOrbit({ run: kr }: RunSlotProps) {
     u.uColor.value.copy(runColor).multiplyScalar(1.1 + doneFlash * 3);
     if (run?.status === "completed") u.uColor.value.lerp(c.set("#4ade80"), doneFlash);
 
-    for (let k = 0; k < STEPS.length; k++) {
-      const s = STEPS[k];
-      const st = run ? run.steps[s] : "queued";
+    for (let k = 0; k < STEP_SLOTS.length; k++) {
+      const st = run ? slotStatus(run, k) : "queued";
       const show = !!run?.hasSteps;
       const bg = beadG.current[k];
       if (bg) {
         bg.visible = show;
-        ell(a, b, STEP_ANGLE[s] + spin, bg.position);
+        ell(a, b, STEP_ANGLE[k] + spin, bg.position);
       }
       if (!show) continue;
       const pulse = st === "running" ? 0.5 + 0.5 * Math.sin(t * (reduced ? 2 : 6)) : 0;
@@ -153,8 +155,8 @@ export function RunOrbit({ run: kr }: RunSlotProps) {
     <>
       <group ref={frame}>
         <mesh geometry={ORBIT_GEO} material={m.orbit} frustumCulled={false} />
-        {STEPS.map((s, k) => (
-          <group key={s} ref={(x) => void (beadG.current[k] = x)} visible={false}>
+        {STEP_SLOTS.map((k) => (
+          <group key={k} ref={(x) => void (beadG.current[k] = x)} visible={false}>
             <mesh ref={(x) => void (beads.current[k] = x)} geometry={BEAD_GEO} material={m.beads[k]} />
             <mesh ref={(x) => void (halos.current[k] = x)} geometry={HALO_GEO} material={m.halos[k]} />
           </group>

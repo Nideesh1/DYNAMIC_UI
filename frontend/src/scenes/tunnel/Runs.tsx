@@ -1,6 +1,6 @@
 /**
  * RunMarker slot: a run = a glowing LANE across the tunnel (twin rails + dashes flowing left -> right). Its steps are
- * GATE RINGS the ships fly through (Hatchet: plan / research / write lit by status; other runs: one gate per
+ * GATE RINGS the ships fly through (Hatchet: the 3 step slots, e.g. plan / research / write, lit by status; other runs: one gate per
  * top-level agent), and every gate opens a corridor of ghost rings down into the tunnel that rush toward the camera
  * while the step runs (time = depth). Handoff = a bolt racing gate -> gate. Drawn in the run's local frame
  * (x = u along the lane, y = -v, z = depth).
@@ -9,14 +9,15 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, world, type AgentType, type StepName } from "../shared/world";
+import { RUN_LINGER_MS, slotStatus, world, type AgentType } from "../shared/world";
 import { fit, kit, kitRoleU, type RunSlotProps } from "../shared/kit";
 import { GATE_R, MOTION, ease3, flight } from "./lanes";
 
 const C_DONE = new THREE.Color("#4ade80");
 const C_RUN = new THREE.Color("#fde68a");
 const C_FAIL = new THREE.Color("#ef4444");
-const STEP_ROLE: Record<StepName, AgentType> = { plan: "planner", research: "researcher", write: "writer" };
+/** step slot → the role position its gate sits at */
+const STEP_ROLE: AgentType[] = ["planner", "researcher", "writer"];
 const DASHES = 16;
 /** ghost rings per gate corridor, their spacing in depth */
 const GHOSTS = 7;
@@ -41,7 +42,7 @@ export function RunLane({ run: kr }: RunSlotProps) {
   const dashes = useRef<THREE.InstancedMesh>(null);
   const labelG = useRef<THREE.Group>(null);
   const lbl = useRef<Label3DHandle>(null);
-  const labelKey = useRef(-1);
+  const labelKey = useRef("");
   const last = useRef<string[]>(["", "", ""]);
   const popAt = useRef<number[]>([0, 0, 0]);
   const phase = useRef<number[]>([0, 0.33, 0.66]);
@@ -106,8 +107,8 @@ export function RunLane({ run: kr }: RunSlotProps) {
     let ng = 0;
     if (hasSteps && r) {
       for (let k = 0; k < 3; k++) {
-        const st = r.steps[STEPS[k]];
-        GU[k] = kitRoleU(STEP_ROLE[STEPS[k]]);
+        const st = slotStatus(r, k);
+        GU[k] = kitRoleU(STEP_ROLE[k]);
         GS[k] = st === "queued" ? 0 : st === "running" ? 1 : st === "done" ? 2 : 3;
       }
       ng = 3;
@@ -130,7 +131,7 @@ export function RunLane({ run: kr }: RunSlotProps) {
       gate.visible = k < ng;
       if (k >= ng) continue;
       const stc = GS[k];
-      const key = hasSteps ? STEPS[k] + stc : "a" + stc;
+      const key = hasSteps ? `s${k}${stc}` : "a" + stc;
       if (last.current[k] !== key) {
         last.current[k] = key;
         popAt.current[k] = now;
@@ -192,14 +193,14 @@ export function RunLane({ run: kr }: RunSlotProps) {
     // one label per run, above the start of the lane
     labelG.current?.position.set(kr.cu - kr.hu, kr.hv - kr.cv + 0.45, 0);
     if (r && lbl.current) {
-      let ai = 0;
-      for (let k = 0; k < 3; k++) if (r.steps[STEPS[k]] !== "queued") ai = k;
-      const active: StepName = STEPS[ai];
-      const st = r.steps[active];
-      const key = ai * 100 + (st === "queued" ? 0 : st === "running" ? 1 : st === "done" ? 2 : 3) * 10 + (r.status === "completed" ? 1 : r.status === "started" ? 2 : 3);
+      // the running step(s) (parallel ones joined), else the latest one
+      const running = r.stepOrder.filter((s) => r.steps[s] === "running");
+      const latest = r.stepOrder[r.stepOrder.length - 1];
+      const active = running.length ? `${running.join(" + ")} running` : latest ? `${latest} ${r.steps[latest]}` : "";
+      const key = active + r.status;
       if (key !== labelKey.current) {
         labelKey.current = key;
-        lbl.current.setText(r.topic, r.status === "completed" ? "run complete" : r.hasSteps ? `hatchet · ${active} ${st}` : "running…");
+        lbl.current.setText(r.topic, r.status === "completed" ? "run complete" : r.hasSteps ? `hatchet · ${active}` : "running…");
       }
       lbl.current.setOpacity(fade);
     }

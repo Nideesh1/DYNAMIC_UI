@@ -88,3 +88,27 @@ def sample(limit: int = 200) -> dict:
     ids = [n["id"] for n in nodes]
     links = rows("MATCH (a:Entity)-[r]->(b:Entity) WHERE a.name IN $ids AND b.name IN $ids RETURN a.name AS source, b.name AS target LIMIT 800", {"ids": ids})
     return {"nodes": nodes, "links": links}
+
+
+# ---- incident demo: service dependency map (idempotent MERGEs, safe on every worker start) ----------------
+SERVICES = ["checkout-service", "cart-service", "payments-api", "payments-db", "inventory-service", "session-cache"]
+SERVICE_EDGES = [
+    ("checkout-service", "payments-api", "DEPENDS_ON"),
+    ("checkout-service", "cart-service", "DEPENDS_ON"),
+    ("checkout-service", "session-cache", "DEPENDS_ON"),
+    ("checkout-service", "payments-db", "DEPENDS_ON"),
+    ("payments-api", "payments-db", "DEPENDS_ON"),
+    ("cart-service", "inventory-service", "DEPENDS_ON"),
+    ("payments-api", "Payments API", "IMPLEMENTS"),
+    ("Payment Integrity", "payments-api", "OWNS"),
+    ("Platform", "checkout-service", "OWNS"),
+    ("checkout-service", "latency", "ABOUT"),
+]
+
+
+def seed_services() -> int:
+    for name in SERVICES:
+        g().query("MERGE (n:Entity:Service {name: $n}) SET n.kind = 'Service'", {"n": name})
+    for a, b, rel in SERVICE_EDGES:
+        g().query(f"MATCH (a:Entity {{name: $a}}), (b:Entity {{name: $b}}) MERGE (a)-[:{rel}]->(b)", {"a": a, "b": b})
+    return len(SERVICES)
