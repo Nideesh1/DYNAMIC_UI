@@ -47,8 +47,12 @@ unset) and the step restarts later with the same step run id. A step that ends w
 therefore stays `waiting` (parked) until a step starts again; a parked run is held until the wait's deadline + the idle
 grace, else until RUN_MAX_IDLE_MS. Only when nothing is open and nothing is parked does the idle grace apply. Any run
 with no span activity for RUN_MAX_IDLE_MS (default 24 h) is completed so nothing leaks. Child workflow runs
-(`hatchet.parent_workflow_run_id` of a run still open) fold into their parent run; parallel instances of one step name
-(fan-out) keep the step `running` until the last one ends.
+(`hatchet.parent_workflow_run_id` of a run still open, or a step span whose OTel parent, the traceparent the SDK injects
+when a task triggers it, is in another open Hatchet run) fold into their parent run as subagents of the agent that
+triggered them; parallel instances of one step name (fan-out) keep the step `running` until the last one ends.
+
+MCP backend spans (`agentglow.mcp.*`, from the MCP server's process) can reach the server before the caller's tool span:
+one whose parent is not known yet is held until the parent arrives, and dropped after ORPHAN_MS (never a run of its own).
 """
 from __future__ import annotations
 
@@ -89,6 +93,8 @@ SLEEP_KEY_RE = re.compile(r"^sleep:(\d+)([smh])-\d+$")
 EVENT_KEY_RE = re.compile(r"^event:(.+)-\d+$")
 UNIT_MS = {"s": 1000, "m": 60_000, "h": 3_600_000}
 MAX_STEP_RUNS = 20_000
+ORPHAN_MS = 10_000  # how long an MCP backend span waits for its (caller's) parent span
+MAX_ORPHANS = 5_000
 
 
 MAX_SCOPED_RUNS = 20_000
@@ -243,6 +249,7 @@ class Mapper:
         self.skill_sets: dict[str, set] = {}  # trace/thread -> known deepagents skills_metadata paths (bounded)
         self.shell_calls: dict[str, None] = {}  # hosted shell_call ids already scanned (FIFO, bounded)
         self.step_runs: dict[str, str] = {}  # hatchet.step_run_id -> run id (Hatchet wait spans carry only that)
+        self.orphans: dict[str, dict] = {}  # MCP backend span id -> {"start", "end", "parent", "ts"} until its parent shows
 
     def _note_scope(self, s: "Span") -> None:
         if s.run in self.scopes:
@@ -259,14 +266,36 @@ class Mapper:
     def feed(self, kind: str, span: dict) -> list[dict]:
         out: list[dict] = []
         try:
+            if self._hold_orphan(kind, span):
+                return out
             if kind == "start":
                 if span["span_id"] not in self.spans and span["span_id"] not in self.seen_ended:
                     self._start(span, out)
             elif kind == "end":
                 self._end(span, out)
+            for oid in [k for k, o in self.orphans.items() if o["parent"] == span["span_id"]]:
+                o = self.orphans.pop(oid)
+                for k in ("start", "end"):
+                    if o[k] is not None:
+                        out += self.feed(k, o[k])
         except Exception:  # a weird span must never kill the stream
             log.exception("agentglow: failed to map span %s", span.get("name"))
         return out
+
+    def _hold_orphan(self, kind: str, d: dict) -> bool:
+        """MCP backend span whose parent (the caller's tool span, another process) is not here yet: hold it."""
+        sid = d["span_id"]
+        if sid in self.orphans:
+            self.orphans[sid][kind] = d
+            return True
+        a = d.get("attributes") or {}
+        pid = d.get("parent_span_id")
+        if not (a.get("agentglow.mcp.server") and pid and pid not in self.spans and sid not in self.spans and sid not in self.seen_ended):
+            return False
+        self.orphans[sid] = {"start": None, "end": None, "parent": pid, "ts": d.get("end_time_ms") or d.get("start_time_ms") or 0, kind: d}
+        while len(self.orphans) > MAX_ORPHANS:
+            self.orphans.pop(next(iter(self.orphans)))
+        return True
 
     def feed_ended(self, spans: list[dict]) -> list[dict]:
         """Finished spans (OTLP): replay their starts and ends as a timeline so parents precede children."""
@@ -293,6 +322,8 @@ class Mapper:
 
     def tick(self, now_ms: int) -> list[dict]:
         out: list[dict] = []
+        for k in [k for k, o in self.orphans.items() if now_ms - o["ts"] >= ORPHAN_MS]:  # parent never came: drop
+            self.orphans.pop(k)
         for r in list(self.runs.values()):
             if (r.done_at is not None and now_ms >= r.done_at) or (r.last_ts and now_ms - r.last_ts >= RUN_MAX_IDLE_MS):
                 self._complete(r, now_ms, out)
@@ -303,6 +334,12 @@ class Mapper:
         a = dict(d.get("attributes") or {})
         parent = self.spans.get(d.get("parent_span_id") or "")
         up = a.get("hatchet.parent_workflow_run_id")  # child workflow run: shown inside its (still open) parent run
+        wf = a.get("hatchet.workflow_run_id")
+        if wf and not (up and str(up) in self.runs) and parent is not None and parent.run != str(wf) and \
+                (self.runs.get(parent.run) or Run("")).hatchet:
+            # the engine left parent_workflow_run_id empty, but the OTel parent (traceparent injected when a task
+            # triggered this run) is in another open Hatchet run: a child run, fold it like one
+            up = a["hatchet.parent_workflow_run_id"] = parent.run
         run_id = str((up if up and str(up) in self.runs else None) or a.get("hatchet.workflow_run_id") or a.get("agentglow.run.id")
                      or self.step_runs.get(str(a.get("hatchet.step_run_id") or "")) or (parent.run if parent else d["trace_id"]))
         s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a, run_id)
@@ -558,10 +595,20 @@ class Mapper:
         parent, via_tool = self._ancestor_agent(s)
         run = self.runs.get(s.run)
         st = self._step_span(s)
-        if not parent and st is not None and st.attrs.get("hatchet.parent_workflow_run_id") == s.run:
-            # folded child workflow run (fan-out): a subagent of the parent run's newest live non-child agent
-            parent = next((k for k, ag in reversed(self.agents.items()) if ag.run == s.run and not ag.done and not
-                           (self.spans.get(ag.step_span or "") or st).attrs.get("hatchet.parent_workflow_run_id")), None)
+        child = st is not None and st.attrs.get("hatchet.parent_workflow_run_id") == s.run
+        if parent and child and not self._is_child(self.spans.get(parent) or s):
+            via_tool = True  # found across the child run's boundary (its step hangs off the triggering span)
+        if not parent and child:
+            # folded child workflow run (fan-out): a subagent of the agent that triggered it (the trigger span's owner,
+            # e.g. its step promoted to an agent), else of the parent run's newest live non-child agent
+            spawner = self.spans.get(st.parent or "")
+            if spawner is not None and spawner.run == s.run and not self._is_child(spawner):
+                if spawner.step and not spawner.agent:  # triggered straight from a step span: promote it
+                    self._spawn(spawner, str(spawner.attrs.get("agentglow.agent") or spawner.step), out, spawner.start)
+                parent = spawner.id if spawner.agent else spawner.alias or self._owner(spawner, out)
+            else:
+                parent = next((k for k, ag in reversed(self.agents.items()) if ag.run == s.run and not ag.done and not
+                               (self.spans.get(ag.step_span or "") or st).attrs.get("hatchet.parent_workflow_run_id")), None)
             via_tool = True
         hint = s.attrs.get("agentglow.subagent")  # manual API: an agent nested directly in an agent
         s.subagent = bool(parent and (via_tool or hint is True or str(hint).lower() == "true"))
@@ -585,6 +632,10 @@ class Mapper:
         out.append({"type": "spawn", "run_id": s.run, "id": s.id, "agent": name, "parent_id": parent, "subagent": s.subagent, "ts": ts})
         if parent:
             out.append({"type": "message", "run_id": s.run, "from_id": parent, "to_id": s.id, "text": text[:160], "ts": ts})
+
+    def _is_child(self, s: Span) -> bool:
+        st = self._step_span(s)
+        return st is not None and bool(st.attrs.get("hatchet.parent_workflow_run_id"))
 
     def _tool_preview_above(self, s: Span) -> str:
         cur, hops = self.spans.get(s.parent or ""), 0
@@ -706,11 +757,19 @@ class Mapper:
             ev["until"] = until
         return ev
 
-    def _step_wait_state(self, run: Run, st: Span, out: list, ts: int) -> None:
-        """Step shows its open wait (a declared one over Hatchet's own), else `running` again while it is open."""
-        ws = [w for w in run.waits.values() if w.wait_step == st.id]
-        if ws:
-            w = max(ws, key=lambda w: (w.wait[2], w.start))
+    @staticmethod
+    def _shown_wait(run: Run, st: Span | None) -> Span | None:
+        """The open wait a step shows: a declared one over Hatchet's own, newest first."""
+        ws = [w for w in run.waits.values() if st is not None and w.wait_step == st.id]
+        return max(ws, key=lambda w: (w.wait[2], w.start)) if ws else None
+
+    def _step_wait_state(self, run: Run, st: Span, out: list, ts: int, shown: Span | None = None) -> None:
+        """Step shows its open wait, else `running` again while it is open. `shown`: the wait it showed before (no
+        repeat when that one still wins, e.g. Hatchet's wait_for opening / closing inside a declared wait)."""
+        w = self._shown_wait(run, st)
+        if w is not None and w is shown:
+            return
+        if w is not None:
             out.append(self._step_wait_ev(run.id, st.step, w.wait[0], w.wait[1], ts))
         elif st.end is None:
             out.append({"type": "step", "run_id": run.id, "step": st.step, "status": "running", "ts": ts})
@@ -718,12 +777,14 @@ class Mapper:
     def _wait_start(self, s: Span, run: Run, out: list, ts: int) -> None:
         st = self._step_span(s)
         s.wait_step = st.id if st else None
+        shown = self._shown_wait(run, st)
         run.waits[s.id] = s
         if st:
-            self._step_wait_state(run, st, out, ts)
+            self._step_wait_state(run, st, out, ts, shown)
         owner = self._wait_agent(s, st)
         ag = self.agents.get(owner or "")
-        if ag:
+        others = [w for w in run.waits.values() if w is not s and self._wait_agent(w, self.spans.get(w.wait_step or "")) == owner]
+        if ag and not any(w.wait[2] or not s.wait[2] for w in others):  # already waiting on a wait that wins
             ag.thinking = False
             ev = {"type": "agent", "run_id": s.run, "id": owner, "status": "waiting", "reason": s.wait[0], "ts": ts}
             if s.wait[1]:
@@ -731,12 +792,13 @@ class Mapper:
             out.append(ev)
 
     def _wait_end(self, s: Span, run: Run, out: list, ts: int) -> None:
-        run.waits.pop(s.id, None)
         st = self.spans.get(s.wait_step or "")
+        shown = self._shown_wait(run, st)
+        run.waits.pop(s.id, None)
         if s.wait_step != s.id:  # a wait nested in its step (a step span that is itself the wait never parks)
             run.last_wait = (ts, s.wait_step, s.wait[0], s.wait[1])
         if st:
-            self._step_wait_state(run, st, out, ts)
+            self._step_wait_state(run, st, out, ts, shown)
         owner = self._wait_agent(s, st)
         ag = self.agents.get(owner or "")
         if ag and not ag.done and not any(self._wait_agent(w, self.spans.get(w.wait_step or "")) == owner for w in run.waits.values()):

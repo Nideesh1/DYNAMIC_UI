@@ -129,7 +129,7 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 | langgraph-supervisor | team graph whose supervisor node (`<sup>` node → `<sup>` graph) calls a `transfer_to_*` tool | ONE supervisor agent for the run (later turns alias it; exits when the team graph ends); workers (`<name>` → `call_agent` → `<name>` graph) → `subagent: true` under it, delegation text = supervisor's turn text else latest user request; supervisor `waiting` while a worker runs; `transfer_*` tools emit no `tool` event |
 | LLM | OpenInference kind `LLM` or `gen_ai.operation.name ∈ {chat, text_completion, generate_content}` | `agent thinking` on start; `llm` on end - a span guessed from its parent node but ending with a non-LLM kind (react agent's RunnableSequence/call_model/should_continue) is dropped (tokens from `gen_ai.usage.input_tokens/output_tokens` or `llm.token_count.prompt/completion`) |
 | Tool | OpenInference kind `TOOL` or `gen_ai.operation.name=execute_tool` | `tool` |
-| MCP | span with `mcp.server.name` or `agentglow.mcp.server` (+ `agentglow.mcp.resource`, `agentglow.mcp.resource_kind` ∈ db,warehouse,spark,api,storage,queue) | `mcp call` (start, pending) / `mcp result` (end); auto `mcp_register` of server+resource |
+| MCP | span with `mcp.server.name` or `agentglow.mcp.server` (+ `agentglow.mcp.resource`, `agentglow.mcp.resource_kind` ∈ db,warehouse,spark,api,storage,queue) | `mcp call` (start, pending) / `mcp result` (end); auto `mcp_register` of server+resource. An MCP span whose parent span is not known yet (the MCP server's process reported before the caller's tool span) is held until the parent arrives, dropped after 10 s; it never starts a run |
 | Graph/DB | `db.system` set | `graph` read/write (`agentglow.db.op` or inferred from query text); node names from `agentglow.graph.nodes` (list or JSON string) |
 | Final | `agentglow.final` attr on any span | `final` text |
 | Skill | hint attribute `agentglow.skill` = skill name on any span (usually a tool span); set by the Claude Code hooks adapter for the `Skill` tool (`tool_input.skill`, e.g. `hello`, `plugin:skill`), by the traces-only path from the `claude_code.tool` span's `skill_name` (needs `OTEL_LOG_TOOL_DETAILS=1`), and by the manual `skill()` | `skill` `status: "start"` when the span starts (or at end if the attribute only arrives then), `"end"` when it ends, on the owning agent; the normal `tool` event is still emitted (Claude Code `Skill` args preview = the skill name only) |
@@ -173,8 +173,11 @@ satisfied. A step that ends within 1 s of a wait nested in it therefore stays `w
 run is held until the wait's `until` + idle grace (no `until`: the 24 h bound) or until a step starts again (other parked
 steps then get `step done`). A workflow whose LAST step returns right after an un-dated wait should set `agentglow.final`.
 
-**Fan-out.** A child workflow run (`hatchet.parent_workflow_run_id` of a run still open) folds into its parent run; its
-agents become subagents of the parent run's newest live agent outside child steps (else top-level siblings). Parallel
+**Fan-out.** A child workflow run folds into its parent run when its step span has `hatchet.parent_workflow_run_id` of a
+run still open, or (the engine often leaves that empty, e.g. `aio_run_many` from a task) when the step span's OTel parent,
+the traceparent HatchetInstrumentor injects at trigger time, belongs to another open Hatchet run. Its agents become
+subagents of the agent that owns the triggering span (a step with no agent of its own is promoted to an agent named after
+the step, which stays alive until the step ends), else of the parent run's newest live agent outside child steps. Parallel
 instances of one step name keep the step `running` until the last ends (failed if any instance failed). Queued
 (concurrency-limited) tasks emit nothing until they start.
 

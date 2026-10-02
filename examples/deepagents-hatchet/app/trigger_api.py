@@ -61,7 +61,8 @@ class ApproveRequest(BaseModel):
 
 
 @app.post("/approve")
-async def approve(req: ApproveRequest) -> dict:
+async def approve(req: ApproveRequest | None = None) -> dict:
+    req = req or ApproveRequest()  # no body: approve every waiting vendor run
     payload = {"run_id": req.run_id or "*", "approver": req.approver, "note": req.note}
     await hatchet.event.aio_push(APPROVE_EVENT, payload)
     return {"event": APPROVE_EVENT, **payload}
