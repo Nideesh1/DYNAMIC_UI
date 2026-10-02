@@ -1,30 +1,13 @@
 # Porting a theme to the scene kit
 
 The kit (`frontend/src/scenes/shared/kit/`) owns WHERE things are and HOW BIG they are. A ported theme only
-draws. Read `index.ts` (overview), then use the three reference ports as templates:
+draws. Read `index.ts` (overview), then use the reference ports as templates:
 
 | reference | preset | plane | look at |
 |---|---|---|---|
 | `neural/`  | `radial` | `xy` | per-agent slot with its own edge (synapse), side graph with beams drawn in graph-local space, MCP + backend slots |
-| `subway/`  | `lanes`  | `xz` | run marker drawn in the run's local frame (tracks, stations), agents moving along their run (`live`), MCP slot without backends |
-| `airport/` | `radar`  | `xz` | backdrop sized to the kit core (`kit.core.r`), pooled renderers iterating `kit.agents` / `kit.mcp`, rim periphery, `extents` |
-
-## Preset per remaining theme (suggested)
-
-| theme | preset | plane | notes |
-|---|---|---|---|
-| orbit | `radial` | `xz` (camera [0,14,30]) | rings per run become the RunMarker; the galaxy centerpiece becomes the side GraphResource |
-| atom | `radial` | `xy` | nucleus = side GraphResource (small); shells are a run-marker/agent look, not a layout |
-| constellation | `radial` | `xy` | |
-| hive | `radial` | `xy` | the comb = side GraphResource |
-| mycelium | `radial` | `xz` | |
-| forest | `radial` | `xz` | the pond/grove backdrop can be sized from `kit.core` like airport's scope |
-| ocean | `drift` | `xy` | add the sway in the Agent slot by writing `agent.live` |
-| flow | `drift` | `xz` | the murmuration engine reads `kit.agents` targets as attractors |
-| city | `grid` | `xz` | districts = RunMarker sized from `run.hu/hv`; the data tower = side GraphResource |
-| circuit | `lanes` | `xz` | buses = RunMarker (like subway's RunLine); memory bank = side GraphResource |
-| factory | `lanes` | `xz` | belts = RunMarker; rack = side GraphResource |
-| tunnel | `lanes` | `xy` | lanes stacked on screen; the warp/depth motion is theme motion on `live` (or write a custom `LayoutPreset`) |
+| `orbit/`   | `radial` | `xz` | rings per run as the RunMarker, the galaxy as the side GraphResource |
+| `flow/`    | `drift`  | `xz` | agents moving around their home (`live`), backends wired with the kit `<ResourceWire>` |
 
 If a preset is wrong for a theme, write a custom `LayoutPreset` (see `presets.ts`, ~20 lines) and pass the object
 as `preset`; do not add per-theme placement code outside it.
@@ -55,21 +38,22 @@ as `preset`; do not add per-theme placement code outside it.
 3. **RunMarker slot** (`{ run }`): auras, lines, sector arcs, run labels. Frame: `run.origin`, `run.axis` (fan
    direction), `run.side` (top-level line), half extents `run.hu` / `run.hv`, eased centroid `run.cu/cv`;
    `runLocal(run, u, v, out)` maps run-local coords to stage. Station/role positions: `kitRoleU("planner")` etc.
-   For a marker drawn in the run's own frame see `subway/Lines.tsx` (basis from side/up/axis).
    Delete `Pathways`/`Runs` membership code (`isRunExpanded`, `lod.version` checks): the kit lists drawn runs.
 4. **Clusters:** delete the theme's `Clusters.tsx` and its `place()`; pass `cluster={{ radius, variant, color }}`
    (+ `clusterOffset`); `color` may be `(lane) => string`. Only for a non-ClusterBall look use the `Cluster` slot.
-   The kit spaces balls by their badge size (`clusterRows` / ring presets).
+   The kit spaces balls by their badge size.
 5. **MCP:** `McpServer` slot (`{ mcp }`) and `Backend` slot (`{ mcp, backend }`). Position from `mcp.pos` /
    `backend.pos` EVERY FRAME (they ease when the periphery re-lays out); `mcp.out` = outward direction.
-   Delete `satPos`/`airportPos`/`backendPos`/`gatePos` and the per-server `res.map(<Backend>)`.
+   Delete `satPos`/`backendPos` and the per-server `res.map(<Backend>)`.
    Tethers/packets: `agentLive(instanceId)` and `serverPos(name)` / `backendPos(server, res)`; skip when undefined.
+   Always draw the backends (Loki, Prometheus, GitHub API...): a theme without its own server -> backend edge can use
+   `<ResourceWire mcp backend />` (idle / in-flight dashes / result pulse). Recent-activity glow: `mcpGlow(activeAt, now)`.
 6. **Graph -> side resource** (`GraphResource` slot, `{ galaxy }`): draw the old centerpiece in its OWN frame
    centred at 0 with radius `graph.natural` (shrink internal constants if it was huge). The kit positions,
    scales (`kit.graph.scale`), fades and hides it (rendered only when `world.hasGraph` and the galaxy has nodes;
    never draw a fake graph).
-   - beams agent <-> node: either draw inside the slot with `stageToGraph(agentLive(id), tmp)` (neural Cortex,
-     airport Waypoints) or on stage with `graphToStage(nodeLocal, tmp)` (subway Transfers).
+   - beams agent <-> node: either draw inside the slot with `stageToGraph(agentLive(id), tmp)` (neural Cortex)
+     or on stage with `graphToStage(nodeLocal, tmp)`.
    - point sprites sized in view space (`gl_PointSize = size * uScale / -mv.z`) must multiply `uScale` by
      `kit.graph.scale`, or the nodes stay full size on a small graph.
    - `ping()`/ripple effects that live on stage: convert with `graphToStage` and scale radii by `kit.graph.scale`.
@@ -77,7 +61,7 @@ as `preset`; do not add per-theme placement code outside it.
    - stage-sized beams/sparks drawn inside the slot: wrap them in `<GraphStageSpace>` (undoes the graph transform).
    - which side the graph sits on: `kit.graph.out` (unit outward direction), e.g. captions on the far side.
 7. **Backdrops sized to the content:** read `kit.core.hw / hh / r` (eased half extents of agents + clusters) in
-   useFrame (airport `scopeTick`). Things that must stay visible but are theme-specific (labels at a line's end,
+   useFrame. Things that must stay visible but are theme-specific (labels at a line's end,
    a backdrop rim) go in the `extents` prop: `visit(stagePoint, radius)`.
 8. **Delete** the theme's layout code: slot tables, `somaTarget`/`homeR`/`flightSlot`/`displaySlot`/`lineAngle`,
    `laneRank`/`rankOffset` fan-outs, `run.slot`-based angles, `scoutCount`, lane `BESIDE` tables, `RANK_GAP`,
@@ -96,7 +80,7 @@ as `preset`; do not add per-theme placement code outside it.
 - **Plane mapping.** Layout 2D (a right, b up) -> `xy`: (a, b, 0); `xz`: (a, 0, -b). Kit positions have
   y = 0 in `xz`: add altitude in the slot (`pos.y = TRAIN_Y`), never in the kit.
 - **Run frame handedness.** `side` is flipped to read left->right; if you build a basis from side/up/axis,
-  keep it right-handed (see `subway/Lines.tsx`).
+  keep it right-handed.
 - **Agents always centred.** Do not offset the stage group or the orbit target to "make room" for HUD panels;
   FitCamera already measures `.hud-top/.hud-dock/.hud-side` (top bar, dock, sidebar or rail) and shifts the projection.
   Theme buttons go in `hudInset` (the dock beside the LOD chip); size HUD DOM with container queries / `cq*` units

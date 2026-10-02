@@ -1,7 +1,7 @@
 /**
  * The knowledge graph is a small distant spiral nebula on the side (scene-kit GraphResource, drawn in its own frame
- * centred at 0; the kit places, scales and fades it, only when the session has a graph): graph entities are its stars (colored faintly by kind), relations
- * are hair-thin filaments. A read makes the node flare in the reader's tint and a thin beam carries a spark from the
+ * centred at 0; the kit places, scales and fades it, only when the session has a graph): graph entities are its stars (colored by kind), relations
+ * are thin filaments. A read makes the node flare in the reader's tint and a thin beam carries a spark from the
  * node to the agent star; a write flares the node white, pops a ripple ring and sends the spark agent → node.
  */
 import { useFrame, useThree } from "@react-three/fiber";
@@ -45,7 +45,7 @@ void main(){
   col = mix(col, teal, smoothstep(0.62, 0.9, fbm(q * 0.7 + 9.0)) * 0.6);
   col = mix(col, rose, smoothstep(0.55, 0.85, fbm(q * 0.9 - 5.0)) * 0.35);
   float dens = pow(f, 1.6) * arms * mask;
-  vec3 c = col * dens * (1.05 + uAct * 0.45) + vec3(0.55, 0.6, 0.95) * core * 0.24;
+  vec3 c = col * dens * (2.0 + uAct * 0.9) + vec3(0.55, 0.6, 0.95) * core * 0.5;
   gl_FragColor = vec4(c, 1.0);
 }`;
 
@@ -93,8 +93,8 @@ export function Nebula({ galaxy: full }: GraphSlotProps) {
       }
       pos.set([x * ct - y * st, x * st + y * ct, (hash01(nd.id, 4) - 0.5) * 4], i * 3);
     });
-    const base = galaxy.nodes.map((nd) => new THREE.Color(KIND_COLOR[nd.kind] ?? "#94a3b8").lerp(TINT, 0.55).multiplyScalar(0.5));
-    const baseSize = galaxy.nodes.map((nd) => 0.32 + Math.pow(hash01(nd.id, 5), 4) * 0.5);
+    const base = galaxy.nodes.map((nd) => new THREE.Color(KIND_COLOR[nd.kind] ?? "#94a3b8").lerp(TINT, 0.45).multiplyScalar(1));
+    const baseSize = galaxy.nodes.map((nd) => 0.42 + Math.pow(hash01(nd.id, 5), 4) * 0.55);
     const ngeo = new THREE.BufferGeometry();
     ngeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     ngeo.setAttribute("aSize", new THREE.BufferAttribute(new Float32Array(n), 1));
@@ -146,7 +146,7 @@ export function Nebula({ galaxy: full }: GraphSlotProps) {
     const time = reduced ? 0 : clock.elapsedTime;
     const fov = (camera as THREE.PerspectiveCamera).fov;
     const dpr = gl.getPixelRatio();
-    mats.nodes.uniforms.uScale.value = (size.height * dpr) / (2 * Math.tan((fov * Math.PI) / 360)) * kit.graph.scale * 1.7; // view-space point sprites follow the side graph's scale (x1.7: still read as stars when small)
+    mats.nodes.uniforms.uScale.value = (size.height * dpr) / (2 * Math.tan((fov * Math.PI) / 360)) * kit.graph.scale * 2.1; // view-space point sprites follow the side graph's scale (x2.1: still read as stars when small)
     sparks.setScale(size.height, dpr, fov);
     const { pos, base, baseSize, fire, white, fireC, phase } = data;
     const { v, w, ctrl, h, c } = tmp;
@@ -190,13 +190,13 @@ export function Nebula({ galaxy: full }: GraphSlotProps) {
         const fade = Math.min(1, age / 0.25) * Math.pow(1 - age / 2.0, 1.5);
         const head = isW ? Math.min(1, age * 0.9) : 1 - Math.min(1, age * 0.9);
         c.copy(isW ? WHITE : tc).lerp(WHITE, 0.2);
-        beams.add(sp, ctrl, w, c, (isW ? 0.26 : 0.1) * fade, 0.04, 0.99, 0, 1, time, head, 1.1 * fade);
+        beams.add(sp, ctrl, w, c, (isW ? 0.55 : 0.4) * fade, 0.04, 0.99, 0, 1, time, head, 1.9 * fade);
         if (head > 0.02 && head < 0.98) {
           bezier(sp, ctrl, w, head, h);
-          sparks.add(h, 0.5, c, 1.1 * fade);
+          sparks.add(h, 0.7, c, 1.6 * fade);
         }
-        if (isW) arrows.add(sp, ctrl, w, 0.95, 1, 0.34, WHITE, fade * 0.9);
-        else arrows.add(sp, ctrl, w, 0.07, -1, 0.34, c, fade * 1.1);
+        if (isW) arrows.add(sp, ctrl, w, 0.95, 1, 0.4, WHITE, fade * 1.2);
+        else arrows.add(sp, ctrl, w, 0.07, -1, 0.4, c, fade * 1.5);
       }
     }
     for (let z = rp; z < MAX_RIPPLES; z++) {
@@ -231,7 +231,7 @@ export function Nebula({ galaxy: full }: GraphSlotProps) {
     const own = data.owner;
     for (let vi = 0; vi < own.length; vi++) {
       const f = Math.max(fire[own[vi]], fire[own[vi ^ 1]]);
-      lc.setXYZ(vi, 0.05 + f * 0.35, 0.06 + f * 0.38, 0.13 + f * 0.5);
+      lc.setXYZ(vi, 0.11 + f * 0.45, 0.13 + f * 0.5, 0.3 + f * 0.6);
     }
     lc.needsUpdate = true;
 
@@ -292,7 +292,7 @@ export function Nebula({ galaxy: full }: GraphSlotProps) {
           <Label3D ref={(x) => void (nameRefs.current[k] = x)} text="" offset={[0, 0.4]} size={0.24} opacity={0} fadeMs={250} pxRange={[8, 12]} />
         </group>
       ))}
-      <GraphLabel3D position={[0, NEBULA_RY * 1.15, 0]} suffix=" · nebula" color="#8b9cff" letterSpacing={0.04} size={0.28} opacity={0.6} pxRange={[8, 12]} />
+      <GraphLabel3D position={[0, NEBULA_RY * 1.15, 0]} suffix=" · nebula" color="#8b9cff" letterSpacing={0.04} size={0.28} opacity={0.85} pxRange={[8, 12]} />
     </>
   );
 }

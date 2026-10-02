@@ -16,7 +16,7 @@
  */
 import * as THREE from "three";
 import type { Galaxy } from "../shared/useSceneSetup";
-import {
+import { mcpGlow,
   KIND_COLOR,
   slotStatus,
   TYPE_COLOR,
@@ -1343,7 +1343,7 @@ export class FlowEngine {
       const sp = serverPos(srv.name);
       if (!sp) continue;
       _v.copy(sp).setY(PULSAR_Y);
-      const act = Math.exp(-((now - srv.activeAt) / 1000) * 2.5);
+      const act = mcpGlow(srv.activeAt, now, 2.5);
       const busy = srv.inflight > 0 ? 1 : 0;
       this.mcpSpin[m] += dt * (0.4 + busy * 3.5) * MOTION;
       const pulse = 0.5 + 0.5 * Math.sin(t * (busy ? 9 : 2.2) + m);

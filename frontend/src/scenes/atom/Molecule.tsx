@@ -19,6 +19,8 @@ const MAX_BEAMS = 40;
 const SEG = 18;
 const MAX_WAVES = 5;
 const MAX_NAMES = 4;
+/** atom radius for n atoms: NUC_SIZE for a full molecule, up to 3x for a sparse one (same overall footprint) */
+const atomSize = (n: number) => NUC_SIZE * THREE.MathUtils.clamp(Math.sqrt(48 / Math.max(1, n)), 1, 3);
 
 const vert = /* glsl */ `
 attribute vec3 aCol; attribute float aFire;
@@ -66,9 +68,12 @@ export function Molecule({ galaxy: full }: GraphSlotProps) {
   const data = useMemo(() => {
     const pos = new Float32Array(n * 3);
     const ga = Math.PI * (3 - Math.sqrt(5));
+    // a sparse molecule (a live graph grows from the nodes touched so far) gets bigger atoms so it reads at its
+    // full size from the first read instead of starting as a few specks
+    const atomR = atomSize(n);
     for (let i = 0; i < n; i++) {
       // loose fibonacci ball: index 0 outermost (named entities sit on the surface where they're visible)
-      const r = (MOL_R - NUC_SIZE) * (0.3 + 0.7 * Math.cbrt(1 - i / n));
+      const r = (MOL_R - atomR) * (0.3 + 0.7 * Math.cbrt(1 - i / n));
       const y = 1 - (2 * (i + 0.5)) / n;
       const rr = Math.sqrt(1 - y * y);
       pos.set([Math.cos(i * ga) * rr * r, y * r, Math.sin(i * ga) * rr * r], i * 3);
@@ -112,12 +117,12 @@ export function Molecule({ galaxy: full }: GraphSlotProps) {
     const o = new THREE.Object3D();
     for (let i = 0; i < n; i++) {
       o.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-      o.scale.setScalar(NUC_SIZE);
+      o.scale.setScalar(atomR);
       o.updateMatrix();
       mesh.setMatrixAt(i, o.matrix);
       aCol.setXYZ(i, base[i].r, base[i].g, base[i].b);
     }
-    return { pos, base, mesh, aCol, aFire, o, bgeo, owner: Int32Array.from(pairs), fire: new Float32Array(n), fireC: Array.from({ length: n }, () => new THREE.Color()) };
+    return { pos, base, atomR, mesh, aCol, aFire, o, bgeo, owner: Int32Array.from(pairs), fire: new Float32Array(n), fireC: Array.from({ length: n }, () => new THREE.Color()) };
   }, [galaxy, n]);
 
   const mats = useMemo(
@@ -214,7 +219,7 @@ export function Molecule({ galaxy: full }: GraphSlotProps) {
       aCol.setXYZ(i, c.r, c.g, c.b);
       aFire.setX(i, f);
       o.position.set(pos[i * 3] + Math.sin(t * 2.1 + i * 1.7) * jig, pos[i * 3 + 1] + Math.cos(t * 1.8 + i * 2.3) * jig, pos[i * 3 + 2] + Math.sin(t * 1.6 + i) * jig);
-      o.scale.setScalar(NUC_SIZE * (1 + f * 0.35));
+      o.scale.setScalar(data.atomR * (1 + f * 0.35));
       o.updateMatrix();
       mesh.setMatrixAt(i, o.matrix);
     }

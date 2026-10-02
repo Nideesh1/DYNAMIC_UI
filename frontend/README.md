@@ -86,7 +86,7 @@ import dynamic from "next/dynamic";
 const AgentScene = dynamic(() => import("agentglow").then((m) => m.AgentScene), { ssr: false });
 
 export default function Live() {
-  return <AgentScene theme="subway" source="http://localhost:8100" style={{ height: "80vh" }} />;
+  return <AgentScene theme="orbit" source="http://localhost:8100" style={{ height: "80vh" }} />;
 }
 ```
 
@@ -141,27 +141,14 @@ backoff on its own. Changing `scope`, `run` or `token` reconnects and clears the
 |-----------|---------|
 | `orbit`   | Agents orbit a graph galaxy. Runs are rings and MCP servers are satellites. |
 | `neural`  | A living brain. Agents fire as neurons and messages pulse along synapses. |
-| `subway`  | A neon transit map. Each run is a line and each agent is a train. |
-| `city`    | A night city. Agents rise as skyscrapers in run districts. |
-| `ocean`   | Bioluminescent jellyfish drift on run currents over a coral graph. |
-| `circuit` | Agent chips sit on run buses, wired to a memory bank and MCP I/O ports. |
-| `tunnel`  | A time warp. Runs are lanes and gates, and agents are ships. |
 | `flow`    | A murmuration. Agents condense as eddies out of the current. |
-| `hive`    | A glowing honeycomb. Agents are bees; subagents fly out as workers. |
-| `forest`  | A moonlit forest. Agents grow as trees, subagents as saplings, LLM calls as fireflies. |
 | `constellation` | A night sky. Delegation draws constellation lines between agent stars. |
-| `factory` | A neon factory floor. Agents are machines; work rides conveyor belts. |
-| `airport` | A radar scope. Agents are flights; handoffs are flight paths. |
-| `mycelium`| A glowing fungal network. Agents bloom as mushrooms on spreading threads. |
 | `atom`    | An atom. Agents are electrons; subagents orbit their parent. |
 
 | | | |
 |:-:|:-:|:-:|
-| ![neural](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/neural.jpg) **neural** | ![hive](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hive.jpg) **hive** | ![constellation](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/constellation.jpg) **constellation** |
-| ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/orbit.jpg) **orbit** | ![forest](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/forest.jpg) **forest** | ![mycelium](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/mycelium.jpg) **mycelium** |
-| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![airport](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/airport.jpg) **airport** | ![factory](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/factory.jpg) **factory** |
-| ![city](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/city.jpg) **city** | ![ocean](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/ocean.jpg) **ocean** | ![subway](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/subway.jpg) **subway** |
-| ![circuit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/circuit.jpg) **circuit** | ![tunnel](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/tunnel.jpg) **tunnel** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** |
+| ![neural](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/neural.jpg) **neural** | ![constellation](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/constellation.jpg) **constellation** | ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/orbit.jpg) **orbit** |
+| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** | |
 
 ## Layout
 

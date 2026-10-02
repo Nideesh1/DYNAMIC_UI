@@ -9,7 +9,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { hash01, waitSeconds, world, type McpCall } from "../shared/world";
+import { mcpGlow, hash01, waitSeconds, world, type McpCall } from "../shared/world";
 import { AMBER, ArrowPool, CurvePool, RED, SPHERE_GEO, SparkPool, WHITE, bezier, bow, clamp01, easeInOut, easeOut, glowTexture, reduced, spriteMat } from "./fx";
 import { agentLive, backendPos, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 
@@ -90,7 +90,7 @@ export function Moon({ mcp, backend }: BackendSlotProps) {
     }
     P.needsUpdate = true;
     const busy = res.inflight > 0;
-    const act = Math.exp(-((now - res.activeAt) / 1000) * 1.4);
+    const act = mcpGlow(res.activeAt, now, 1.4);
     const beat = busy ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 5) : 0;
     mat.uniforms.uAct.value = busy ? 1 : act;
     mat.uniforms.uGlow.value = busy ? 0.8 + beat * 0.5 : act * 0.6;
@@ -146,7 +146,7 @@ export function Planet({ mcp }: McpServerSlotProps) {
     g.current?.position.copy(mcp.pos);
     const now = performance.now();
     const busy = srv.inflight > 0;
-    const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.4);
+    const act = mcpGlow(srv.activeAt, now, 1.4);
     m.body.uniforms.uAct.value = busy ? 1 : act;
     m.halo.color.copy(col).multiplyScalar(busy ? 0.28 : 0.07 + act * 0.18);
     halo.current?.scale.setScalar(R * (5 + (busy ? 0.6 : 0)));
