@@ -9,7 +9,7 @@ buffered "interesting" individual decisions that fit the global budget.
   time has room (GLOBAL_CAP). One over the budget is aggregated instead (counted in its agent's `decision_stats`).
 - Above HV_RATE/s the agent is *busy*: its decisions are aggregated into one `decision_stats` per flush window, and
   only interesting ones are kept as individual events (`"hv": true, "why"`): important (`agentglow.decision.important`)
-  > guard deny > route flip (result differs from that agent's previous route result) > low-confidence guard
+  > guard deny > route flip (result differs from that agent's previous result for the same route question) > low-confidence guard
   (LOW_P_MIN <= p <= LOW_P_MAX; unsure checks are routine at volume and are not interesting). They are buffered and emitted at the flush, best first, round-robin across agents,
   within what is left of the global budget; the rest are dropped (still counted in the stats).
 - A busy agent becomes calm again after CALM_WINDOWS flush windows in a row with fewer than HV_RATE decisions.
@@ -67,7 +67,7 @@ class _AgentHV:
     recent: deque = field(default_factory=deque)  # event ts of the trailing 1 s
     busy: bool = False
     calm_streak: int = 0
-    last_route: str | None = None
+    last_route: dict = field(default_factory=dict)  # route question -> previous result
     last_ts: int = 0
     win: _Window = field(default_factory=_Window)
 
@@ -118,9 +118,13 @@ class DecisionRate:
     def _why(ev: dict, st: _AgentHV, important: bool) -> str | None:
         purpose, res = _purpose(ev), str(ev.get("result") or "").lower()
         flip = False
-        if purpose == "route" and res:
-            flip = st.last_route is not None and res != st.last_route
-            st.last_route = res
+        if purpose == "route" and res:  # per question: an agent may route several things per tick
+            q = str(ev.get("question") or "")
+            prev = st.last_route.get(q)
+            flip = prev is not None and res != prev
+            st.last_route[q] = res
+            if len(st.last_route) > 16:
+                st.last_route.pop(next(iter(st.last_route)))
         if important:
             return "important"
         if purpose == "guard" and res in DENY:

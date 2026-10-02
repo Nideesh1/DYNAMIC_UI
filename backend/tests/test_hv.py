@@ -23,9 +23,9 @@ class World:
         for i in range(agents):
             self.evs += self.m.feed("start", span(f"a{i}", None, f"agent{i}", {"agentglow.agent": f"agent{i}"}, T0))
 
-    def decide(self, agent, t, purpose="guard", result="yes", p=0.95, ms=10, important=False):
+    def decide(self, agent, t, purpose="guard", result="yes", p=0.95, ms=10, important=False, question="q"):
         self.n += 1
-        a = {"agentglow.decision": "noul" if purpose != "route" else "choice", "agentglow.decision.question": "q",
+        a = {"agentglow.decision": "noul" if purpose != "route" else "choice", "agentglow.decision.question": question,
              "agentglow.decision.purpose": purpose, "agentglow.decision.result": result, "agentglow.decision.p": p,
              "agentglow.decision.provider": "jev"}
         if important:
@@ -85,6 +85,7 @@ def test_interesting_decisions_still_pass_when_busy():
     w.decide(0, t + 110, purpose="route", result="haiku")
     w.decide(0, t + 120, purpose="route", result="haiku")
     w.decide(0, t + 130, purpose="route", result="sonnet")  # flip
+    w.decide(0, t + 135, purpose="route", result="act", question="act?")  # another route question: no flip
     w.decide(0, t + 140, p=0.5)  # low confidence
     w.decide(0, t + 150, p=0.99, important=True)
     w.decide(0, t + 160, p=0.39)  # not low confidence (just outside 0.4..0.6)
@@ -94,8 +95,8 @@ def test_interesting_decisions_still_pass_when_busy():
     assert [e["why"] for e in ind] == ["deny", "flip", "low_p", "important"]
     assert all(e["hv"] for e in ind)
     (st,) = kinds(out, "decision_stats")
-    assert st["n"] == 13
-    assert st["by_purpose"]["route"] == {"n": 3, "results": {"haiku": 2, "sonnet": 1}}
+    assert st["n"] == 14
+    assert st["by_purpose"]["route"] == {"n": 4, "results": {"haiku": 2, "sonnet": 1, "act": 1}}
     assert st["by_purpose"]["guard"] == {"n": 9, "allow": 8, "deny": 1}
     assert st["by_purpose"]["check"] == {"n": 1, "yes": 1, "no": 0}
 

@@ -467,6 +467,8 @@ function freeSlot(): number {
 const SEG_SCRATCH = new Array<number>(HALO_CATS.length).fill(0);
 /** high volume: most individual decision glyphs on screen at once (all agents) */
 export const HV_GLYPHS_MAX = 3;
+/** an equally important newer glyph may replace one only after it showed this long (no flicker in a deny storm) */
+const HV_MIN_SHOW_MS = 650;
 const hvShown: DecisionUse[] = [];
 const hvScore = (d: DecisionUse) => (d.why === "important" ? 4 : isDeny(d) ? 3 : d.why === "flip" ? 2 : 1);
 /** admit a high-volume glyph: free place, else pre-empt the least important (then oldest) one if this one is at
@@ -477,12 +479,15 @@ function admitHv(d: DecisionUse, now: number): boolean {
     if (x.cut || now - x.at >= decisionLife(x)) hvShown.splice(k, 1);
   }
   if (hvShown.length >= HV_GLYPHS_MAX) {
-    let v = 0;
-    for (let k = 1; k < hvShown.length; k++) {
-      const a = hvShown[k], b = hvShown[v];
-      if (hvScore(a) < hvScore(b) || (hvScore(a) === hvScore(b) && a.at < b.at)) v = k;
+    // victim: the least important, then oldest glyph that may go (shown long enough, or less important than d)
+    let v = -1;
+    for (let k = 0; k < hvShown.length; k++) {
+      const a = hvShown[k];
+      if (hvScore(a) > hvScore(d) || (hvScore(a) === hvScore(d) && now - a.at < HV_MIN_SHOW_MS)) continue;
+      const b = v >= 0 ? hvShown[v] : null;
+      if (!b || hvScore(a) < hvScore(b) || (hvScore(a) === hvScore(b) && a.at < b.at)) v = k;
     }
-    if (hvScore(d) < hvScore(hvShown[v])) {
+    if (v < 0) {
       d.hidden = true;
       return false;
     }
