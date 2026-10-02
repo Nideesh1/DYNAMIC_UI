@@ -72,11 +72,13 @@ class RouteModel(AgentMiddleware):
     def __init__(self, category: str, models: dict):
         super().__init__()
         self.category, self.models = category, models
+        # the model each route goes to, for the decision's target (e.g. "claude-haiku-4-5")
+        self.targets = {r: str(getattr(m, "model", None) or getattr(m, "model_name", "") or "").removeprefix("models/") for r, m in models.items()}
 
     async def abefore_agent(self, state, runtime):
         rows = VENDORS.get(self.category, [])
         d = await decide.choice(
-            "which model for this analyst?", ROUTE_OPTIONS, purpose="route", parent=tool_context(),
+            "which model for this analyst?", ROUTE_OPTIONS, purpose="route", parent=tool_context(), targets=self.targets,
             state={"category": self.category, "vendors": len(rows), "annual_spend_usd": sum(r[1] for r in rows),
                    "vendor_spend": {v: usd for v, usd, _ in rows}},
             instructions="Which model should analyze this spend category? Use the least costly one whose criteria fit `annual_spend_usd`.",

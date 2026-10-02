@@ -115,8 +115,9 @@ def _record(span, d: Decision) -> Decision:
 
 # ---- public --------------------------------------------------------------------------------
 async def choice(question: str, options: dict[str, str], state: Any, *, instructions: str = "", purpose: str | None = "route",
-                 target: str | None = None, parent=None) -> Decision:
-    """Pick one of `options` ({name: description}). `question` is the short label shown in AgentGlow."""
+                 target: str | None = None, targets: dict[str, str] | None = None, parent=None) -> Decision:
+    """Pick one of `options` ({name: description}). `question` is the short label shown in AgentGlow.
+    `targets` ({option: label}, e.g. the model each route goes to) sets the span's target from the result."""
     ask = instructions or question
     with _span("choice", question, purpose, target, parent) as span:
         if PROVIDER == "jev":
@@ -130,6 +131,8 @@ async def choice(question: str, options: dict[str, str], state: Any, *, instruct
             out = await _judge(_ChoiceOut, f"{ask}\nOptions:\n{menu}", state)
             pick = out.choice if out.choice in options else next(iter(options))
             d = Decision(pick, out.probability, _spread(pick, out.probability, list(options)))
+        if targets and targets.get(d.result):
+            span.set_attribute("agentglow.decision.target", targets[d.result])
         return _record(span, d)
 
 
