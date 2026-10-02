@@ -69,6 +69,8 @@ Nested `agentglow.agent(...)` = subagent; also `agentglow.mcp(...)`, `agentglow.
 cp .env.example .env                 # add one LLM key (OpenAI, Anthropic or Gemini) - that's all the setup
 docker compose up                    # then open http://localhost:8101 and press ▶ Run agents
 ```
+Pick a workflow next to the button: **Churn brief** (plan, research, write) or **Incident triage** (a runbook skill,
+parallel steps across two MCP servers, a review that fails once and retries, a postmortem).
 Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d`.
 
 ▶ [Watch the demo in HD](docs/media/hero.mp4)
@@ -146,10 +148,10 @@ patient/customer data (names, phone numbers, ids) out of agent names, tool args 
 | agents / subagents | shapes that spawn, think, wait and exit - subagents smaller, linked to their parent with directional edges |
 | LLM calls | pulses sized by tokens |
 | tool & MCP calls | MCP server + its backends (Postgres, Snowflake, Spark…) appear at the side when first called, with data-flow arrows; idle ones fade away |
-| DB / graph queries (`db.system`) | a knowledge graph appears at the side once agents read or write it (real nodes from FalkorDB if configured) |
+| DB / graph queries (`db.system`) | a knowledge graph appears at the side once agents read or write it (real nodes from FalkorDB if configured) and fades out with the run |
 | handoffs | agents chained with a message along the edge |
-| skills (Claude Code skills, `agentglow.skill`) | a skill badge on the agent using it |
-| Hatchet workflow runs | runs and their step-by-step progress |
+| skills (Claude Code, deepagents and OpenAI Agents skills, `agentglow.skill`) | a `skill:name` ring on the agent using it |
+| Hatchet workflow runs | runs and their steps, whatever they are named, including parallel steps and retries |
 
 **Agents are always the center.** Graphs, databases and MCP servers are side resources that only show up when used, and the camera
 frames everything calmly: one smooth zoom per burst of spawns, never a jittery in-and-out. Stats sit in a slim top bar;
