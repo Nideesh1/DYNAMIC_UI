@@ -37,7 +37,12 @@ def test_traces_only_replay():
         per[e["id"]] = per.get(e["id"], 0) + 1
     assert per == {main: 2, spawns[1]["id"]: 2, spawns[2]["id"]: 2}
     assert sum(e["tokens_out"] for e in llm) == 316 + 145 + 197 + 82 + 52 + 265
-    assert all(e.get("tokens_cached", 0) > 0 for e in llm)
+    # tokens_in = input + cache_creation + cache_read (ALL prompt tokens); tokens_cached = the cache-read subset
+    assert sorted((e["tokens_in"], e["tokens_cached"], e["tokens_cache_write"]) for e in llm if e.get("tokens_cache_write")) == sorted(
+        [(14166, 7145, 7019), (14157, 7145, 7010), (15273, 14155, 1116), (15417, 14164, 1251), (23510, 22594, 914)])
+    assert sorted((e["tokens_in"], e["tokens_cached"]) for e in llm) == sorted(
+        [(22596, 22594), (14166, 7145), (14157, 7145), (15273, 14155), (15417, 14164), (23510, 22594)])
+    assert sum(e["tokens_in"] + e["tokens_out"] for e in llm) == 106176  # = Anthropic usage total for the capture
 
     tools = [(e["id"], e["tool"]) for e in evs if e["type"] == "tool"]
     assert sorted(tools) == sorted([(main, "task"), (main, "task"), (spawns[1]["id"], "Bash"), (spawns[2]["id"], "Bash")])
@@ -113,6 +118,18 @@ def test_hooks_and_traces_merge_without_duplicates(tmp_path):
     assert not hub.claude_code.sessions and not hub.mapper.runs
     hub.ingest_ended(otlp_json_spans(FIX[1]), t + 3000)  # late duplicate export for an ended session: ignored
     assert len(hub.buffer) == len(evs)
+
+
+def test_merged_redelivered_batch_does_not_double_count():
+    hub = Hub()
+    hub.ingest_hook(hook("UserPromptSubmit", prompt="x"), T0 + 100)
+    hub.ingest_ended(otlp_json_spans(FIX[0]), T0 + 6000)
+    tok = lambda: [e for e in hub.buffer if e["type"] == "llm" and e["tokens_out"] > 0]
+    first = tok()
+    assert len(first) == 4
+    hub.ingest_ended(otlp_json_spans(FIX[0]), T0 + 6100)  # OTLP exporter retry: same batch again
+    assert tok() == first
+    assert sum(e["tokens_in"] for e in tok()) == sum(e["tokens_in"] for e in first)
 
 
 def test_merged_agents_exit_after_trace_wait_without_traces():

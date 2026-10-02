@@ -111,8 +111,8 @@ Hooks carry no token counts (LLM pulses show `0→0 tok`). Claude Code's OTel tr
 | `OTEL_LOG_USER_PROMPTS` | `0` (AgentGlow drops prompts anyway) |
 
 With hooks and traces both on, AgentGlow merges them by session id: hooks still drive live spawns, names and tools;
-traces add one `llm` pulse per model call with real tokens (`input + cache creation` in, output out, cache reads as
-`tokens_cached`) on the same agents. No duplicate agents; a finished agent waits up to 15 s for its last trace spans.
+traces add one `llm` pulse per model call with real tokens (all prompt tokens in, i.e. `input + cache creation + cache
+reads`, output out, cache reads also as `tokens_cached`) on the same agents. No duplicate agents; a finished agent waits up to 15 s for its last trace spans.
 Traces alone also work (agents appear when spans are exported, subagents named from their type).
 
 Claude Code only honours telemetry variables from `--settings`, `~/.claude/settings.json`, managed settings or your
