@@ -108,6 +108,11 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # decisions (app/decide.py): TypeSafe Jev when set, else an LLM judge (DECIDE_MODEL, default AGENT_MODEL)
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      DECIDE_MODEL: ${DECIDE_MODEL:-}
+      ROUTER_SMALL_MODEL: ${ROUTER_SMALL_MODEL:-}   # vendor router "small" route (default per provider, see app/vendor.py)
+      DEMO_FORCE_FIRST_REVIEW_FAIL: ${DEMO_FORCE_FIRST_REVIEW_FAIL:-1}   # incident: reject review attempt 1 → one retry
       OBS_LANGFUSE_PUBLIC_KEY: ${OBS_LANGFUSE_PUBLIC_KEY:-}
       OBS_LANGFUSE_SECRET_KEY: ${OBS_LANGFUSE_SECRET_KEY:-}
       LANGFUSE_EXPORT: ${LANGFUSE_EXPORT:-0}

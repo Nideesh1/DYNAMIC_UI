@@ -10,6 +10,7 @@
 
 Agents are compiled in worker.py's lifespan (same as agent_smoke) and reached via ctx.lifespan.
 """
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -17,9 +18,12 @@ from . import config  # noqa: F401  (must be first: Hatchet env)
 
 from hatchet_sdk import Context
 from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import ToolMessage
 from opentelemetry import trace
 from pydantic import BaseModel
 
+from . import decide
+from .tools import tool_context
 from .workflow import hatchet, text_of
 
 WORKFLOW = "incident_triage"
@@ -34,19 +38,64 @@ class IncidentInput(BaseModel):
 incident_triage = hatchet.workflow(name=WORKFLOW, input_validator=IncidentInput)
 
 
+FORCE_FIRST_REVIEW_FAIL = os.environ.get("DEMO_FORCE_FIRST_REVIEW_FAIL", "1") == "1"
+RISKY_TOOLS = {"rollback_deploy"}
+
+
 class DiagnosisRejected(RuntimeError):
     pass
 
 
-class RejectFirstDiagnosis(AgentMiddleware):
-    """Runs after the reviewer has produced its verdict and rejects it, so the demo always shows a failed agent
-    (span status ERROR) followed by a Hatchet retry. Only used on attempt 1 (see `review`)."""
+class GuardRiskyTools(AgentMiddleware):
+    """GUARD: before a risky tool runs, ask a Noul "is this call safe to run without a human?" and block it when
+    p(safe) < 0.5 (same shape as langchain-typesafe's AutoModeMiddleware, but provider-agnostic and traced as an
+    AgentGlow decision). Blocked calls return an error ToolMessage; the tool never executes."""
 
-    def after_agent(self, state, runtime):
-        raise DiagnosisRejected("review rejected the diagnosis on first pass: evidence not cross-checked, retrying")
+    async def awrap_tool_call(self, request, handler):
+        call = request.tool_call
+        if call["name"] not in RISKY_TOOLS:
+            return await handler(request)
+        msgs = request.state.get("messages", [])[-8:]
+        state = {
+            "messages": [{"role": getattr(m, "type", "?"), "content": text_of(m)[:1500]} for m in msgs],
+            "tool_call": {"name": call["name"], "args": call["args"]},
+            "policy": "Production changes (deploys, rollbacks, config pushes) need explicit human approval. None was given.",
+        }
+        d = await decide.noul(
+            "safe to run without a human?", state, purpose="guard", target=call["name"], parent=tool_context(),
+            instructions="Is executing `tool_call` safe and clearly authorized, given `messages` and `policy`?",
+            yes="Read-only or explicitly authorized by a human.", no="Changes production or is not explicitly authorized.",
+        )
+        if d.result:
+            return await handler(request)
+        return ToolMessage(
+            content=f"blocked by guardrail: `{call['name']}` needs human approval (p(safe)={d.p:.2f}). Do not retry it; "
+                    "recommend it in your report instead.",
+            tool_call_id=call["id"], name=call["name"], status="error",
+        )
+
+
+class GroundedCheck(AgentMiddleware):
+    """CHECK: after the reviewer's verdict, a Noul "is the diagnosis grounded in the evidence?". No → raise, so the
+    reviewer's agent span ends with ERROR and Hatchet retries the step. `force_fail` (attempt 1 when
+    DEMO_FORCE_FIRST_REVIEW_FAIL=1) rejects even a grounded verdict, so the demo always shows one retry."""
+
+    def __init__(self, force_fail: bool = False):
+        super().__init__()
+        self.force_fail = force_fail
 
     async def aafter_agent(self, state, runtime):
-        self.after_agent(state, runtime)
+        msgs = state.get("messages", [])
+        evidence = next((text_of(m) for m in msgs if getattr(m, "type", "") == "human"), "")
+        d = await decide.noul(
+            "diagnosis grounded in evidence?", {"evidence": evidence[:6000], "verdict": text_of(msgs[-1])[:2000]},
+            purpose="check", target="reviewer", parent=tool_context(),
+            instructions="Is the `verdict`'s root cause directly supported by timestamps / numbers / diffs in `evidence`?",
+        )
+        if not d.result:
+            raise DiagnosisRejected(f"check failed: diagnosis not grounded in the evidence (p={d.p:.2f}), retrying")
+        if self.force_fail:
+            raise DiagnosisRejected("review rejected the diagnosis on first pass (demo: DEMO_FORCE_FIRST_REVIEW_FAIL=1), retrying")
 
 
 def step_span(topic: str):
@@ -100,18 +149,19 @@ async def code(input: IncidentInput, ctx: Context) -> dict:
         f"Incident: {t['topic']}\nTriage:\n{t['triage']}\n\n"
         "1) Delegate ONE task with the task tool to dep_mapper: map what checkout-service depends on in the graph. "
         "2) Meanwhile use the github tools: recent_deploys since 12:00, commit_diff of the most suspicious checkout "
-        "deploy, code_owners of the changed file. Report the suspect change, its owner and the affected dependency "
-        "chain in under 120 words. Do not write files."
+        "deploy, code_owners of the changed file. 3) Mitigate right away: call rollback_deploy ONCE with the suspect "
+        "sha (if it is blocked, do not retry). Report the suspect change, its owner, the affected dependency chain and "
+        "the rollback status in under 120 words. Do not write files."
     ), limit=60)
     return {"code": findings}
 
 
-# ---- review (first attempt always rejected → Hatchet retry) -------------------------------------
+# ---- review (grounded check on the verdict; attempt 1 rejected by default → Hatchet retry) -------------------------------------
 @incident_triage.task(parents=[logs, code], execution_timeout=timedelta(minutes=4), retries=1)
 async def review(input: IncidentInput, ctx: Context) -> dict:
     span = step_span(input.topic)
     span.set_attribute("agentglow.attempt", ctx.attempt_number)
-    agent = "reviewer_strict" if ctx.retry_count == 0 else "reviewer"
+    agent = "reviewer_strict" if ctx.retry_count == 0 and FORCE_FIRST_REVIEW_FAIL else "reviewer"
     verdict = await _ask(ctx, agent, "review", (
         f"Incident: {input.topic}\nLogs findings:\n{ctx.task_output(logs)['logs']}\n\n"
         f"Code findings:\n{ctx.task_output(code)['code']}\n\n"

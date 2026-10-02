@@ -10,16 +10,17 @@ config.setup_tracing("deepagents-hatchet-worker")  # agentglow.watch() (+ Langfu
 import agentglow  # noqa: E402
 from deepagents import create_deep_agent  # noqa: E402
 from deepagents.backends import FilesystemBackend  # noqa: E402
+from langchain.chat_models import init_chat_model  # noqa: E402
 
 from . import demo_graph  # noqa: E402
 from . import email_mcp_server as email_mcp  # noqa: E402
 from . import erp_mcp_server as erp_mcp  # noqa: E402
 from . import github_mcp_server as gh_mcp  # noqa: E402
 from . import obs_mcp_server as obs_mcp  # noqa: E402
-from .incident import AGENT_FS, SKILLS, RejectFirstDiagnosis, incident_triage  # noqa: E402
+from .incident import AGENT_FS, SKILLS, GroundedCheck, GuardRiskyTools, incident_triage  # noqa: E402
 from .mcp_server import RESOURCES, SERVER  # noqa: E402
 from .tools import GRAPH_TOOLS, PLAN_TOOLS, VENDOR_READ_TOOLS, VENDOR_WRITE_TOOLS, WRITE_TOOLS, load_mcp_tools  # noqa: E402
-from .vendor import slug, vendor_category, vendor_consolidation  # noqa: E402
+from .vendor import MODEL_ROUTES, RouteModel, slug, vendor_category, vendor_consolidation  # noqa: E402
 from .workflow import agent_smoke, hatchet, make_model  # noqa: E402
 
 RESEARCHER = (
@@ -61,6 +62,7 @@ async def vendor_agents() -> dict:
     erp_tools = await load_mcp_tools(erp_mcp.SERVER, config.ERP_MCP_URL)
     email_tools = await load_mcp_tools(email_mcp.SERVER, config.EMAIL_MCP_URL)
     erp_read = [t for t in erp_tools if t.name in ("vendor_scorecard", "renewal_calendar", "vendor_spend")]
+    routes = {route: init_chat_model(spec) if spec else make_model() for route, spec in MODEL_ROUTES.items()}
     agents = {
         "procurement_analyst": create_deep_agent(model=make_model(), tools=erp_tools + VENDOR_WRITE_TOOLS, system_prompt=PROCUREMENT, name="procurement_analyst"),
         "negotiator": create_deep_agent(model=make_model(), tools=email_tools, system_prompt=NEGOTIATOR, name="negotiator"),
@@ -68,7 +70,10 @@ async def vendor_agents() -> dict:
     }
     for cat in erp_mcp.CATEGORIES:
         name = f"{slug(cat)}_analyst"
-        agents[name] = create_deep_agent(model=make_model(), tools=VENDOR_READ_TOOLS + erp_read, system_prompt=CATEGORY.format(cat=cat), name=name)
+        agents[name] = create_deep_agent(
+            model=routes["large"], tools=VENDOR_READ_TOOLS + erp_read, system_prompt=CATEGORY.format(cat=cat), name=name,
+            middleware=[RouteModel(cat, routes)],  # ROUTER decision: small or large model for this analyst's run
+        )
     print(f"vendor agents ready · mcp tools: {[t.name for t in erp_tools + email_tools]}")
     return agents
 
@@ -91,10 +96,12 @@ async def incident_agents() -> dict:
             tools=gh_tools,
             system_prompt=CODE_SLEUTH,
             subagents=[{"name": "dep_mapper", "description": "Maps service dependencies in the knowledge graph (FalkorDB).", "system_prompt": DEP_MAPPER, "tools": GRAPH_TOOLS}],
+            middleware=[GuardRiskyTools()],  # GUARD decision before rollback_deploy
             name="code_sleuth",
         ),
-        "reviewer_strict": create_deep_agent(**reviewer, middleware=[RejectFirstDiagnosis()]),  # attempt 1: rejects
-        "reviewer": create_deep_agent(**reviewer),
+        # CHECK decision on the verdict; reviewer_strict (attempt 1, DEMO_FORCE_FIRST_REVIEW_FAIL=1) also rejects a pass
+        "reviewer_strict": create_deep_agent(**reviewer, middleware=[GroundedCheck(force_fail=True)]),
+        "reviewer": create_deep_agent(**reviewer, middleware=[GroundedCheck()]),
         "postmortem_writer": create_deep_agent(model=make_model(), tools=[], system_prompt=POSTMORTEM, name="postmortem_writer"),
     }
 

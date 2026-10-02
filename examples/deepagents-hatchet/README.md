@@ -42,8 +42,8 @@ Hatchet workflow `incident_triage` (`app/incident.py`) runs on the same worker a
 |---|---|---|
 | `triage` | **triage_lead** loads the `runbook` deepagents skill (`app/agent_fs/skills/runbook/SKILL.md`) | AgentGlow skill event |
 | `logs` | **logs_hunter** (runs in parallel with `code`) | `observability` MCP server (:8201) → Loki / Prometheus / PagerDuty |
-| `code` | **code_sleuth** + subagent **dep_mapper** | `github` MCP server (:8202) → GitHub API; FalkorDB service dependency graph |
-| `review` | **reviewer**: attempt 1 always rejects the diagnosis (agent fails), Hatchet retries once and it passes | - |
+| `code` | **code_sleuth** + subagent **dep_mapper**; it is told to call `rollback_deploy`, which a **guard** decision blocks | `github` MCP server (:8202) → GitHub API; FalkorDB service dependency graph |
+| `review` | **reviewer**: a **check** decision asks whether the verdict is grounded in the evidence; no → the agent fails and Hatchet retries the step (retries=1). Attempt 1 is also rejected when the check passes while `DEMO_FORCE_FIRST_REVIEW_FAIL=1` (default), so the demo always shows one retry | - |
 | `postmortem` | **postmortem_writer** drafts a short postmortem (final answer) | - |
 
 Trigger it (the churn brief stays the default when `workflow` is omitted):
@@ -64,7 +64,7 @@ fans out under a concurrency limit, waits on a human, and sleeps between email r
 | Step | Agents | Touches |
 |---|---|---|
 | `inventory` | **procurement_analyst** pulls every contract and writes it to the graph | `erp` MCP server (:8203) → SAP / Coupa; FalkorDB writes (`Vendor` -`IN_CATEGORY`-> `Category`) |
-| `analyze` | one child run of `vendor_category` per spend category (10), each with its own **&lt;category&gt;_analyst**; Hatchet concurrency **3 per run**, so the categories queue and drain 3 at a time | FalkorDB reads; `erp` (scorecards, renewals) |
+| `analyze` | one child run of `vendor_category` per spend category (10), each with its own **&lt;category&gt;_analyst**; Hatchet concurrency **3 per run**, so the categories queue and drain 3 at a time. A **router** decision first picks the analyst's model (small or large) | FalkorDB reads; `erp` (scorecards, renewals) |
 | `approval` | **durable** task: `ctx.aio_wait_for` the user event `vendor:approve` for this run, or auto-approves after `APPROVAL_TIMEOUT_S` (default 30 min) | - |
 | `negotiate` | **durable** task: **negotiator** drafts and sends outreach, then `ctx.aio_sleep_for(DEMO_SLEEP_S)` between 3 rounds (stands in for days) | `email` MCP server (:8204) → Exchange |
 | `report` | **plan_writer** writes the consolidation plan (final answer) | FalkorDB write (`Plan` -`CONSOLIDATES`-> `Vendor`) |
@@ -91,6 +91,36 @@ The trigger service listens on `127.0.0.1:8300` (`POST /approve` pushes the Hatc
 `{"run_id": "<id>" | "*"}`; the approval task matches its own run id or `*`). An approval sent before the run reaches
 the `approval` step is not remembered: approve once it is waiting. Timings: `DEMO_SLEEP_S` (default 20) and
 `APPROVAL_TIMEOUT_S` (default 1800) in `.env` or the shell.
+
+## Decisions (route / guard / check)
+
+Both demos make fast structured decisions through `app/decide.py`: `choice(question, options, state)`,
+`noul(question, state)` (yes/no with P(yes)) and `score(question, levels, state)`. Each call is one OTel span with
+the AgentGlow decision contract (`agentglow.decision` = `choice` | `noul` | `score`, plus `.question`, `.result`,
+`.p`, `.options`, `.provider`, `.purpose`, `.target`; see `docs/SPEC.md`, "Decisions"), so AgentGlow draws it on the
+agent that made it, with its result, probability and latency (the span's duration).
+
+| Where | Kind / purpose | Question | Effect |
+|---|---|---|---|
+| `vendor_category` | `choice` / route | which model for this analyst? (`small` / `large`, from the category's vendor count and spend) | the analyst runs on the chosen model: small = `claude-haiku-4-5`, `gpt-5-mini` or `gemini-3.5-flash-lite` by `AGENT_MODEL`'s provider (`ROUTER_SMALL_MODEL` overrides), large = `AGENT_MODEL` |
+| `code` (code_sleuth) | `noul` / guard, target `rollback_deploy` | safe to run without a human? | p(safe) < 0.5 → the call is blocked: the agent gets `blocked by guardrail ...` and the tool never runs (`GuardRiskyTools` middleware in `app/incident.py`) |
+| `review` (reviewer) | `noul` / check | diagnosis grounded in evidence? | no → the reviewer fails and Hatchet retries the step (`GroundedCheck` middleware) |
+
+**Provider.** With `TYPESAFE_API_KEY` set, decisions go to TypeSafe's Jev through
+[`langchain-typesafe`](https://docs.langchain.com/oss/python/integrations/providers/typesafe)'s `TypeSafeClassifier`
+(`Noul` / `Choice` / `Score` questions, calibrated probabilities; `TYPESAFE_BASE_URL` overrides the endpoint) and the
+spans say `provider=jev`. Without it they fall back to an LLM judge: `DECIDE_MODEL` (default `AGENT_MODEL`) with
+pydantic structured output returning the answer and a self-reported probability, `provider=llm`. Same shapes, same
+spans; the judge's probability is not calibrated and it is slower.
+
+```bash
+echo 'TYPESAFE_API_KEY=...' >> .env          # key from https://console.typesafe.ai/settings/keys
+docker compose up -d --build worker          # the worker is the only service that decides
+```
+
+The guard and router follow the shape of langchain-typesafe's experimental `AutoModeMiddleware` (blocks risky tool
+calls with a Noul) and `ModelRouterMiddleware` (a Choice over models). The demo uses its own small middleware and
+calls instead, so the same code runs with or without a TypeSafe key and every decision is traced for AgentGlow.
 
 ## Run with docker compose (repo root)
 
