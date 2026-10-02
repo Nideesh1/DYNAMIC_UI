@@ -252,6 +252,7 @@ def test_run_webhook_gets_scope_dev_and_secure():
     assert c.post("/live/run", json={"topic": "t", "scope": "bob"}, headers=bearer(tok)).status_code == 403
     assert c.post("/live/run", json={"topic": "t"}, headers=bearer(tok)).json() == {"run_id": "r1"}
     assert seen == [{"topic": "t", "scope": "alice"}]
+    assert c.get("/live/run").status_code == 401  # the workflow list is a viewer endpoint too
 
 
 # ---------------------------------------------------------------------- python with-block tagging

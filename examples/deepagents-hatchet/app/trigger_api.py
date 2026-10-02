@@ -3,6 +3,7 @@
   POST /run {"topic": "..."}                         →  agent_smoke run (churn brief)
   POST /run {"topic": "...", "workflow": "incident"}  →  incident_triage run
   both return {"run_id": "<hatchet workflow run id>", "topic": "...", "workflow": "<hatchet workflow>"}
+  GET /run  →  {"workflows": [{id, label, topic}]}  (agentglow's GET /live/run proxies it for the HUD picker)
 
 Run: uv run python -m app.trigger_api   (:8300; compose service `trigger`, internal only)
 """
@@ -23,6 +24,9 @@ app = FastAPI(title="agentglow example trigger")
 WORKFLOWS = {"brief": (agent_smoke, BriefInput), "agent_smoke": (agent_smoke, BriefInput),
              "incident": (incident_triage, IncidentInput), "incident_triage": (incident_triage, IncidentInput)}
 
+# what GET /run advertises (the HUD workflow picker); topic is each workflow's example topic
+PICKER = [("brief", "Churn brief", BriefInput), ("incident", "Incident triage", IncidentInput)]
+
 
 class RunRequest(BaseModel):
     topic: str = ""
@@ -37,6 +41,11 @@ async def run(req: RunRequest) -> dict:
     topic = req.topic or model().topic
     ref = await wf.aio_run(model(topic=topic), wait_for_result=False)
     return {"run_id": ref.workflow_run_id, "topic": topic, "workflow": wf.name}
+
+
+@app.get("/run")
+def workflows() -> dict:
+    return {"workflows": [{"id": i, "label": label, "topic": model().topic} for i, label, model in PICKER]}
 
 
 @app.get("/health")

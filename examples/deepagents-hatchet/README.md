@@ -68,7 +68,8 @@ docker compose exec worker uv run python trigger.py "Why is churn rising for Acm
 Hatchet UI: http://localhost:8180 (admin@example.com / Admin123!!) - you can also trigger `agent_smoke` there.
 No other setup: the worker and trigger read the Hatchet API token from the `obs_hatchet_token` volume.
 "▶ Run agents" works because compose sets `AGENTGLOW_RUN_WEBHOOK=http://trigger:8300/run` on agentglow: its
-`POST /live/run {topic}` forwards to the example's `trigger` service (`app/trigger_api.py`), which starts an `agent_smoke` run.
+`POST /live/run {topic, workflow?}` forwards to the example's `trigger` service (`app/trigger_api.py`), which starts an
+`agent_smoke` (or `incident_triage`) run. Its `GET /run` lists both workflows, so the HUD shows a picker next to the button.
 Langfuse (optional): `./scripts/gen-obs-env.sh` once (generates its local secrets into `.env`), then
 `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d` → http://localhost:3100.
 
