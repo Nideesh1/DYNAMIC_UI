@@ -1,7 +1,7 @@
 """Long-running Hatchet runs: declared / durable waits hold the run open, a hard bound closes it, idle grace still works."""
 import json
 
-from agentglow.mapper import HATCHET_GRACE_MS, RUN_MAX_IDLE_MS, Mapper
+from agentglow.mapper import HATCHET_GRACE_MS, PARK_SHOW_MS, RUN_MAX_IDLE_MS, Mapper
 
 MIN = 60_000
 T0 = 1_790_000_000_000  # epoch ms
@@ -82,7 +82,9 @@ def test_evicted_wait_parks_the_step_and_resume_joins_the_same_run():
     t = 1100 + 15 * MIN
     evs = m.feed("end", span("w", "await approval", "s1", None, 1100, t))
     evs += m.feed("end", span("s1", "hatchet.start_step_run", None, step("approval", "sr1"), 1000, t))
-    assert steps(evs, "approval")[-1]["status"] == "waiting" and steps(evs, "approval")[-1]["reason"] == "approval"
+    assert steps(evs, "approval")[-1]["status"] == "running"  # not shown as waiting yet: a satisfied wait moves on at once
+    shown = tick(m, t + PARK_SHOW_MS)
+    assert steps(shown, "approval")[-1]["status"] == "waiting" and steps(shown, "approval")[-1]["reason"] == "approval"
     assert tick(m, t + 3 * HATCHET_GRACE_MS) == [] and tick(m, t + 5 * 3_600_000) == []  # held: still waiting on a human
     t2 = t + 6 * 3_600_000  # approved: Hatchet re-runs the task (same step run id)
     evs = m.feed("start", span("s1b", "hatchet.start_step_run", None, step("approval", "sr1"), t2))
@@ -135,3 +137,14 @@ def test_fan_out_children_fold_into_parent_run_and_step_stays_running():
         t += 500
         evs = end(i)
     assert steps(evs, "analyze_category")[-1]["status"] == "done"
+
+
+def test_satisfied_wait_then_next_step_never_flashes_waiting():
+    m = Mapper()
+    m.feed("start", span("s1", "hatchet.start_step_run", None, step("approval", "sr1"), 1000))
+    m.feed("start", span("w", "await approval", "s1", {"agentglow.wait": "approval"}, 1100))
+    evs = m.feed("end", span("w", "await approval", "s1", None, 1100, 5000))  # approved
+    evs += m.feed("end", span("s1", "hatchet.start_step_run", None, step("approval", "sr1"), 1000, 5050))
+    evs += m.feed("start", span("s2", "hatchet.start_step_run", None, step("negotiate", "sr2"), 5150))
+    evs += tick(m, 5150 + PARK_SHOW_MS)
+    assert [e["status"] for e in steps(evs, "approval")][-2:] == ["running", "done"]

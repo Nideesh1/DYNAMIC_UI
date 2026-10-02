@@ -176,3 +176,11 @@ def test_hatchet_parallel_and_retried_step_agents_share_upstream_parent():
     assert parents[ids["code_sleuth"][0]] == ids["triage_lead"][0]  # a sibling of logs_hunter, not its child
     first, retry = ids["reviewer"]
     assert parents[first] == ids["code_sleuth"][0] and parents[retry] == parents[first]  # the retry hangs off the same upstream
+
+
+def test_hatchet_v1_workflow_label_comes_from_action_name():
+    m = Mapper()
+    a = {"hatchet.workflow_run_id": "v-1", "hatchet.step_name": "inventory", "hatchet.workflow_name": "inventory",
+         "hatchet.action_name": "vendor_consolidation:inventory"}
+    evs = m.feed("start", span("s", "hatchet.start_step_run", None, a, 1000, trace="s"))
+    assert by_type(evs, "run")[0]["workflow"] == "vendor_consolidation"

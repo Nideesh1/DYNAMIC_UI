@@ -88,6 +88,7 @@ HATCHET_FINAL_GRACE_MS = 3000
 # hard upper bound: a run with no span activity for this long completes even with open spans / waits
 RUN_MAX_IDLE_MS = int(os.environ.get("AGENTGLOW_RUN_MAX_IDLE_MS", str(24 * 3600 * 1000)))
 PARK_SLACK_MS = 1000  # a step ending this soon after its wait ended was (likely) evicted mid-wait
+PARK_SHOW_MS = 3000  # ...shown as waiting only if no step starts meanwhile (a satisfied wait moves on at once)
 HATCHET_WAIT_SPAN = "hatchet.durable.wait_for"
 SLEEP_KEY_RE = re.compile(r"^sleep:(\d+)([smh])-\d+$")
 EVENT_KEY_RE = re.compile(r"^event:(.+)-\d+$")
@@ -235,6 +236,16 @@ class Run:
     waits: dict = field(default_factory=dict)  # open wait span id -> Span
     last_wait: tuple | None = None  # (end ts, step span id, reason, until) of the last wait that ended
     parked: dict = field(default_factory=dict)  # step name -> (reason, until): ended with its wait (evicted)
+    park_pending: dict = field(default_factory=dict)  # parked step name -> park time, its `waiting` not emitted yet
+
+
+def _hatchet_workflow(a: dict) -> str:
+    """Hatchet workflow name. SDK v1 sets `hatchet.workflow_name` to the task (step) name, so prefer the
+    workflow part of `hatchet.action_name` ("vendor_consolidation:inventory")."""
+    action = str(a.get("hatchet.action_name") or "")
+    if ":" in action:
+        return action.split(":", 1)[0]
+    return str(a.get("hatchet.workflow_name") or "")
 
 
 class Mapper:
@@ -325,6 +336,10 @@ class Mapper:
         for k in [k for k, o in self.orphans.items() if now_ms - o["ts"] >= ORPHAN_MS]:  # parent never came: drop
             self.orphans.pop(k)
         for r in list(self.runs.values()):
+            for step, t in [(k, t) for k, t in r.park_pending.items() if now_ms - t >= PARK_SHOW_MS]:
+                del r.park_pending[step]
+                reason, until = r.parked[step]
+                out.append(self._step_wait_ev(r.id, step, reason, until, now_ms))
             if (r.done_at is not None and now_ms >= r.done_at) or (r.last_ts and now_ms - r.last_ts >= RUN_MAX_IDLE_MS):
                 self._complete(r, now_ms, out)
         return out
@@ -371,6 +386,7 @@ class Mapper:
             for p in [p for p in run.parked if p != step]:  # the run moved on: a parked step was done after all
                 out.append({"type": "step", "run_id": run_id, "step": p, "status": "done", "ts": ts})
             run.parked.clear()
+            run.park_pending.clear()
             run.step_open[step] = run.step_open.get(step, 0) + 1
             out.append({"type": "step", "run_id": run_id, "step": s.step, "status": "running", "ts": ts})
 
@@ -524,7 +540,7 @@ class Mapper:
         lw = run.last_wait
         if not bad and not run.final and lw and lw[1] == s.id and ts - lw[0] <= PARK_SLACK_MS:
             run.parked[s.step] = (lw[2], lw[3])
-            out.append(self._step_wait_ev(s.run, s.step, lw[2], lw[3], ts))
+            run.park_pending[s.step] = ts  # tick() shows it as waiting after PARK_SHOW_MS unless the run moves on
             return
         out.append({"type": "step", "run_id": s.run, "step": s.step, "status": "failed" if bad else "done", "ts": ts})
 
@@ -1069,11 +1085,11 @@ class Mapper:
             for v in payload["input"].values():
                 if isinstance(v, str) and v.strip():
                     return v[:200]
-        return str(a.get("hatchet.workflow_name") or s.name)
+        return str(_hatchet_workflow(a) or s.name)
 
     def _workflow(self, s: Span) -> str:
         a = s.attrs
-        name = a.get("hatchet.workflow_name") or a.get("agentglow.run.workflow")
+        name = _hatchet_workflow(a) or a.get("agentglow.run.workflow")
         if name:
             return str(name)
         # a Hatchet step span's own name is the step ("plan"), not the workflow
