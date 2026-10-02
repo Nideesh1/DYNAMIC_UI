@@ -49,6 +49,8 @@ export function describe(e: WorldEvent): string {
       return e.status === "start" ? `${short(e.id)} · skill: ${e.name}` : `${short(e.id)} · skill: ${e.name} done`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
+    case "chat":
+      return `${e.role === "user" ? "you" : world.instances.get(e.id)?.name ?? "agent"}: ${e.text}`;
   }
 }
 
@@ -689,6 +691,18 @@ function AgentDetail({ i }: { i: Instance }) {
               {p.server}.{p.tool}() · {waitSeconds(p).toFixed(1)}s
             </p>
           ))}
+        </section>
+      )}
+      {i.chat.length > 0 && (
+        <section>
+          <h4>Conversation</h4>
+          <ul className="ap-chat">
+            {i.chat.map((c, k) => (
+              <li key={k} data-role={c.role}>
+                <b>{c.role === "user" ? "you" : i.name}:</b> {c.text}
+              </li>
+            ))}
+          </ul>
         </section>
       )}
       <section>

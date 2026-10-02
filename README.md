@@ -139,6 +139,12 @@ see [docs/SPEC.md "Scopes & auth"](docs/SPEC.md#scopes--auth).
 redacts secret-looking values before anything reaches the stream ([docs/SPEC.md](docs/SPEC.md#privacy)). Keep
 patient/customer data (names, phone numbers, ids) out of agent names, tool args and final text.
 
+**Your own prompts (opt-in, local only):** `npx agentglow setup --capture-prompts` (or `AGENTGLOW_CAPTURE_PROMPTS=1
+agentglow serve --host 127.0.0.1`) keeps your Claude Code prompts, secrets redacted and capped at 2000 chars, so the
+agent panel shows each turn as "you: ... / claude: ...". Off by default. It only works when the server listens on
+loopback (`127.0.0.1` / `localhost` / `::1`); on any other host the flag is ignored with a startup warning, so a
+shared server never receives prompts. `npx agentglow status` shows `prompts: captured (local only)` when it is on.
+
 ## What shows up
 
 | Your system | In the scene |

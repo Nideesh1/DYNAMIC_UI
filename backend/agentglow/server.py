@@ -149,7 +149,8 @@ def ingest_key_ok(keys: tuple[bytes, ...], request: Request) -> bool:
 
 # ---------------------------------------------------------------------- app
 def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_webhook: str | None = None,
-               run_transport=None, secret: str | None = None, ingest_key: str | list[str] | None = None) -> FastAPI:
+               run_transport=None, secret: str | None = None, ingest_key: str | list[str] | None = None,
+               capture_prompts: bool = False) -> FastAPI:
     """`run_webhook` (or AGENTGLOW_RUN_WEBHOOK): URL that POST /live/run forwards `{topic, scope?}` to (your trigger
     endpoint); the UI shows "Run agents" only when it is set. GET /live/run proxies `GET <webhook>` for an optional
     `{workflows: [{id, label, topic}]}` listing (the UI's workflow picker). `run_transport` is an optional httpx transport (tests).
@@ -157,8 +158,10 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
     and the token alone decides what the viewer sees. Without it (dev), X-AgentGlow-Scope / X-AgentGlow-Run headers
     (and `?run=` on /live/stream) pick the filter.
     `ingest_key` (or AGENTGLOW_INGEST_KEY; comma-separated for rotation): POST /v1/live, /v1/traces, /v1/claude-code
-    and /live/topology require `x-api-key: <key>` (or `Authorization: Bearer <key>`), else 401. Unset (dev): open."""
-    hub = hub or Hub()
+    and /live/topology require `x-api-key: <key>` (or `Authorization: Bearer <key>`), else 401. Unset (dev): open.
+    `capture_prompts`: keep Claude Code user prompts (redacted, capped) as `chat` events. Never read from the env here:
+    only `agentglow serve` turns it on (AGENTGLOW_CAPTURE_PROMPTS=1 with a loopback --host)."""
+    hub = hub or Hub(capture_prompts=capture_prompts)
     falkor_url = falkor_url or os.environ.get("AGENTGLOW_FALKOR_URL")
     run_webhook = run_webhook or os.environ.get("AGENTGLOW_RUN_WEBHOOK") or None
     secret = secret or os.environ.get("AGENTGLOW_SECRET") or None
@@ -297,7 +300,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
     @app.get("/live/health")
     def health(request: Request):
         base = {"ok": True, "version": __version__, "ui": (STATIC / "index.html").exists(), "run": bool(run_webhook),
-                "auth": bool(secret), "ingest_auth": bool(ingest_keys)}
+                "auth": bool(secret), "ingest_auth": bool(ingest_keys), "prompts": hub.claude_code.capture_prompts}
         f = viewer(request, required=False)
         if f is None:  # secure mode without a token: liveness only
             return base

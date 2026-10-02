@@ -122,6 +122,10 @@
 .ap-chip-link:hover { background: rgba(148, 163, 255, 0.1); }
 .ap-wait { color: #fbbf24 !important; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .ap-nodes { line-height: 1.5; }
+.ap-chat { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 12px; color: #e2e8f0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
+.ap-chat li[data-role="user"] { color: #c7d2fe; }
+.ap-chat li[data-role="agent"] { padding-bottom: 6px; border-bottom: 1px solid rgba(148, 163, 255, 0.12); }
+.ap-chat b { font-weight: 650; }
 .ap-events { margin: 0; padding-left: 14px; display: grid; gap: 3px; font-size: 11px; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .hud-badge--live { background: rgba(34, 197, 94, 0.18); color: #86efac; }

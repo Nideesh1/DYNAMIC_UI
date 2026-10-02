@@ -38,9 +38,9 @@ class Sub:
 
 
 class Hub:
-    def __init__(self, buffer: int = 5000) -> None:
+    def __init__(self, buffer: int = 5000, capture_prompts: bool = False) -> None:
         self.mapper = Mapper()
-        self.claude_code = ClaudeCodeAdapter()
+        self.claude_code = ClaudeCodeAdapter(capture_prompts=capture_prompts)
         self.buffer: deque[dict] = deque(maxlen=buffer)
         self.topology: dict[str, dict] = {}  # server -> merged mcp_register event
         self.subs: set[Sub] = set()

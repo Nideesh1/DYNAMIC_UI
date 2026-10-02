@@ -190,6 +190,10 @@ test("start hook command: quiet, pinned, cached CLI first, npx fallback", () => 
   const withCache = startHookCommand({ port: 8100, version: "0.3.0", node: "node", script: "/s.mjs", cacheDir: "/tmp/a b" });
   assert.ok(withCache.startsWith('AGENTGLOW_CACHE_DIR="/tmp/a b" "node" "/s.mjs"'));
   assert.ok(withCache.includes('|| AGENTGLOW_CACHE_DIR="/tmp/a b" npx -y agentglow@0.3.0'));
+  const capture = startHookCommand({ port: 8100, version: "0.3.0", node: "node", script: "/s.mjs", capturePrompts: true, platform: "darwin" });
+  assert.ok(capture.startsWith('AGENTGLOW_CAPTURE_PROMPTS=1 "node" "/s.mjs"'));
+  assert.ok(capture.includes("|| AGENTGLOW_CAPTURE_PROMPTS=1 npx -y agentglow@0.3.0"));
+  assert.ok(!START.includes("CAPTURE"));  // default setup: no prompt capture
   assert.equal(startHookCommand({ port: 8100, version: "0.3.0", node: "n", script: "s", platform: "win32" }),
     "npx -y agentglow@0.3.0 start --background --quiet --port 8100");
   assert.ok(isOurHook({ type: "command", command: START }));

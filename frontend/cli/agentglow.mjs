@@ -31,6 +31,9 @@ const HELP = `agentglow ${VERSION}: watch Claude Code agents in 3D
   npx agentglow stop                  stop the background server
   npx agentglow remove                undo setup: remove the hooks and stop the server
   npx agentglow claude [-- <args>]    try it without installing: one claude session with AgentGlow
+  npx agentglow setup --capture-prompts
+                                      also show your prompts next to Claude's replies in the agent panel
+                                      (off by default; local server only, secrets redacted)
 
 
 More: npx agentglow start [--background] [--port N]   (serve = start in the foreground)
@@ -61,6 +64,7 @@ function parseArgs(argv) {
     else if (a === "--uninstall") o.uninstall = true;
     else if (a === "--remove") o.remove = true;
     else if (a === "--no-autostart") o.autostart = false;
+    else if (a === "--capture-prompts") o.capturePrompts = true;
     else if (a === "--background" || a === "-b") o.background = true;
     else if (a === "--quiet" || a === "-q") o.quiet = true;
     else if (a === "-h" || a === "--help") o.help = true;
@@ -141,6 +145,9 @@ async function cmdSetup(o) {
   const remote = remoteUrl();
   const port = o.port;
   const base = remote || baseUrl({ port });
+  // Opt-in: the local server keeps the user's prompt text (login item env + SessionStart command + started server)
+  if (o.capturePrompts && !remote) process.env.AGENTGLOW_CAPTURE_PROMPTS = "1";
+  const capturePrompts = process.env.AGENTGLOW_CAPTURE_PROMPTS === "1";
   // The AgentGlow Claude Code plugin brings the same hooks + server start; adding ours too would post every event twice.
   const plugin = pluginIdsIn(file);
   if (plugin.length) {
@@ -151,7 +158,7 @@ async function cmdSetup(o) {
   if (!remote && !plugin.length) {
     const script = installCliCopy({ srcCliDir: here, version: VERSION });
     startCommand = startHookCommand({
-      port, version: VERSION, node: nodeForHook(), script, cacheDir: process.env.AGENTGLOW_CACHE_DIR,
+      port, version: VERSION, node: nodeForHook(), script, cacheDir: process.env.AGENTGLOW_CACHE_DIR, capturePrompts,
     });
   }
   const r = installSettingsFile(file, base, { startCommand, hooks: !plugin.length, extra: remote ? {} : { port } });
@@ -184,6 +191,14 @@ async function cmdSetup(o) {
       return 1;
     }
   }
+  if (o.capturePrompts && remote) console.log("--capture-prompts is for a local server only; ignored with AGENTGLOW_URL.");
+  else if (capturePrompts) {
+    const h = await fetchText(localBase(port) + "/live/health", 2000);
+    let on = false;
+    try { on = JSON.parse(h?.body || "{}").prompts === true; } catch { /* not ours */ }
+    console.log(on ? "Prompts: captured (local only)."
+      : `Prompts: the running server was started without capture; restart it: npx agentglow stop${portFlag(port)} && npx agentglow start --background${portFlag(port)}`);
+  }
   if (o.open) openBrowser(view);
   console.log(`\nDone. Just run \`claude\` as usual. View: ${view}  Undo: npx agentglow remove`);
   return 0;
@@ -194,11 +209,14 @@ async function cmdSetup(o) {
 function installLoginItem(port) {
   const script = installCliCopy({ srcCliDir: here, version: VERSION });
   const node = nodeForHook() || process.execPath;
-  const command = startHookCommand({ port, version: VERSION, node, script, cacheDir: process.env.AGENTGLOW_CACHE_DIR });
+  const command = startHookCommand({
+    port, version: VERSION, node, script, cacheDir: process.env.AGENTGLOW_CACHE_DIR,
+    capturePrompts: process.env.AGENTGLOW_CAPTURE_PROMPTS === "1",
+  });
   // macOS/Linux: the supervisor runs the server in the foreground (argv, no shell); Windows keeps the shell command
   const argv = [node, script, "start", "--port", String(port)];
   const env = { PATH: loginPath({ node }), HOME: os.homedir() };
-  for (const k of ["AGENTGLOW_CACHE_DIR", "AGENTGLOW_API_KEY", "AGENTGLOW_INGEST_KEY", "AGENTGLOW_SECRET", "AGENTGLOW_PY_SPEC"]) {
+  for (const k of ["AGENTGLOW_CACHE_DIR", "AGENTGLOW_API_KEY", "AGENTGLOW_INGEST_KEY", "AGENTGLOW_SECRET", "AGENTGLOW_PY_SPEC", "AGENTGLOW_CAPTURE_PROMPTS"]) {
     if (process.env[k]) env[k] = process.env[k];
   }
   try {
@@ -331,6 +349,7 @@ async function cmdStatus(o) {
   console.log(`hooks:   ${hooksLine}`);
   if (installed && plugin.length) console.log(`warning: hooks are in ${file} AND the plugin is enabled, so events post twice. Run \`npx agentglow remove\` or disable the plugin.`);
   if (hasAutostart()) console.log(`login:   server starts at login and restarts on crash`);
+  if (health?.prompts) console.log(`prompts: captured (local only)`);
   if (health?.ok) console.log(`view:    ${base}/neural`);
   return 0;
 }

@@ -7,6 +7,9 @@ put identity data, raw user prompts or secrets into world events. See docs/SPEC.
   `enduser.*`, and any key containing "email".
 - Raw user prompt keys are dropped: `user_prompt*`, `gen_ai.prompt*`, hook `prompt`/`user_message`, and
   `llm_request.context` unless it is a short label (Claude Code sends "interaction"/"tool").
+  Opt-in exception: `scrub_hook(p, keep_prompt=True)` (server env AGENTGLOW_CAPTURE_PROMPTS=1, honoured only on a
+  loopback bind, see cli.py) keeps the Claude Code hook prompt as `agentglow_prompt` (`prompt_text`: secrets
+  redacted, max PROMPT_MAX chars). OTel prompt keys stay dropped either way.
 - A skill name (`agentglow.skill`) is reduced to `[A-Za-z0-9:_.-]`, max 64 chars (`skill_name`); nothing else
   about a skill use (args, prompt text) is ever carried in the skill event.
 - A Claude Code session title (`session_title`: the user's /rename name, else Claude Code's auto title) is a run
@@ -34,10 +37,11 @@ SECRET_RE = re.compile(
     r"|\bBearer\s+[A-Za-z0-9._~+/=\-]{8,}",
     re.I,
 )
-HOOK_PROMPT_KEYS = {"prompt", "user_message"}
+HOOK_PROMPT_KEYS = {"prompt", "user_message", "agentglow_prompt"}  # agentglow_prompt: only ever set by scrub_hook
 SKILL_KEY = "agentglow.skill"
 SKILL_BAD_RE = re.compile(r"[^A-Za-z0-9:_.-]+")
 TITLE_MAX = 60
+PROMPT_MAX = 2000
 STEP_MAX = 40
 TITLE_WS_RE = re.compile(r"[\s\x00-\x1f\x7f]+")
 
@@ -63,6 +67,14 @@ def session_title(v: object) -> str:
         return ""
     s = TITLE_WS_RE.sub(" ", redact(v)).strip()
     return s if len(s) <= TITLE_MAX else s[: TITLE_MAX - 1].rstrip() + "…"
+
+
+def prompt_text(v: object) -> str:
+    """User prompt (opt-in capture only) → secrets redacted, trimmed, max PROMPT_MAX chars."""
+    if not isinstance(v, str):
+        return ""
+    s = redact(v).strip()
+    return s if len(s) <= PROMPT_MAX else s[: PROMPT_MAX - 1].rstrip() + "…"
 
 
 def redact(s: str) -> str:
@@ -100,10 +112,11 @@ def scrub_span(span: dict) -> dict:
     return {**span, "name": redact(span.get("name") or "span"), "attributes": scrub_attrs(span.get("attributes"))}
 
 
-def scrub_hook(p: dict) -> dict:
+def scrub_hook(p: dict, keep_prompt: bool = False) -> dict:
     """Claude Code hook payload → copy without identity keys or the user's prompt (secrets redacted). A
     `<task-notification>` prompt (a background subagent reporting back, written by Claude Code, not the user) is
-    reduced to `agentglow_notification` + its `<summary>` so the adapter can still resume that run."""
+    reduced to `agentglow_notification` + its `<summary>` so the adapter can still resume that run. `keep_prompt`
+    (opt-in, local servers only): any other prompt is kept as `agentglow_prompt` (`prompt_text`)."""
     if not isinstance(p, dict):
         return {}
     out = {k: _value(v) for k, v in p.items() if not drop_key(str(k)) and k not in HOOK_PROMPT_KEYS}
@@ -111,4 +124,6 @@ def scrub_hook(p: dict) -> dict:
     if re.match(r"^\s*<task-notification>", prompt, re.I):
         m = re.search(r"<summary>(.*?)</summary>", prompt, re.S)
         out["agentglow_notification"] = redact(m[1].strip()) if m else ""
+    elif keep_prompt and prompt_text(prompt):
+        out["agentglow_prompt"] = prompt_text(prompt)
     return out
