@@ -134,6 +134,7 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 | Final | `agentglow.final` attr on any span | `final` text |
 | Skill | hint attribute `agentglow.skill` = skill name on any span (usually a tool span); set by the Claude Code hooks adapter for the `Skill` tool (`tool_input.skill`, e.g. `hello`, `plugin:skill`), by the traces-only path from the `claude_code.tool` span's `skill_name` (needs `OTEL_LOG_TOOL_DETAILS=1`), and by the manual `skill()` | `skill` `status: "start"` when the span starts (or at end if the attribute only arrives then), `"end"` when it ends, on the owning agent; the normal `tool` event is still emitted (Claude Code `Skill` args preview = the skill name only) |
 | Framework skills (inferred) | deepagents: TOOL `read_file` whose `input.value` `file_path` matches `^(.*/)?<skill>/SKILL\.md$` (skill = parent dir); confirmed against `skills_metadata[].path` from a `SkillsMiddleware.before_agent` span's `output.value` when known (cached per `thread_id`, else trace: it is emitted only on a thread's first turn); `offset > 0` re-reads, `write_file`/`edit_file`/`ls`/`glob`/`grep` never count. OpenAI Agents SDK: TOOL `load_skill` (`input.value.skill_name`); TOOL `shell`/`exec_command`/`local_shell`/`bash`/`run_shell_command` whose command strings READ a skill file (`cat`/`sed`/`head`/`less`/`more`/`bat` ... `<skill>/SKILL.md`, no redirect, not `sed -i`; a trailing `-<32 hex>` mount suffix is stripped); hosted shell: an LLM span's `output.value` `output[]` items `type: shell_call` (`action.commands`, once per `call_id`; `input.value` is never scanned) | same `skill` start/end on the owning agent (tool span start/end; hosted shell: both at the LLM span's end); one use per (agent, skill) (deepagents also per path) |
+| Decision | `agentglow.decision` ∈ `choice`, `score`, `noul` on any span (see "Decisions") | `decision` on span end, on the owning agent; the span itself is never an LLM / tool |
 | Claude Code hooks | `POST /v1/claude-code` (`claude_code.py`) | one prompt = one run (topic `Claude Code · <cwd basename>`); main agent `claude`; `Agent` tool → `task` + subagent named after its type; tools; 0-token thinking pulses |
 | Claude Code traces | `claude_code.*` spans on `/v1/traces` (`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`) | `interaction` = run + `claude`; each `agent_id` = subagent (`subagent: true`, parent `claude`, linked via its `Agent` tool's `tool.execution` span; named from `query_source_safe` `agent.<kind>.<type>`, else `subagent <id>`); `llm_request` = `llm` with `tokens_in` = input + cache_creation, `tokens_out`, `tokens_cached` = cache_read; `tool` = tool event (`tool.blocked_on_user`/`tool.execution` skipped). Merged with hooks when `session.id` is a hooks session: no new agents/tools, token `llm` events go to the hooks agents (by `agent_id`), hook pulses muted, exits wait up to 15 s for the agent's trace spans |
 Unknown spans are kept only for tree/ownership. Ids: agent instance id = span id (stable string).
@@ -195,10 +196,38 @@ SDK provider = no-op. Context in contextvars (asyncio tasks created inside inher
 | `mcp(server, tool, resource=None, kind="api", args=None)` | tool span | + `agentglow.mcp.server/tool/resource/resource_kind` |
 | `graph(op, nodes, system="graph")` | `db <op>` | `db.system`, `agentglow.db.op`, `agentglow.graph.nodes` |
 | `skill(name)` / `Agent.skill(name)` | tool span `<name>` | as `tool` + `agentglow.skill=name` (skill badge on the current agent while the block runs) |
+| `decision(kind, question, result=None, p=None, options=None, provider="llm", purpose=None, target=None)` / `Agent.decision(...)` | `decision <kind>` | the "Decisions" attributes; `.record(result, p, options, target)` sets the outcome before the block ends; a bool `result` → `yes`/`no`; `options` = `{name: p}` or `[(name, p)]` |
+| `decided(kind, question, result, p, ..., latency_ms=0)` / `Agent.decided(...)` | `decision <kind>` (backdated) | one finished decision in one call |
 | `@traced_agent(name)`, `@traced_tool(name, capture_args=False)` | per call | as `agent` / `tool`; args recorded only with `capture_args=True` |
 
 A span that raises ends with status error (run → failed). Text in `say`/`final`/`task`/`args` passes the Privacy
 scrub (secrets only): callers must keep PHI/PII out of it. Example: `examples/custom-loop/`.
+
+## Decisions
+Fast structured decisions ("System One" models: TypeSafe Jev, its open alternative Laya, or an LLM-as-judge fallback)
+made by an agent: model routing, tool-call guardrails, quality checks. One decision = one span (latency = its
+duration) with these attributes (all set at start or by end; the event is emitted when the span ends):
+
+| Attribute | Value |
+|---|---|
+| `agentglow.decision` | `choice` (pick one of N options) \| `score` (ordinal level) \| `noul` (yes/no); any other value is shown as `choice` |
+| `agentglow.decision.question` | short name or text of the question, e.g. `route`, `tool allowed?` (scrubbed, max 80 chars) |
+| `agentglow.decision.result` | the chosen option / the level / `yes` \| `no` (noul; booleans are accepted) |
+| `agentglow.decision.p` | probability of `result`, 0..1 (noul `no` at p_true 0.03 → `p` 0.97) |
+| `agentglow.decision.options` | optional JSON string: a list of `{"name", "p"}`: the distribution; up to 5 kept, sorted by `p` desc |
+| `agentglow.decision.provider` | `jev` \| `laya` \| `llm` \| any short label (default `llm`) |
+| `agentglow.decision.purpose` | optional `route` \| `guard` \| `check` (or any short label) |
+| `agentglow.decision.target` | optional: the tool being gated, the model routed to, ... |
+
+World event: `{"type": "decision", "run_id", "id": <owning agent instance id>, "kind", "question", "result", "p",
+"options"?, "provider", "purpose"?, "target"?, "ms", "ts"}` (`ms` = span duration, `p` rounded to 3 places,
+`options` only when given). A decision span is not an agent, LLM or tool itself: an LLM-as-judge call nested inside it
+still pulses as an LLM turn of the same agent. Scrub: `question` secrets redacted, whitespace collapsed, max 80 chars;
+`result`, `provider`, `purpose`, `target` and option names the same, max 40 chars; `p` clamped to 0..1.
+Python: `agentglow.decision(...)` / `agentglow.decided(...)` (Manual API). Frontend: a fast (~150 ms snap, gone by
+~1.6 s) overlay on the agent in every theme: choice = a fan of option rays (winner bright, thickness ~ p); noul = a
+gate that flicks green or slams red (a `guard` `no` is a red X: `guard: deny <target> 97%`); score = a gauge arc. The
+HUD counts decisions (`N decisions · avg X ms`, per provider in the tooltip) and the agent panel lists recent ones.
 
 ## Privacy
 One scrub (`backend/agentglow/scrub.py`) runs at the Hub ingestion boundary for every path (`/v1/live`, `/v1/traces`
@@ -230,12 +259,13 @@ JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload b
 
 ## World events (backend → frontend)
 Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
-`run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill, chat`. `ts` = epoch ms.
+`run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill, chat, decision`. `ts` = epoch ms.
 `chat` (opt-in prompt capture only, see Privacy) = `{"type": "chat", "run_id", "id": <main agent instance id>,
 "role": "user"|"agent", "text", "ts"}`: the user's prompt, then Claude's reply for that turn (the agent panel shows
 them as a "you: / claude:" conversation).
 `skill` = `{"type": "skill", "run_id", "id": <agent instance id>, "name": <skill name>, "status": "start"|"end", "ts"}`:
 an agent (main or subagent) started / finished using a skill.
+`decision` = see "Decisions".
 `llm` may carry an extra `tokens_cached` (prompt-cache reads) when known.
 `run` may carry status `renamed` (same `run_id`, new `topic`, e.g. a Claude Code session /rename): relabel only.
 `step` may carry status `waiting` with `reason` (wait label) and optional `until` (epoch ms); `agent` status `waiting` may
