@@ -11,7 +11,7 @@ import {
   statePath, uninstallSettingsFile, unmergeSettings,
 } from "../lib/settings.mjs";
 import { cacheDir, uvAsset, uvAssetUrl, UV_VERSION } from "../lib/uv.mjs";
-import { pySpecs, serveArgv } from "../lib/server.mjs";
+import { pyAttempts, pySpecs, retryNote, serveArgv } from "../lib/server.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(here, "..", "agentglow.mjs");
@@ -161,6 +161,18 @@ test("python server spec pins the npm version, falls back to latest", () => {
   assert.deepEqual(pySpecs("0.2.1", { AGENTGLOW_PY_SPEC: "agentglow>=0.2" }), ["agentglow>=0.2"]);
   assert.deepEqual(serveArgv({ args: ["tool", "run"] }, "agentglow==0.2.1", 8165),
     ["tool", "run", "--from", "agentglow==0.2.1", "agentglow", "serve", "--host", "127.0.0.1", "--port", "8165"]);
+});
+
+test("a pinned spec that fails is retried once with uv's index refreshed before falling back", () => {
+  const attempts = pyAttempts("0.2.8", {});
+  assert.deepEqual(attempts, [{ spec: "agentglow==0.2.8" }, { spec: "agentglow==0.2.8", refresh: true }, { spec: "agentglow" }]);
+  assert.deepEqual(pyAttempts("0.0.0-dev", {}), [{ spec: "agentglow" }]);
+  assert.deepEqual(pyAttempts("0.2.8", { AGENTGLOW_PY_SPEC: "/src/backend" }), [{ spec: "/src/backend" }]);
+  assert.deepEqual(serveArgv({ args: [] }, "agentglow==0.2.8", 8165, { refresh: true }),
+    ["--refresh-package", "agentglow", "--from", "agentglow==0.2.8", "agentglow", "serve", "--host", "127.0.0.1", "--port", "8165"]);
+  assert.match(retryNote(attempts, 0, "0.2.8"), /refreshing uv's cached PyPI index/);
+  assert.match(retryNote(attempts, 1, "0.2.8"), /falling back to the latest agentglow.*expects 0\.2\.8/);
+  assert.match(retryNote(attempts, 2, "0.2.8"), /giving up/);
 });
 
 // ---------- setup flow: SessionStart command hook ----------
