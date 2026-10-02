@@ -29,6 +29,15 @@
 .hud-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .hud-stat { font-size: 11px; color: #94a3b8; padding: 2px 8px; border-radius: 999px; background: rgba(3, 5, 11, 0.4); white-space: nowrap; }
 .hud-stat b { color: #f1f5f9; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* decisions chip: pulses once on every decision (re-mounted by key), red on a guard deny */
+.hud-dec { --dc: 94, 234, 212; animation: hud-dec-pulse 0.7s ease-out; }
+.hud-dec.is-deny { --dc: 251, 59, 92; }
+@keyframes hud-dec-pulse {
+  0% { background: rgba(var(--dc), 0.5); box-shadow: 0 0 0 0 rgba(var(--dc), 0.7); color: #fff; }
+  35% { background: rgba(var(--dc), 0.28); box-shadow: 0 0 0 5px rgba(var(--dc), 0); }
+  100% { background: rgba(3, 5, 11, 0.4); box-shadow: 0 0 0 0 rgba(var(--dc), 0); }
+}
+@media (prefers-reduced-motion: reduce) { .hud-dec { animation: none; } }
 .scene-root :focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
 
 /* ── Right sidebar: Agents | Events | Selected tabs, collapsible to a 40px icon rail ── */

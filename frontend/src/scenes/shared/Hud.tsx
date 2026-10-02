@@ -6,7 +6,7 @@ import "./hud.css";
 import { startLiveRun, useRunAvailable, useRunWorkflows } from "./useSceneSetup";
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
-import { DECISION_COLOR, DECISION_NO, DECISION_YES } from "./kit/DecisionGlyph";
+import { decisionTint } from "./kit/DecisionGlyph";
 import { decisionText, getInstance, isDeny, isDone, isLive, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
@@ -67,7 +67,7 @@ function chipState(run: Run, s: string): [string, string] {
 }
 
 /** decision accent: noul yes green / no red, choice + score cyan */
-export const decisionColor = (d: { kind: string; result: string }) => (d.kind === "noul" ? (d.result === "no" ? DECISION_NO : DECISION_YES) : DECISION_COLOR);
+export const decisionColor = (d: { kind: string; result: string; p?: number }) => decisionTint(d);
 
 function colorOf(e: WorldEvent) {
   if (e.type === "skill") return SKILL_COLOR;
@@ -121,6 +121,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const { embedded, scope, run: runFilter } = useSceneConfig();
   const canRun = useRunAvailable();
   const w = useWorld();
+  const lastDec = w.ticker.find((e): e is Extract<WorldEvent, { type: "decision" }> => e.type === "decision");
   const [, tick] = useState(0);
   const [info, setInfo] = useState(false); // the theme legend lives behind the (i) toggle
   const [side, setSide] = useState(loadSide);
@@ -257,7 +258,11 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
                 </span>
               )}
               {w.stats.decisions > 0 && (
-                <span className="hud-stat" title={[...w.decisionProviders].map(([p, v]) => `${p}: ${v.n} · avg ${Math.round(v.ms / v.n)} ms`).join("\n")}>
+                <span
+                  key={w.stats.decisions} // re-mounts on every decision: the chip pulses once
+                  className={`hud-stat hud-dec${lastDec && isDeny(lastDec) ? " is-deny" : ""}`}
+                  title={[...w.decisionProviders].map(([p, v]) => `${p}: ${v.n} · avg ${Math.round(v.ms / v.n)} ms`).join("\n")}
+                >
                   <b>{w.stats.decisions}</b> decisions · avg {Math.round(w.stats.decisionMs / w.stats.decisions)} ms
                 </span>
               )}

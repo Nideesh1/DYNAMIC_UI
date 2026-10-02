@@ -158,11 +158,11 @@ function scheduleRun(at: Sched) {
     const [server, tool] = graphish ? pick([["analytics", "query_metrics"], ["github", "search_code"]]) : pick([["warehouse", "run_sql"], ["analytics", "list_incidents"], ["google-drive", "read_doc"]]);
     const lat = 600 + Math.random() * 1400;
     const [resource, resource_kind] = pick(MCP_BACKENDS[server]);
-    // guardrail on the MCP call; now and then a scout tries something destructive and is denied
-    if (Math.random() < 0.3) put(250, () => ({ ...guard(pick(["rollback_deploy", "delete_records", "drop_table"]), true), run_id: run, id, ts: ts() }));
+    // guardrail on the MCP call; now and then a scout then tries something destructive on that server and is denied
     put(200, () => ({ ...guard(tool, false), run_id: run, id, ts: ts() }));
     put(400, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "call", resource, resource_kind, ts: ts() }));
     put(lat, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "result", latency_ms: lat, resource, resource_kind, ts: ts() }));
+    if (Math.random() < 0.35) put(300, () => ({ ...guard(pick(["rollback_deploy", "delete_records", "drop_table"]), true), run_id: run, id, ts: ts() }));
     if (Math.random() < 0.7) put(500, () => ({ type: "graph", run_id: run, id, op: "read", nodes: pick(NODES), ts: ts() }));
     if (sk) put(300, () => ({ type: "skill", run_id: run, id, name: sk, status: "end", ts: ts() }));
     put(800 + Math.random() * 1200, () => ({ type: "message", run_id: run, from_id: id, to_id: researcher, text: `Found ${2 + Math.floor(Math.random() * 6)} linked records`, ts: ts() }));
@@ -173,6 +173,12 @@ function scheduleRun(at: Sched) {
   llm(researcher, 1300);
   step("research", "done", 300);
   // ---- write
+  // is the merged finding grounded in the evidence? (a yes/no check; sometimes unsure, rarely no)
+  decide(researcher, () => {
+    const [prov, ms] = provider();
+    const p = Math.round((0.45 + Math.random() * 0.5) * 1000) / 1000;
+    return { type: "decision", kind: "noul", question: "grounded?", result: Math.random() < 0.15 ? "no" : "yes", p, provider: prov, purpose: "check", ms };
+  }, 200);
   const writer = `${run}:writer`;
   step("write", "running", 200);
   spawn(writer, "writer", researcher);

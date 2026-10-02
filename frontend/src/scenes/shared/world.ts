@@ -51,21 +51,29 @@ export type WorldEvent =
 export type DecisionKind = "choice" | "score" | "noul";
 /** One decision on one agent; `at` (performance.now()) = when its glyph starts (staggered so a burst reads one by one). */
 export type DecisionUse = Omit<Extract<WorldEvent, { type: "decision" }>, "type" | "run_id" | "id"> & { at: number };
-/** Decision glyph timing (ms): snap in, hold, gone. Much faster than LLM pulses / skill rings on purpose. */
+/** Decision glyph timing (ms): snap in fast (much faster than LLM pulses / skill rings on purpose), then hold long
+ *  enough to read on a video; a guard deny holds longer. */
 export const DECISION_SNAP_MS = 150;
-export const DECISION_HOLD_MS = 1000;
-export const DECISION_LIFE_MS = 1600;
+export const DECISION_HOLD_MS = 1800;
+export const DECISION_LIFE_MS = 2400;
+export const DENY_HOLD_MS = 2500;
+export const DENY_LIFE_MS = 3100;
 /** min gap between two glyph starts on one agent (a burst of decisions plays as a quick sequence) */
 export const DECISION_STAGGER_MS = 220;
 /** decisions kept per agent (Selected panel) */
 const DECISIONS_KEPT = 12;
-/** 0..1 visibility of a decision glyph: snaps in (DECISION_SNAP_MS), holds, fades out by DECISION_LIFE_MS. */
+/** how long a decision's glyph lives (ms) */
+export const decisionLife = (d: { kind: string; result: string; purpose?: string }) => (isDeny(d) ? DENY_LIFE_MS : DECISION_LIFE_MS);
+/** 0..1 visibility of a decision glyph: snaps in (DECISION_SNAP_MS), holds, fades out by decisionLife(d). */
 export function decisionMix(d: DecisionUse, now = performance.now()): number {
   const t = now - d.at;
-  if (t <= 0 || t >= DECISION_LIFE_MS) return 0;
+  const deny = isDeny(d);
+  const hold = deny ? DENY_HOLD_MS : DECISION_HOLD_MS;
+  const life = deny ? DENY_LIFE_MS : DECISION_LIFE_MS;
+  if (t <= 0 || t >= life) return 0;
   if (t < DECISION_SNAP_MS) return t / DECISION_SNAP_MS;
-  if (t < DECISION_HOLD_MS) return 1;
-  const o = 1 - (t - DECISION_HOLD_MS) / (DECISION_LIFE_MS - DECISION_HOLD_MS);
+  if (t < hold) return 1;
+  const o = 1 - (t - hold) / (life - hold);
   return o * o * (3 - 2 * o);
 }
 /** a guardrail that said no (shown as a red X / shut gate) */
@@ -151,6 +159,8 @@ export type Instance = {
   skillEndAt: number;
   /** recent decisions (newest last, capped); glyphs play from `at` */
   decisions: DecisionUse[];
+  /** the MCP server this agent called last (a guard deny flashes the agent's line to it) */
+  lastMcp?: string;
   /** opt-in prompt capture: this agent's turns, oldest first (user prompt, then its reply), capped */
   chat: { role: "user" | "agent"; text: string }[];
   /** what it is waiting on (status "waiting" with a reason), else null */
@@ -308,6 +318,8 @@ export const world = {
   /** in-flight MCP calls keyed `${instance}|${server}|${tool}`; resolvedAt kept briefly for a "snap back" effect */
   mcpPending: new Map<string, McpPending>(),
   mcpResolved: [] as (McpPending & { resolvedAt: number })[],
+  /** MCP tool name -> the server it was last called on (a guard deny on that tool flashes the line to it) */
+  mcpTools: new Map<string, string>(),
   ticker: [] as WorldEvent[],
   stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0, decisions: 0, decisionMs: 0 },
   /** decisions per provider (jev / laya / llm ...): count + summed latency (HUD chip tooltip) */
@@ -619,7 +631,8 @@ export function apply(ev: WorldEvent) {
       }
       if (ev.phase === "call") {
         const inst = world.instances.get(ev.id);
-        if (inst) inst.mcpCalls++;
+        if (inst) (inst.mcpCalls++, (inst.lastMcp = ev.server));
+        world.mcpTools.set(ev.tool, ev.server);
         srv.calls++;
         srv.inflight++;
         world.stats.mcpCalls++;
@@ -790,6 +803,7 @@ export function resetWorld() {
   world.mcpRegistry.clear();
   world.mcpCalls.length = 0;
   world.mcpPending.clear();
+  world.mcpTools.clear();
   world.mcpResolved.length = 0;
   world.ticker.length = 0;
   for (const k of Object.keys(world.stats) as (keyof typeof world.stats)[]) world.stats[k] = 0;
