@@ -6,7 +6,8 @@ import "./hud.css";
 import { startLiveRun, useRunAvailable, useRunWorkflows } from "./useSceneSetup";
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
-import { getInstance, isDone, isLive, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
+import { DECISION_COLOR, DECISION_NO, DECISION_YES } from "./kit/DecisionGlyph";
+import { decisionText, getInstance, isDeny, isDone, isLive, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -47,6 +48,8 @@ export function describe(e: WorldEvent): string {
       return `mcp server ${e.server} online`;
     case "skill":
       return e.status === "start" ? `${short(e.id)} · skill: ${e.name}` : `${short(e.id)} · skill: ${e.name} done`;
+    case "decision":
+      return `${short(e.id)} · ${decisionText(e)} · ${Math.round(e.ms)}ms`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
     case "chat":
@@ -63,8 +66,12 @@ function chipState(run: Run, s: string): [string, string] {
   return w ? ["waiting", `${s}: ${waitLabel(w)}`] : [run.steps[s], `${s}: ${run.steps[s]}`];
 }
 
+/** decision accent: noul yes green / no red, choice + score cyan */
+export const decisionColor = (d: { kind: string; result: string }) => (d.kind === "noul" ? (d.result === "no" ? DECISION_NO : DECISION_YES) : DECISION_COLOR);
+
 function colorOf(e: WorldEvent) {
   if (e.type === "skill") return SKILL_COLOR;
+  if (e.type === "decision") return decisionColor(e);
   const id = "id" in e ? e.id : e.type === "message" ? e.from_id : null;
   const inst = id ? world.instances.get(id) : null;
   if (inst) return TYPE_COLOR[inst.type];
@@ -249,6 +256,11 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
                   <b>{graph}</b> graph
                 </span>
               )}
+              {w.stats.decisions > 0 && (
+                <span className="hud-stat" title={[...w.decisionProviders].map(([p, v]) => `${p}: ${v.n} · avg ${Math.round(v.ms / v.n)} ms`).join("\n")}>
+                  <b>{w.stats.decisions}</b> decisions · avg {Math.round(w.stats.decisionMs / w.stats.decisions)} ms
+                </span>
+              )}
               {w.stats.mcpCalls > 0 && (
                 <span className="hud-stat" title="MCP calls">
                   <b>{w.stats.mcpCalls}</b> MCP
@@ -365,11 +377,12 @@ function EventLog() {
           <>
             <i />
             {e.type === "skill" && <b className="hs-skill">{e.status === "start" ? "skill" : "skill done"}</b>}
+            {e.type === "decision" && <b className="hs-dec">{isDeny(e) ? "deny" : e.kind}</b>}
             <span>{describe(e)}</span>
           </>
         );
         return (
-          <li key={`${e.ts}-${e.type}-${i}`} className={e.type === "skill" ? "is-skill" : undefined} style={{ ["--c" as string]: colorOf(e) }}>
+          <li key={`${e.ts}-${e.type}-${i}`} className={e.type === "skill" ? "is-skill" : e.type === "decision" ? (isDeny(e) ? "is-dec is-deny" : "is-dec") : undefined} style={{ ["--c" as string]: colorOf(e) }}>
             {id ? (
               <button onClick={() => selectInstance(id)} title="Inspect agent">
                 {body}
@@ -697,6 +710,20 @@ function AgentDetail({ i }: { i: Instance }) {
               </span>
             ))}
           </div>
+        </section>
+      )}
+      {i.decisions.length > 0 && (
+        <section>
+          <h4>Decisions</h4>
+          <ul className="ap-decisions">
+            {[...i.decisions].reverse().map((d, k) => (
+              <li key={k} className={isDeny(d) ? "is-deny" : undefined} style={{ ["--c" as string]: decisionColor(d) }} title={d.options?.map((o) => `${o.name} ${Math.round(o.p * 100)}%`).join("\n") || d.question}>
+                <b>{d.kind}</b>
+                <span>{decisionText(d)}</span>
+                <em>{Math.round(d.ms)}ms</em>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
       {pending.length > 0 && (

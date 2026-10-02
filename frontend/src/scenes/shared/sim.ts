@@ -3,6 +3,8 @@
  * `research_brief` workflow. Each run: planner spawns (plan) → researcher spawns and FANS OUT 2–4 scout
  * subagents (research) that read FalkorDB → scouts exit → writer spawns, writes back to the graph (write).
  * New runs keep starting (≤ MAX_CONCURRENT alive) so agents are continuously born, working and dying.
+ * Fast structured decisions (Jev / Laya / an LLM judge): a model-router choice on each spawn, tool guardrails (now
+ * and then a deny), a quality score on the writer's draft.
  */
 import { apply, setSimulated, type AgentType, type StepName, type WorldEvent } from "./world";
 
@@ -40,6 +42,33 @@ const MCP_BACKENDS: Record<string, [string, "db" | "warehouse" | "spark" | "api"
 };
 
 const pick = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
+
+const MODELS = ["haiku", "sonnet", "opus", "gpt-4.1-mini"];
+/** a decision provider + latency: mostly Jev (ms), sometimes Laya, rarely the slow LLM-judge fallback */
+function provider(): [string, number] {
+  const r = Math.random();
+  return r < 0.65 ? ["jev", 4 + Math.round(Math.random() * 18)] : r < 0.88 ? ["laya", 9 + Math.round(Math.random() * 30)] : ["llm", 380 + Math.round(Math.random() * 700)];
+}
+/** a decision event body: router choice over the models (winner first, p's summing to ~1) */
+function route(): Omit<Extract<WorldEvent, { type: "decision" }>, "run_id" | "id" | "ts"> {
+  const [prov, ms] = provider();
+  const order = [...MODELS].sort(() => Math.random() - 0.5);
+  const top = 0.55 + Math.random() * 0.42;
+  let rest = 1 - top;
+  const options = order.map((name, k) => {
+    if (k === 0) return { name, p: top };
+    const p = k === order.length - 1 ? rest : rest * (0.45 + Math.random() * 0.3);
+    rest -= p;
+    return { name, p: Math.round(p * 1000) / 1000 };
+  });
+  return { type: "decision", kind: "choice", question: "route", result: options[0].name, p: Math.round(top * 1000) / 1000, options, provider: prov, purpose: "route", target: options[0].name, ms };
+}
+/** a guardrail yes/no on a tool call (deny = result "no" with high p) */
+function guard(tool: string, deny: boolean): Omit<Extract<WorldEvent, { type: "decision" }>, "run_id" | "id" | "ts"> {
+  const [prov, ms] = provider();
+  const p = Math.round((0.86 + Math.random() * 0.13) * 1000) / 1000;
+  return { type: "decision", kind: "noul", question: "tool allowed?", result: deny ? "no" : "yes", p, provider: prov, purpose: "guard", target: tool, ms };
+}
 const rid = () => Math.random().toString(36).slice(2, 7);
 
 type Sched = (delay: number, ev: (now: number) => WorldEvent | WorldEvent[]) => void;
@@ -66,6 +95,8 @@ function scheduleRun(at: Sched) {
       { type: "skill", run_id: run, id, name, status: "start", ts: ts() },
     ]);
   const skillOff = (id: string, name: string, d = 120) => later(d, () => ({ type: "skill", run_id: run, id, name, status: "end", ts: ts() }));
+  const decide = (id: string, body: () => Omit<Extract<WorldEvent, { type: "decision" }>, "run_id" | "id" | "ts">, d = 60) =>
+    later(d, () => ({ ...body(), run_id: run, id, ts: ts() }));
   const step = (s: StepName, status: "running" | "done", d = 120) => later(d, () => ({ type: "step", run_id: run, step: s, status, ts: ts() }));
 
   later(0, () => ({ type: "run", run_id: run, status: "started", topic, workflow: "research_brief", ts: ts() }));
@@ -74,6 +105,7 @@ function scheduleRun(at: Sched) {
   step("plan", "running", 300);
   const planner = `${run}:planner`;
   spawn(planner, "planner", null);
+  decide(planner, route);
   think(planner);
   llm(planner, 1500);
   llm(planner, 900);
@@ -84,6 +116,7 @@ function scheduleRun(at: Sched) {
   spawn(researcher, "researcher", planner);
   msg(planner, researcher, `3 questions on "${topic}"`, 150);
   exit(planner, 200);
+  decide(researcher, route);
   think(researcher);
   const resSkill = Math.random() < 0.6 ? pick(["deep-research", "search-first"]) : "";
   if (resSkill) skillOn(researcher, resSkill, 200);
@@ -95,6 +128,7 @@ function scheduleRun(at: Sched) {
     const type: AgentType = k % 2 === 0 ? "graph_scout" : "records_scout";
     const id = `${run}:${type}:${k}`;
     scouts.push(id);
+    if (k === 0) decide(researcher, () => guard("task", false), 120);
     later(200, () => ({ type: "tool", run_id: run, id: researcher, tool: "task", args_preview: `${type}: angle ${k + 1} of "${topic}"`, ts: ts() }));
     spawn(id, type, researcher);
     msg(researcher, id, `Investigate angle ${k + 1}`, 80);
@@ -111,6 +145,7 @@ function scheduleRun(at: Sched) {
     const nodes = pick(NODES);
     const graphish = id.includes("graph_scout");
     put(0, () => ({ type: "agent", run_id: run, id, status: "thinking", ts: ts() }));
+    put(60, () => ({ ...route(), run_id: run, id, ts: ts() }));
     const sk = Math.random() < 0.45 ? (graphish ? pick(["graph-query", "dataviz"]) : pick(["xlsx", "pdf"])) : "";
     if (sk) {
       put(250, () => ({ type: "tool", run_id: run, id, tool: "Skill", args_preview: sk, ts: ts() }));
@@ -123,6 +158,9 @@ function scheduleRun(at: Sched) {
     const [server, tool] = graphish ? pick([["analytics", "query_metrics"], ["github", "search_code"]]) : pick([["warehouse", "run_sql"], ["analytics", "list_incidents"], ["google-drive", "read_doc"]]);
     const lat = 600 + Math.random() * 1400;
     const [resource, resource_kind] = pick(MCP_BACKENDS[server]);
+    // guardrail on the MCP call; now and then a scout tries something destructive and is denied
+    if (Math.random() < 0.3) put(250, () => ({ ...guard(pick(["rollback_deploy", "delete_records", "drop_table"]), true), run_id: run, id, ts: ts() }));
+    put(200, () => ({ ...guard(tool, false), run_id: run, id, ts: ts() }));
     put(400, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "call", resource, resource_kind, ts: ts() }));
     put(lat, () => ({ type: "mcp", run_id: run, id, server, tool, phase: "result", latency_ms: lat, resource, resource_kind, ts: ts() }));
     if (Math.random() < 0.7) put(500, () => ({ type: "graph", run_id: run, id, op: "read", nodes: pick(NODES), ts: ts() }));
@@ -140,11 +178,26 @@ function scheduleRun(at: Sched) {
   spawn(writer, "writer", researcher);
   msg(researcher, writer, "Findings merged - draft the brief", 120);
   exit(researcher, 200);
+  decide(writer, route);
   think(writer);
   // the writer loads 2-3 skills at once (overlapping), e.g. a document format + dataviz + a style skill
   const wSkills = [pick(["pptx", "docx", "pdf"]), "dataviz", "haiku"].slice(0, 2 + Math.floor(Math.random() * 2));
   wSkills.forEach((sk, k) => skillOn(writer, sk, k ? 500 : 150));
   llm(writer, 1800);
+  // quality check on the draft: a 1..5 score, then "ready to send?"
+  decide(
+    writer,
+    () => {
+      const [prov, ms] = provider();
+      const lvl = pick(["3", "4", "4", "5"]);
+      const p = Math.round((0.5 + Math.random() * 0.4) * 1000) / 1000;
+      const options = ["5", "4", "3", "2", "1"].map((name) => ({ name, p: name === lvl ? p : Math.round(((1 - p) / 4) * 1000) / 1000 })).sort((a, b) => b.p - a.p);
+      return { type: "decision", kind: "score", question: "draft quality", result: lvl, p, options, provider: prov, purpose: "check", ms };
+    },
+    200,
+  );
+  decide(writer, () => ({ type: "decision", kind: "noul", question: "ready to send?", result: "yes", p: 0.93, provider: "jev", purpose: "check", ms: 7 }), 120);
+  decide(writer, () => guard("post_message", false), 120);
   later(400, () => ({ type: "graph", run_id: run, id: writer, op: "write", nodes: [`Brief: ${topic}`, ...pick(NODES).slice(0, 2)], ts: ts() }));
   later(300, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "call", resource: "Slack API", resource_kind: "api", ts: ts() }));
   later(700, () => ({ type: "mcp", run_id: run, id: writer, server: "slack", tool: "post_message", phase: "result", latency_ms: 700, resource: "Slack API", resource_kind: "api", ts: ts() }));

@@ -95,6 +95,16 @@
 .ap-skill::before { content: "skill:"; color: #b8893a; font-weight: 500; }
 /* tiny sigil (ring) before skill chips, matching the 3D ring */
 .hs-skill::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 4px 0 -1px; border: 1px solid currentColor; border-radius: 50%; vertical-align: 0; box-shadow: 0 0 4px rgba(245, 184, 61, 0.6); }
+/* decisions (fast Jev / Laya / judge calls): cyan, noul yes green / no red, guard deny loud */
+.hs-events li.is-dec > * { background: rgba(94, 234, 212, 0.05); }
+.hs-events li.is-deny > * { background: rgba(251, 59, 92, 0.12); }
+.hs-dec { flex: 0 0 auto; font-size: 9.5px; font-weight: 600; line-height: 1.5; text-transform: uppercase; letter-spacing: 0.06em; color: var(--c); padding: 0 6px; border-radius: 3px; border: 1px solid var(--c); background: rgba(255, 255, 255, 0.04); }
+.ap-decisions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.ap-decisions li { display: flex; gap: 6px; align-items: baseline; font-size: 11px; color: #e2e8f0; padding: 2px 6px; border-left: 2px solid var(--c); background: rgba(255, 255, 255, 0.03); }
+.ap-decisions li.is-deny { background: rgba(251, 59, 92, 0.12); }
+.ap-decisions b { flex: 0 0 auto; font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--c); }
+.ap-decisions span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-decisions em { flex: 0 0 auto; font-style: normal; font-size: 10px; color: #94a3b8; font-variant-numeric: tabular-nums; }
 .ap-skills { display: flex; flex-wrap: wrap; gap: 4px; }
 .ap-skills span { font-size: 11px; color: #e2e8f0; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(245, 184, 61, 0.35); background: rgba(245, 184, 61, 0.06); display: inline-flex; gap: 5px; align-items: baseline; }
 .ap-skills span.on { border-color: #f5b83d; background: rgba(245, 184, 61, 0.18); color: #fde7b0; box-shadow: 0 0 10px rgba(245, 184, 61, 0.25); }

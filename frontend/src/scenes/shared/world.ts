@@ -40,10 +40,42 @@ export type WorldEvent =
   | { type: "chat"; run_id: string; id: string; role: "user" | "agent"; text: string; ts: number }
   // an agent instance started / finished using a SKILL (e.g. "pptx"); the same call also arrives as a `tool` event
   | { type: "skill"; run_id: string; id: string; name: string; status: "start" | "end"; ts: number }
+  // a fast structured decision (Jev / Laya / LLM-as-judge) by agent instance `id`: choice (one of N options), score
+  // (ordinal level) or noul (yes / no); p = probability of `result`, options = top 5 {name, p}, ms = latency
+  | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; ms: number; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
   // topology: an MCP server and the backends behind it (sent at worker startup and to every new viewer)
   | { type: "mcp_register"; run_id?: string; server: string; resources: { name: string; kind: ResourceKind }[]; ts: number }
   | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number; resource?: string; resource_kind?: ResourceKind };
+
+export type DecisionKind = "choice" | "score" | "noul";
+/** One decision on one agent; `at` (performance.now()) = when its glyph starts (staggered so a burst reads one by one). */
+export type DecisionUse = Omit<Extract<WorldEvent, { type: "decision" }>, "type" | "run_id" | "id"> & { at: number };
+/** Decision glyph timing (ms): snap in, hold, gone. Much faster than LLM pulses / skill rings on purpose. */
+export const DECISION_SNAP_MS = 150;
+export const DECISION_HOLD_MS = 1000;
+export const DECISION_LIFE_MS = 1600;
+/** min gap between two glyph starts on one agent (a burst of decisions plays as a quick sequence) */
+export const DECISION_STAGGER_MS = 220;
+/** decisions kept per agent (Selected panel) */
+const DECISIONS_KEPT = 12;
+/** 0..1 visibility of a decision glyph: snaps in (DECISION_SNAP_MS), holds, fades out by DECISION_LIFE_MS. */
+export function decisionMix(d: DecisionUse, now = performance.now()): number {
+  const t = now - d.at;
+  if (t <= 0 || t >= DECISION_LIFE_MS) return 0;
+  if (t < DECISION_SNAP_MS) return t / DECISION_SNAP_MS;
+  if (t < DECISION_HOLD_MS) return 1;
+  const o = 1 - (t - DECISION_HOLD_MS) / (DECISION_LIFE_MS - DECISION_HOLD_MS);
+  return o * o * (3 - 2 * o);
+}
+/** a guardrail that said no (shown as a red X / shut gate) */
+export const isDeny = (d: { kind: string; result: string; purpose?: string }) => d.kind === "noul" && d.purpose === "guard" && d.result === "no";
+export const pct = (p?: number) => (p === undefined ? "" : ` ${Math.round(p * 100)}%`);
+/** short text for a decision: `jev · route → haiku 92%`, `guard: deny rollback_deploy 97%` */
+export function decisionText(d: { kind: string; question: string; result: string; p?: number; provider: string; purpose?: string; target?: string }): string {
+  if (d.kind === "noul" && d.purpose === "guard") return `guard: ${d.result === "no" ? "deny" : "allow"} ${d.target || d.question}${pct(d.p)}`;
+  return `${d.provider} · ${d.purpose || d.question} → ${d.result}${pct(d.p)}`;
+}
 
 /** What sits behind an MCP server (the server is a node; its backends are nodes too). */
 export type ResourceKind = "db" | "warehouse" | "spark" | "api" | "storage" | "queue";
@@ -117,6 +149,8 @@ export type Instance = {
   /** newest started skill ("" = none yet) and when the last active one ended (0 while one is active) */
   skill: string;
   skillEndAt: number;
+  /** recent decisions (newest last, capped); glyphs play from `at` */
+  decisions: DecisionUse[];
   /** opt-in prompt capture: this agent's turns, oldest first (user prompt, then its reply), capped */
   chat: { role: "user" | "agent"; text: string }[];
   /** what it is waiting on (status "waiting" with a reason), else null */
@@ -275,7 +309,9 @@ export const world = {
   mcpPending: new Map<string, McpPending>(),
   mcpResolved: [] as (McpPending & { resolvedAt: number })[],
   ticker: [] as WorldEvent[],
-  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0 },
+  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0, decisions: 0, decisionMs: 0 },
+  /** decisions per provider (jev / laya / llm ...): count + summed latency (HUD chip tooltip) */
+  decisionProviders: new Map<string, { n: number; ms: number }>(),
   lastFinal: "" as string,
   simulated: false,
   mode: "connecting" as "connecting" | "sim" | "live",
@@ -431,6 +467,7 @@ export function apply(ev: WorldEvent) {
         skills: new Map(),
         skill: "",
         skillEndAt: 0,
+        decisions: [],
         chat: [],
         wait: null,
       });
@@ -525,6 +562,21 @@ export function apply(ev: WorldEvent) {
         if (other) i.skill = other;
         else i.skillEndAt = now;
       }
+      break;
+    }
+    case "decision": {
+      world.stats.decisions++;
+      world.stats.decisionMs += ev.ms;
+      const pv = world.decisionProviders.get(ev.provider) ?? { n: 0, ms: 0 };
+      pv.n++;
+      pv.ms += ev.ms;
+      world.decisionProviders.set(ev.provider, pv);
+      const i = world.instances.get(ev.id);
+      if (!i) break;
+      const last = i.decisions[i.decisions.length - 1];
+      const { type: _t, run_id: _r, id: _i, ...d } = ev;
+      i.decisions.push({ ...d, at: last ? Math.max(now, last.at + DECISION_STAGGER_MS) : now });
+      if (i.decisions.length > DECISIONS_KEPT) i.decisions.shift();
       break;
     }
     case "graph":
