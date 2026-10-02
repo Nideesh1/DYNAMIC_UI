@@ -1,0 +1,15 @@
+[project]
+name = "agentglow-example-prediction-market"
+version = "0.1.0"
+description = "AgentGlow: a simulated high-frequency prediction-market desk (paper only) with Jev-style fast gates and code guards"
+requires-python = ">=3.10"
+dependencies = ["agentglow"]
+
+[project.optional-dependencies]
+jev = ["langchain-typesafe==0.0.1a3"]  # only for --decider jev (real TypeSafe Jev)
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agentglow = { workspace = true }  # in this repo; outside it, the published `agentglow` from PyPI is used
