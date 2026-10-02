@@ -129,6 +129,8 @@ def test_run_webhook_forwards_topic():
     assert r.status_code == 200 and r.json() == {"run_id": "r-123"}
     assert seen == {"url": "http://trigger:8300/run", "body": {"topic": "Why is churn rising?"}}
     assert c.post("/live/run", json={}).status_code == 400
+    c.post("/live/run", json={"topic": "Checkout latency spiked", "workflow": "incident"})
+    assert seen["body"] == {"topic": "Checkout latency spiked", "workflow": "incident"}  # optional workflow passes through
 
 
 def test_run_disabled_without_webhook(monkeypatch):

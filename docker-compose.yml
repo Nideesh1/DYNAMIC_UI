@@ -1,9 +1,10 @@
 # AgentGlow + the deepagents-hatchet example stack.
 #
 #   cp .env.example .env   # + one LLM key (GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY, AGENT_MODEL to match)
-#   docker compose up -d --build                                  # agentglow, falkordb, hatchet, mcp, worker, trigger
+#   docker compose up -d --build                                  # agentglow, falkordb, hatchet, mcp servers, worker, trigger
 #   open http://localhost:8101                                    # 3D scenes
 #   docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
+#   docker compose exec worker uv run python trigger.py --incident   # incident triage demo (see the example README)
 #   ./scripts/gen-obs-env.sh   # only for the langfuse profile: generates its local secrets into .env
 #   LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d     # + Langfuse at :3100 (same spans, side by side)
 #
@@ -46,7 +47,27 @@ services:
     depends_on: [agentglow]
     restart: unless-stopped
 
-  worker:       # Hatchet worker running the deepagents workflow `agent_smoke`
+  mcp_obs:      # `observability` MCP server (:8201/mcp) → Loki / Prometheus / PagerDuty (simulated), incident demo
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["uv", "run", "python", "-m", "app.obs_mcp_server"]
+    environment:
+      AGENTGLOW_URL: http://agentglow:8100
+      AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
+    depends_on: [agentglow]
+    restart: unless-stopped
+
+  mcp_github:   # `github` MCP server (:8202/mcp) → GitHub API (simulated), incident demo
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["uv", "run", "python", "-m", "app.github_mcp_server"]
+    environment:
+      AGENTGLOW_URL: http://agentglow:8100
+      AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
+    depends_on: [agentglow]
+    restart: unless-stopped
+
+  worker:       # Hatchet worker running the deepagents workflows `agent_smoke` and `incident_triage`
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
     command: ["uv", "run", "python", "-m", "app.worker"]
@@ -54,6 +75,8 @@ services:
       AGENTGLOW_URL: http://agentglow:8100
       AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
       MCP_URL: http://mcp:8200/mcp
+      OBS_MCP_URL: http://mcp_obs:8201/mcp
+      GITHUB_MCP_URL: http://mcp_github:8202/mcp
       FALKOR_HOST: falkordb
       AGENT_MODEL: ${AGENT_MODEL:-google_genai:gemini-3.8-flash}   # provider:model (google_genai / openai / anthropic)
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -67,11 +90,13 @@ services:
       agentglow: {condition: service_started}
       falkordb: {condition: service_started}
       mcp: {condition: service_started}
+      mcp_obs: {condition: service_started}
+      mcp_github: {condition: service_started}
       obs_hatchet_engine: {condition: service_started}
       obs_hatchet_token: {condition: service_completed_successfully}
     restart: unless-stopped
 
-  trigger:      # internal HTTP trigger (POST :8300/run {topic} → agent_smoke run); agentglow's POST /live/run forwards here
+  trigger:      # internal HTTP trigger (POST :8300/run {topic, workflow?} → agent_smoke or incident_triage run); agentglow's POST /live/run forwards here
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
     command: ["uv", "run", "python", "-m", "app.trigger_api"]

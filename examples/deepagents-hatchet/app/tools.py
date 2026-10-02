@@ -103,8 +103,8 @@ def _in_tool_context(t):
     return t
 
 
-async def load_mcp_tools():
+async def load_mcp_tools(server: str = "analytics", url: str | None = None):
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
-    client = MultiServerMCPClient({"analytics": {"transport": "streamable_http", "url": config.MCP_URL}})
+    client = MultiServerMCPClient({server: {"transport": "streamable_http", "url": url or config.MCP_URL}})
     return [_in_tool_context(t) for t in await client.get_tools()]

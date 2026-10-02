@@ -307,7 +307,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
 
     @app.post("/live/run")
     async def run(body: dict, request: Request):
-        """Start a run of the user's agents: forwards `{topic, scope?}` to AGENTGLOW_RUN_WEBHOOK, returns its JSON
+        """Start a run of the user's agents: forwards `{topic, scope?, workflow?}` to AGENTGLOW_RUN_WEBHOOK, returns its JSON
         (e.g. `{run_id}`). Secure mode: the scope comes from the token only; dev: X-AgentGlow-Scope or body `scope`."""
         f = viewer(request)
         if secret:
@@ -321,11 +321,13 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
         topic = str(body.get("topic") or "").strip()
         if not topic:
             raise HTTPException(400, "topic is required")
+        workflow = str(body.get("workflow") or "").strip()[:64]  # optional: which of the webhook's workflows to run
         import httpx
 
+        payload = {"topic": topic, **({"scope": scope} if scope else {}), **({"workflow": workflow} if workflow else {})}
         try:
             async with httpx.AsyncClient(transport=run_transport, timeout=30) as c:
-                r = await c.post(run_webhook, json={"topic": topic, **({"scope": scope} if scope else {})})
+                r = await c.post(run_webhook, json=payload)
         except httpx.HTTPError as e:
             raise HTTPException(502, f"run webhook unreachable: {e}")
         if r.status_code >= 400:

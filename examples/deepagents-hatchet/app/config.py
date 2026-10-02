@@ -22,6 +22,9 @@ os.environ.setdefault("FALKOR_HOST", "falkordb" if IN_DOCKER else "localhost")
 
 AGENTGLOW_URL = os.environ.get("AGENTGLOW_URL", "http://localhost:8100")
 MCP_URL = os.environ.get("MCP_URL", "http://localhost:8200/mcp")
+# incident demo MCP servers
+OBS_MCP_URL = os.environ.get("OBS_MCP_URL", "http://localhost:8201/mcp")
+GITHUB_MCP_URL = os.environ.get("GITHUB_MCP_URL", "http://localhost:8202/mcp")
 # LLM: any LangChain `init_chat_model` spec "<provider>:<model>" - google_genai:, openai:, anthropic:.
 # Keys come from the standard env vars: GEMINI_API_KEY (or GOOGLE_API_KEY), OPENAI_API_KEY, ANTHROPIC_API_KEY.
 # (Legacy OBS_MODEL=<gemini model> still works.)

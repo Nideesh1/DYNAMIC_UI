@@ -34,11 +34,33 @@ request `_meta`), so each backend span is a child of the agent's tool-call span.
 Langfuse is optional and side by side: when `OBS_LANGFUSE_*` keys are set, `app/config.py` adds an OTLP exporter
 to the same TracerProvider that `watch()` reuses.
 
+## Second workflow: incident triage
+
+Hatchet workflow `incident_triage` (`app/incident.py`) runs on the same worker and looks different in the 3D view:
+
+| Step | Agents | Touches |
+|---|---|---|
+| `triage` | **triage_lead** loads the `runbook` deepagents skill (`app/agent_fs/skills/runbook/SKILL.md`) | AgentGlow skill event |
+| `logs` | **logs_hunter** (runs in parallel with `code`) | `observability` MCP server (:8201) → Loki / Prometheus / PagerDuty |
+| `code` | **code_sleuth** + subagent **dep_mapper** | `github` MCP server (:8202) → GitHub API; FalkorDB service dependency graph |
+| `review` | **reviewer**: attempt 1 always rejects the diagnosis (agent fails), Hatchet retries once and it passes | - |
+| `postmortem` | **postmortem_writer** drafts a short postmortem (final answer) | - |
+
+Trigger it (the churn brief stays the default when `workflow` is omitted):
+
+```bash
+curl -X POST localhost:8101/live/run -H 'content-type: application/json' \
+  -d '{"topic": "Checkout latency spiked at 14:05, what happened?", "workflow": "incident"}'
+docker compose exec worker uv run python trigger.py --incident      # or from the CLI
+```
+
+`POST /live/run` forwards the optional `workflow` field to the trigger service (`app/trigger_api.py`).
+
 ## Run with docker compose (repo root)
 
 ```bash
 cp .env.example .env            # set one LLM key (+ AGENT_MODEL if not Gemini; see "LLM provider" below)
-docker compose up -d --build    # agentglow, falkordb, hatchet, mcp, worker, trigger
+docker compose up -d --build    # agentglow, falkordb, hatchet, 3 MCP servers, worker, trigger
 open http://localhost:8101      # scenes - press ▶ Run agents, or:
 docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
@@ -60,11 +82,13 @@ uv sync --all-packages                           # repo root: one uv workspace, 
 uv run agentglow serve                           # :8100
 cd examples/deepagents-hatchet                   # uv run here uses the workspace .venv
 uv run python -m app.mcp_server                  # :8200/mcp
+uv run python -m app.obs_mcp_server              # :8201/mcp (incident demo)
+uv run python -m app.github_mcp_server           # :8202/mcp (incident demo)
 uv run python -m app.worker
 uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
 
-Env: `AGENTGLOW_URL` (default `http://localhost:8100`), `MCP_URL` (default `http://localhost:8200/mcp`),
+Env: `AGENTGLOW_URL` (default `http://localhost:8100`), `MCP_URL` (default `http://localhost:8200/mcp`), `OBS_MCP_URL` / `GITHUB_MCP_URL` (defaults `:8201/mcp` / `:8202/mcp`),
 `AGENT_MODEL` (see below), `LANGFUSE_EXPORT=0` to skip Langfuse even when keys are set.
 
 ## LLM provider
