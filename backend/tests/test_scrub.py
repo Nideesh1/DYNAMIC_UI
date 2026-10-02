@@ -122,3 +122,48 @@ def test_step_name_passes_any_identifier_and_caps():
 
     assert step_name("postmortem") == "postmortem" and step_name("Fetch Logs!") == "Fetch-Logs"
     assert len(step_name("s" * 99)) == 40 and step_name(None) == "" and step_name({"a": 1}) == ""
+
+
+# ---- opt-in prompt capture (AGENTGLOW_CAPTURE_PROMPTS=1, loopback only)
+def _turn(c, prompt):
+    base = {"session_id": "s1", "cwd": "/home/x/p"}
+    for p in [{"hook_event_name": "UserPromptSubmit", "prompt": prompt, "agentglow_prompt": "forged"},
+              {"hook_event_name": "Stop", "last_assistant_message": f"done {KEYS[1]}"}]:
+        assert c.post("/v1/claude-code", json={**base, **p}).status_code == 200
+    return [e for e in c.app.state.hub.buffer if e["type"] == "chat"]
+
+
+def test_capture_prompts_off_by_default_drops_prompt():
+    c = TestClient(create_app())
+    assert _turn(c, f"{PROMPT} {KEYS[0]}") == []
+    assert_clean(c)
+    assert "forged" not in json.dumps(list(c.app.state.hub.buffer))
+    assert c.get("/live/health").json()["prompts"] is False
+    assert "agentglow_prompt" not in scrub_hook({"prompt": PROMPT, "agentglow_prompt": PROMPT})
+
+
+def test_capture_prompts_on_keeps_redacted_capped_prompt_and_reply():
+    c = TestClient(create_app(capture_prompts=True))
+    chats = _turn(c, f"{PROMPT} {KEYS[0]} " + "x" * 3000)
+    main = next(e["id"] for e in c.app.state.hub.buffer if e["type"] == "spawn")
+    user, agent = chats
+    assert (user["role"], user["id"], agent["role"], agent["id"]) == ("user", main, "agent", main)
+    assert user["text"].startswith(f"{PROMPT} {REDACTED} x") and len(user["text"]) <= 2000
+    assert agent["text"] == f"done {REDACTED}"
+    dump = json.dumps(list(c.app.state.hub.buffer))
+    assert KEYS[0] not in dump and KEYS[1] not in dump and "forged" not in dump
+    assert c.get("/live/health").json()["prompts"] is True
+    n = scrub_hook({"prompt": "<task-notification> <summary>Agent done</summary>"}, keep_prompt=True)
+    assert n == {"agentglow_notification": "Agent done"}  # notifications unchanged, never a prompt
+
+
+def test_capture_prompts_needs_loopback_host(capsys):
+    from agentglow.cli import capture_prompts
+
+    on = {"AGENTGLOW_CAPTURE_PROMPTS": "1"}
+    assert capture_prompts("127.0.0.1", on) and capture_prompts("localhost", on) and capture_prompts("::1", on)
+    assert not capture_prompts("127.0.0.1", {})
+    assert capsys.readouterr().err == ""
+    assert not capture_prompts("0.0.0.0", on) and not capture_prompts("10.0.0.5", on)
+    err = capsys.readouterr().err
+    assert err.count("AGENTGLOW_CAPTURE_PROMPTS ignored") == 2

@@ -74,13 +74,13 @@ const shq = (s) => `"${String(s).replace(/(["\\$`])/g, "\\$1")}"`;
  * Shell command for the SessionStart hook that makes sure the local server runs. Prints nothing (SessionStart stdout
  * would land in Claude's context) and always exits 0. Calls the CLI copy in the cache directly (~30 ms) and falls
  * back to the pinned npm version through npx (~0.5 s when cached). Windows without Git Bash runs it in PowerShell,
- * so there it is npx only.
+ * so there it is npx only. `capturePrompts` (setup --capture-prompts) starts the server with AGENTGLOW_CAPTURE_PROMPTS=1.
  */
-export function startHookCommand({ port, version, node, script, cacheDir: dir, platform = process.platform }) {
+export function startHookCommand({ port, version, node, script, cacheDir: dir, capturePrompts = false, platform = process.platform }) {
   const args = `${START_MARK} --port ${port}`;
   const npx = `npx -y agentglow${version ? `@${version}` : ""} ${args}`;
   if (platform === "win32" || !node || !script) return npx;
-  const env = dir ? `AGENTGLOW_CACHE_DIR=${shq(dir)} ` : "";
+  const env = (capturePrompts ? "AGENTGLOW_CAPTURE_PROMPTS=1 " : "") + (dir ? `AGENTGLOW_CACHE_DIR=${shq(dir)} ` : "");
   return `${env}${shq(node)} ${shq(script)} ${args} || ${env}${npx}`;
 }
 

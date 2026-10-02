@@ -7,6 +7,20 @@ import sys
 
 from . import __version__
 
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def capture_prompts(host: str, env: dict | None = None) -> bool:
+    """AGENTGLOW_CAPTURE_PROMPTS=1 keeps Claude Code prompts, but only on a loopback bind (shared servers never get
+    them); on any other host it is ignored with a warning."""
+    if (env if env is not None else os.environ).get("AGENTGLOW_CAPTURE_PROMPTS") != "1":
+        return False
+    if host in LOOPBACK:
+        return True
+    print(f"agentglow: AGENTGLOW_CAPTURE_PROMPTS ignored: listening on {host}, prompt capture is for 127.0.0.1 only",
+          file=sys.stderr, flush=True)
+    return False
+
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="agentglow", description="Live 3D views of agent systems from OpenTelemetry spans")
@@ -39,7 +53,10 @@ def main(argv: list[str] | None = None) -> None:
 
     shown = "localhost" if args.host in ("0.0.0.0", "::") else args.host
     print(f"agentglow {__version__} -> http://{shown}:{args.port}   (spans: POST /v1/live, OTLP: /v1/traces)", flush=True)
-    if args.host not in ("127.0.0.1", "localhost", "::1") and not (args.secret and args.ingest_key):
+    capture = capture_prompts(args.host)
+    if capture:
+        print("agentglow: prompts: captured (local only, AGENTGLOW_CAPTURE_PROMPTS=1)", flush=True)
+    if args.host not in LOOPBACK and not (args.secret and args.ingest_key):
         import logging
 
         logging.basicConfig()
@@ -50,7 +67,8 @@ def main(argv: list[str] | None = None) -> None:
         if not args.ingest_key:
             log.warning("agentglow: listening on %s without --ingest-key / AGENTGLOW_INGEST_KEY: anyone who can reach "
                         "it can post spans. Set an ingest key before exposing this beyond localhost.", args.host)
-    uvicorn.run(create_app(falkor_url=args.falkor, secret=args.secret, ingest_key=args.ingest_key), host=args.host,
+    uvicorn.run(create_app(falkor_url=args.falkor, secret=args.secret, ingest_key=args.ingest_key,
+                           capture_prompts=capture), host=args.host,
                 port=args.port, log_level="warning")
 
 

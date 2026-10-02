@@ -219,10 +219,21 @@ JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload b
   leading `/` dropped), max 64 chars; a skill's args / prompt text are never put in the `skill` event.
 - Kept (scrubbed): agent-level content (delegation text, tool args, results, final answer). Tool args can contain
   file paths.
+- Opt-in prompt capture (off by default): `AGENTGLOW_CAPTURE_PROMPTS=1` on the server (`npx agentglow setup
+  --capture-prompts` sets it for the login item / auto-start). Honoured only when `agentglow serve` binds a loopback
+  host (`127.0.0.1`, `localhost`, `::1`); on any other `--host` it is ignored with a one-line startup warning, so a
+  shared server never gets prompts. When on, the Claude Code hook prompt (UserPromptSubmit, not a
+  `<task-notification>`) is kept with secrets redacted, max 2000 chars, and emitted as a `chat` event (role `user`)
+  on the session's main agent; each main Stop's reply follows as role `agent`. OTel `user_prompt*` /
+  `gen_ai.prompt*` stay dropped either way; other agents have no prompt capture. `create_app()` never reads the env:
+  only `agentglow serve` turns it on. `/live/health` reports `"prompts": true|false`.
 
 ## World events (backend → frontend)
 Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
-`run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill`. `ts` = epoch ms.
+`run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill, chat`. `ts` = epoch ms.
+`chat` (opt-in prompt capture only, see Privacy) = `{"type": "chat", "run_id", "id": <main agent instance id>,
+"role": "user"|"agent", "text", "ts"}`: the user's prompt, then Claude's reply for that turn (the agent panel shows
+them as a "you: / claude:" conversation).
 `skill` = `{"type": "skill", "run_id", "id": <agent instance id>, "name": <skill name>, "status": "start"|"end", "ts"}`:
 an agent (main or subagent) started / finished using a skill.
 `llm` may carry an extra `tokens_cached` (prompt-cache reads) when known.

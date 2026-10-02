@@ -35,6 +35,9 @@ export type WorldEvent =
   | { type: "tool"; run_id: string; id: string; tool: string; args_preview: string; ts: number }
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
   | { type: "final"; run_id: string; text: string; ts: number }
+  // opt-in (server env AGENTGLOW_CAPTURE_PROMPTS=1, local servers only): one side of a turn on the agent instance
+  // `id`, the user's prompt ("user") or the agent's reply ("agent"); secret-redacted and capped by the backend
+  | { type: "chat"; run_id: string; id: string; role: "user" | "agent"; text: string; ts: number }
   // an agent instance started / finished using a SKILL (e.g. "pptx"); the same call also arrives as a `tool` event
   | { type: "skill"; run_id: string; id: string; name: string; status: "start" | "end"; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
@@ -114,6 +117,8 @@ export type Instance = {
   /** newest started skill ("" = none yet) and when the last active one ended (0 while one is active) */
   skill: string;
   skillEndAt: number;
+  /** opt-in prompt capture: this agent's turns, oldest first (user prompt, then its reply), capped */
+  chat: { role: "user" | "agent"; text: string }[];
   /** what it is waiting on (status "waiting" with a reason), else null */
   wait: Wait | null;
 };
@@ -426,6 +431,7 @@ export function apply(ev: WorldEvent) {
         skills: new Map(),
         skill: "",
         skillEndAt: 0,
+        chat: [],
         wait: null,
       });
       world.stats.spawned++;
@@ -574,6 +580,11 @@ export function apply(ev: WorldEvent) {
         if (p) world.mcpResolved.push({ ...p, resolvedAt: now });
         world.mcpPending.delete(key);
       }
+      break;
+    }
+    case "chat": {
+      const i = world.instances.get(ev.id);
+      if (i) i.chat = [...i.chat, { role: ev.role, text: ev.text }].slice(-20);
       break;
     }
     case "final": {

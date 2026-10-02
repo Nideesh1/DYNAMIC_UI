@@ -14,6 +14,9 @@ becomes `{"kind": "start"|"end", "span": {...}}` items (the `/v1/live` shape), s
 - Agent/Task tool call = TOOL span named `task` under the calling agent; SubagentStart opens an agent span named
   after `agent_type` under that tool span (→ `spawn` with `subagent: true`); SubagentStop closes it (its
   `last_assistant_message` is the result message back to the parent).
+- Opt-in prompt capture (`capture_prompts`, server env AGENTGLOW_CAPTURE_PROMPTS=1 on a loopback bind only): each
+  user prompt becomes `{"type": "chat", "role": "user", "id": <main agent>, "text"}` and each main Stop's reply
+  `{"type": "chat", "role": "agent", ...}` (both redacted, max PROMPT_MAX chars). Off: no `chat` events at all.
 - Any other tool = TOOL span under the agent that called it (`agent_id` present → that subagent, else main).
   `mcp__<server>__<tool>` also sets `agentglow.mcp.server`/`agentglow.mcp.tool` (→ `mcp` call/result).
   The `Skill` tool also sets `agentglow.skill` = `tool_input.skill` (e.g. `hello`, `plugin:skill`; → `skill`
@@ -53,7 +56,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
-from .scrub import SKILL_KEY, scrub_hook, session_title, skill_name
+from .scrub import PROMPT_MAX, SKILL_KEY, scrub_hook, session_title, skill_name
 
 AGENT_TOOLS = {"Agent", "Task"}
 STOP_TOOLS = {"TaskStop", "KillShell"}  # the main agent stopping a background task (`task_id` = the agent id)
@@ -221,7 +224,8 @@ class _CT:  # traces-only state for one claude_code.interaction trace
 
 
 class ClaudeCodeAdapter:
-    def __init__(self, idle_ms: int = 30 * 60_000, max_sessions: int = MAX_SESSIONS) -> None:
+    def __init__(self, idle_ms: int = 30 * 60_000, max_sessions: int = MAX_SESSIONS, capture_prompts: bool = False) -> None:
+        self.capture_prompts = capture_prompts
         self.sessions: OrderedDict[str, _Session] = OrderedDict()
         self.idle_ms = idle_ms
         self.max_sessions = max_sessions
@@ -235,7 +239,7 @@ class ClaudeCodeAdapter:
         """One hook payload → live items for Hub.ingest_live. Never raises on odd input."""
         if not isinstance(p, dict):
             return []
-        p = scrub_hook(p)
+        p = scrub_hook(p, keep_prompt=self.capture_prompts)
         sid = str(p.get("session_id") or "default")
         ev = str(p.get("hook_event_name") or "")
         out: list[dict] = []
@@ -324,7 +328,8 @@ class ClaudeCodeAdapter:
             return
 
         # Otherwise, open a turn (which reuses main if it's live, or creates a new one)
-        self._open_turn(s, "", now, out)
+        t = self._open_turn(s, "", now, out)
+        self._chat(t, "user", p.get("agentglow_prompt"), now, out)
 
     def _on_PreToolUse(self, s: _Session, p: dict, now: int, out: list) -> None:
         ag = self._agent_for(s, p, now, out, open_turn=True)
@@ -488,6 +493,7 @@ class ClaudeCodeAdapter:
             t.stopped = True
             t.final = text or t.final
             self._end_llm(t.main, now, out) if t.main else None
+            self._chat(t, "agent", text, now, out)
             # If OTel traces are on and this turn's main is waiting for token spans, set a deadline
             if s.traces and t.main is not None and not t.subs and not t.main.tools:
                 t.wait_until = now + TRACE_WAIT_MS
@@ -643,6 +649,12 @@ class ClaudeCodeAdapter:
         return bool(s.stopping) or bool(s.turn and s.turn.wait_until is not None)
 
     # ------------------------------------------------------------------ helpers
+    def _chat(self, t: _Turn, role: str, text: Any, now: int, out: list) -> None:
+        """Opt-in prompt capture: one side of a turn (user prompt / main agent reply) on the main agent."""
+        if self.capture_prompts and text and t.main is not None:
+            out.append({"type": "chat", "run_id": t.run_id, "id": t.main.span["span_id"], "role": role,
+                        "text": str(text)[:PROMPT_MAX], "ts": now})
+
     def _span(self, turn: _Turn, parent: dict | None, name: str, now: int, attrs: dict) -> dict:
         return {"trace_id": turn.trace_id, "span_id": _hex(8), "parent_span_id": parent["span_id"] if parent else None,
                 "name": name, "start_time_ms": now, "end_time_ms": None, "status": "unset", "attributes": attrs}
