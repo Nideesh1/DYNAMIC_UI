@@ -80,7 +80,7 @@ curl -X POST localhost:8101/live/run -H 'content-type: application/json' \
   -d '{"topic": "Consolidate Q3 SaaS vendors under $2M spend", "workflow": "vendor"}'   # or the HUD picker
 docker compose exec worker uv run python trigger.py --vendor                            # or from the CLI
 
-# when the approval step shows "waiting on approval":
+# when the approval step shows "waiting on approval": the HUD's Approve / Reject buttons on the approver, or
 curl -X POST localhost:8300/approve                                     # approves every vendor run waiting
 curl -X POST localhost:8300/approve -H 'content-type: application/json' \
   -d '{"run_id": "<hatchet run id>", "approver": "cfo", "note": "go"}'  # one run
@@ -88,7 +88,8 @@ docker compose exec worker uv run python trigger.py --approve [<run id>]
 ```
 
 The trigger service listens on `127.0.0.1:8300` (`POST /approve` pushes the Hatchet event `vendor:approve` with
-`{"run_id": "<id>" | "*"}`; the approval task matches its own run id or `*`). An approval sent before the run reaches
+`{"run_id": "<id>" | "*", "approve"?: false}`; the approval task matches its own run id or `*`; a rejected program
+skips negotiation). An approval sent before the run reaches
 the `approval` step is not remembered: approve once it is waiting. Timings: `DEMO_SLEEP_S` (default 20) and
 `APPROVAL_TIMEOUT_S` (default 1800) in `.env` or the shell.
 
@@ -125,6 +126,10 @@ docker compose exec worker uv run python trigger.py --desk                      
 curl -X POST localhost:8300/approve -H 'content-type: application/json' \
   -d '{"workflow": "desk"}'                                  # approve every waiting desk gate ("approve": false rejects)
 ```
+
+Or click a market agent waiting on "human approval" in the UI: Approve / Reject (AgentGlow's POST /live/approve →
+`AGENTGLOW_APPROVE_WEBHOOK` = this trigger's `/approve`, which pushes `desk:approve` for that market's own run). Set
+`DESK_HUMAN_TIMEOUT_S=120` to give yourself time to click.
 
 | Env | Default | |
 |---|---|---|

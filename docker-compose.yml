@@ -23,6 +23,7 @@ services:
     environment:
       AGENTGLOW_FALKOR_URL: redis://falkordb:6379
       AGENTGLOW_RUN_WEBHOOK: http://trigger:8300/run   # "▶ Run agents" in the UI → the example's trigger service
+      AGENTGLOW_APPROVE_WEBHOOK: http://trigger:8300/approve   # HUD Approve / Reject on agents waiting on a human
       AGENTGLOW_INGEST_KEY: ${AGENTGLOW_INGEST_KEY:-}  # empty (default) = open ingest; see .env.example
     depends_on: [falkordb]
     restart: unless-stopped

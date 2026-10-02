@@ -207,7 +207,8 @@ async def approval(input: VendorInput, ctx: DurableContext) -> dict:
     fired = {k: v for group in res.values() if isinstance(group, dict) for k, v in group.items()}
     if "approved" in fired:
         ev = (fired["approved"] or [{}])[0] if isinstance(fired["approved"], list) else fired["approved"]
-        return {"approved": True, "by": (ev or {}).get("approver") or "human", "note": (ev or {}).get("note", "")}
+        ev = ev or {}
+        return {"approved": bool(ev.get("approve", True)), "by": ev.get("approver") or "human", "note": ev.get("note", "")}
     return {"approved": True, "by": "auto (timeout)", "note": f"no response in {APPROVAL_TIMEOUT_S}s"}
 
 
@@ -218,6 +219,9 @@ async def negotiate(input: VendorInput, ctx: DurableContext) -> dict:
     a = ctx.task_output(analyze)
     vendors = ", ".join(a["shortlist"]) or "the top vendor in each category"
     log: list[str] = []
+    ok = ctx.task_output(approval)
+    if not ok["approved"]:  # rejected: no vendor gets an email
+        return {"rounds": [f"Not negotiated: the program was rejected by {ok['by']}. {ok.get('note') or ''}".strip()]}
     for rnd in range(1, ROUNDS + 1):
         task = (
             "For EACH vendor: draft_email (ask for a consolidation discount on a co-termed renewal) then send_email "
