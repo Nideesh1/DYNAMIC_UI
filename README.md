@@ -174,10 +174,10 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [langgraph](examples/langgraph) | LangGraph supervisor with worker agents (`langgraph-supervisor` works too) |
 | [openai-agents](examples/openai-agents) | OpenAI Agents SDK: handoffs + agent-as-tool |
 | [custom-loop](examples/custom-loop) | no framework: a hand-written voice-call loop traced with the manual API (runs without an LLM key) |
-| [prediction-market](examples/prediction-market) | simulated high-frequency trading desk (paper only): 30 market agents, ~75 Jev-style decisions/s, code guards, kill switch, human gate, paper orders (no keys needed) |
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
 | [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts) - no code |
 | [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |
+| [deepagents-hatchet: trading desk](examples/deepagents-hatchet#trading-desk-paper-fast) | Hatchet-orchestrated paper trading desk on synthetic weather markets: one durable child run per market, fast rate-capped Jev gates as halos, deepagents analyst runs, durable human gates, kill switch, paper orders |
 
 Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
 

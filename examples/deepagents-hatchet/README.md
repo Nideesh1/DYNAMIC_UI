@@ -92,6 +92,59 @@ The trigger service listens on `127.0.0.1:8300` (`POST /approve` pushes the Hatc
 the `approval` step is not remembered: approve once it is waiting. Timings: `DEMO_SLEEP_S` (default 20) and
 `APPROVAL_TIMEOUT_S` (default 1800) in `.env` or the shell.
 
+## Trading desk (paper, fast)
+
+Hatchet workflow `trading_desk` (`app/trading.py`, synthetic markets in `app/markets.py`) is a fast **paper** trading
+desk on made-up weather event contracts (YES pays 100c if it rains in NYC, ...; the shape of event-contract exchanges
+like Kalshi). It shows the other end of the spectrum from vendor consolidation: tens of fast decisions per second,
+with the slow deepagents thinking branching off only when it is worth it. HUD picker: **Trading desk (paper, fast)**.
+
+| Step | Runs as | What it does |
+|---|---|---|
+| `open_session` | task | session state + `DESK_MARKETS` synthetic markets with toy order books |
+| `run_markets` | task, agent **desk** | fans out one child run of `market_watch` per market (`aio_run_many`, all concurrent) and watches desk risk once a second: a simulated feed outage every `DESK_OUTAGE_EVERY_S` trips the **kill switch** |
+| `market_watch` | **durable** child task, one agent per market (`rain-nyc`, `temp-chi-hi`, ...) | `DESK_TICKS` ticks of `DESK_TICK_S`, plain Python: step the book, then ONE batched Jev call per tick (`quote_sane`, `should_rethink` (route, cooldown), `act\|watch\|skip` or `should_close` (route)), then the code guards, `safe_without_human` (guard, needs >= 0.8) and the paper order. Forced stop-loss in code |
+| `form_view` | child task, deepagents **analyst** + **weather** subagent | when `should_rethink` says so: reads the market's snapshot / price history (tools) and the weather model (subagent), returns a typed `FairView` (fair probability); the market trades on the latest view, its quant signal until then |
+| (human gate) | durable wait inside `market_watch` | below the safe threshold: `ctx.aio_wait_for` the `desk:approve` event for that market run, auto-approves after `DESK_HUMAN_TIMEOUT_S`. Only that market waits: every market is its own run |
+| `place_order` | child task | `agentglow.order(..., dry_run=True)`: status `would_place` (guard / human rejections are `rejected` orders with the reason) |
+| `close_session` | task | the session summary with paper P&L (final answer) |
+
+Code guards (provider `code`, purpose `guard`; a deny is marked important so it always shows): kill switch, daily
+loss cap, settlement lock, spread, slippage, max contracts, depth %, bucket/day cap, stop-loss, feed fresh. In
+AgentGlow the market agents get **decision halos** (rate, deny %, latency), denies and human gates pop out
+individually, analyst runs branch off as subagents, orders pop as chips, and it all stays ONE run.
+
+The tick sleep is a plain `asyncio.sleep`: a durable `ctx.aio_sleep_for` per tick would cost an engine round trip
+and an event-log entry per market per second for nothing (the tick state is in memory). Waits worth making durable
+(a human) use `ctx.aio_wait_for`.
+
+```bash
+curl -X POST localhost:8101/live/run -H 'content-type: application/json' \
+  -d '{"topic": "Trade today'"'"'s weather markets (paper)", "workflow": "desk"}'      # or the HUD picker
+docker compose exec worker uv run python trigger.py --desk                              # or from the CLI
+curl -X POST localhost:8300/approve -H 'content-type: application/json' \
+  -d '{"workflow": "desk"}'                                  # approve every waiting desk gate ("approve": false rejects)
+```
+
+| Env | Default | |
+|---|---|---|
+| `DESK_MARKETS` | 12 | markets (one durable child run + agent each) |
+| `DESK_TICKS` / `DESK_TICK_S` | 60 / 1.0 | session length: ticks per market, seconds per tick |
+| `DESK_THINK_COOLDOWN_S` | 30 | per market: no new analyst run sooner than this |
+| `DESK_MAX_ANALYSTS` | 3 | analyst runs at once per session (Hatchet concurrency + an in-process check, so they never queue) |
+| `DESK_HUMAN_TIMEOUT_S` | 8 | human gate auto-approves after this |
+| `DESK_OUTAGE_EVERY_S` | 45 | simulated feed outage (6 s) that trips the kill switch; 0 = never |
+| `JEV_MAX_RPS` | 5 | hard cap on real Jev requests per second per worker |
+
+**Jev cost guard.** Every market asks its tick's questions in one Jev request (`decide.batch`), and a token bucket
+caps real Jev requests at `JEV_MAX_RPS` per worker process: anything over it (and everything when `TYPESAFE_API_KEY`
+is not set) is answered by `jev-sim`, a free local stub in `app/markets.py`, and shows `provider=jev-sim`. So the
+desk can tick as fast as you like and the Jev bill is bounded at `JEV_MAX_RPS * 3600` requests per hour (18k/h at
+the default). LLM cost is bounded by the analyst cooldown and `DESK_MAX_ANALYSTS`.
+
+**Paper only.** Synthetic markets, a toy order book, simulated fills and P&L. Nothing here connects to an exchange or
+places a real order; it is a demo of orchestration and observability, not trading advice.
+
 ## Decisions (route / guard / check)
 
 Both demos make fast structured decisions through `app/decide.py`: `choice(question, options, state)`,

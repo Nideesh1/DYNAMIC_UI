@@ -20,7 +20,6 @@ members = [
     "agentglow-example-deepagents-hatchet",
     "agentglow-example-langgraph",
     "agentglow-example-openai-agents",
-    "agentglow-example-prediction-market",
     "agentglow-example-quickstart",
 ]
 
@@ -182,26 +181,6 @@ requires-dist = [
     { name = "agentglow", extras = ["openai-agents"], editable = "backend" },
     { name = "openai-agents" },
 ]
-
-[[package]]
-name = "agentglow-example-prediction-market"
-version = "0.1.0"
-source = { virtual = "examples/prediction-market" }
-dependencies = [
-    { name = "agentglow" },
-]
-
-[package.optional-dependencies]
-jev = [
-    { name = "langchain-typesafe" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "agentglow", editable = "backend" },
-    { name = "langchain-typesafe", marker = "extra == 'jev'", specifier = "==0.0.1a3" },
-]
-provides-extras = ["jev"]
 
 [[package]]
 name = "agentglow-example-quickstart"

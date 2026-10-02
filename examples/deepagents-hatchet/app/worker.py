@@ -1,5 +1,5 @@
-"""Hatchet worker: compiles the deep agents once (lifespan) and serves agent_smoke, incident_triage and
-vendor_consolidation (+ its child task vendor_category).
+"""Hatchet worker: compiles the deep agents once (lifespan) and serves agent_smoke, incident_triage,
+vendor_consolidation (+ its child task vendor_category) and trading_desk (+ market_watch, form_view, place_order).
 
 Run: uv run python -m app.worker
 """
@@ -18,6 +18,7 @@ from . import github_mcp_server as gh_mcp  # noqa: E402
 from . import obs_mcp_server as obs_mcp  # noqa: E402
 from .incident import AGENT_FS, SKILLS, GroundedCheck, GuardRiskyTools, incident_triage  # noqa: E402
 from .mcp_server import RESOURCES, SERVER  # noqa: E402
+from .trading import form_view, market_watch, place_order, trading_desk  # noqa: E402
 from .tools import GRAPH_TOOLS, PLAN_TOOLS, VENDOR_READ_TOOLS, VENDOR_WRITE_TOOLS, WRITE_TOOLS, load_mcp_tools  # noqa: E402
 from .vendor import MODEL_ROUTES, RouteModel, slug, vendor_category, vendor_consolidation  # noqa: E402
 from .workflow import agent_smoke, hatchet, make_model  # noqa: E402
@@ -126,7 +127,10 @@ async def lifespan():
 
 
 def main() -> None:
-    hatchet.worker("deepagents-hatchet", workflows=[agent_smoke, incident_triage, vendor_consolidation, vendor_category], slots=10, lifespan=lifespan).start()
+    hatchet.worker("deepagents-hatchet", workflows=[agent_smoke, incident_triage, vendor_consolidation, vendor_category,
+                                                 trading_desk, market_watch, form_view, place_order],
+                   slots=30,  # trading_desk: run_markets + up to DESK_MAX_ANALYSTS form_view + place_order bursts (market_watch is durable: own slots)
+                   lifespan=lifespan).start()
 
 
 if __name__ == "__main__":

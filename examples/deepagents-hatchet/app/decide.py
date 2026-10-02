@@ -170,3 +170,93 @@ async def score(question: str, levels: list[str], state: Any, *, instructions: s
             lvl = min(out.level, len(levels) - 1)
             d = Decision(lvl, out.probability, _spread(str(lvl), out.probability, [str(i) for i in range(len(levels))]))
         return _record(span, d)
+
+
+# ---- batch (high-frequency loops) ------------------------------------------------------------
+# A tight loop (e.g. app/trading.py: one batch per market per tick) asks several questions about ONE state at once:
+# Jev answers them all in one request. A token bucket caps real Jev requests at JEV_MAX_RPS per worker process
+# (default 5); a batch over the cap, a failed request, or no TYPESAFE_API_KEY at all is answered by the caller's free
+# local stub (`sim`), provider "jev-sim". So cost is bounded at JEV_MAX_RPS * 3600 requests per hour, however fast
+# the loop runs. batch() emits no spans: the caller records each answer with agentglow.decided(...) on its agent.
+JEV_MAX_RPS = float(os.environ.get("JEV_MAX_RPS", "5"))
+BATCH_STATS = {"jev": 0, "jev-sim": 0, "overflow": 0, "errors": 0}
+
+
+class TokenBucket:
+    def __init__(self, rate: float) -> None:
+        import time
+
+        self.rate, self.tokens, self.last, self._now = rate, rate, time.monotonic(), time.monotonic
+
+    def take(self) -> bool:
+        now = self._now()
+        self.tokens = min(self.rate, self.tokens + (now - self.last) * self.rate)
+        self.last = now
+        if self.tokens >= 1:
+            self.tokens -= 1
+            return True
+        return False
+
+
+_bucket = TokenBucket(JEV_MAX_RPS)
+
+
+@dataclass
+class Answer:
+    result: Any            # option name (choice) or bool (noul)
+    p: float               # probability of `result`
+    options: dict[str, float] = field(default_factory=dict)
+    provider: str = "jev-sim"
+    latency_ms: float = 0.0
+
+
+def _sim_answers(questions: dict, state: Any, sim, provider: str, ms: float, rng) -> dict[str, Answer]:
+    out = {}
+    for qid, (kind, _, _) in questions.items():
+        p = sim(qid, state)
+        if isinstance(p, dict):
+            pick = rng.choices(list(p), weights=list(p.values()))[0]
+            out[qid] = Answer(pick, p[pick], {k: round(v, 4) for k, v in p.items()}, provider, ms)
+        else:
+            yes = rng.random() < p
+            out[qid] = Answer(yes, p if yes else 1 - p, {}, provider, ms)
+    return out
+
+
+async def batch(questions: dict[str, tuple[str, str, dict | None]], state: Any, *, sim, rng=None) -> dict[str, Answer]:
+    """Answer several questions about one `state` in ONE Jev request (rate capped; overflow -> `sim`).
+
+    `questions` = {id: (kind "noul"|"choice", instructions, options or None)}; `sim(id, state)` returns P(yes) for a
+    noul or {option: p} for a choice."""
+    import random
+    import time
+
+    rng = rng or random
+    t = time.perf_counter()
+    if PROVIDER != "jev" or not _bucket.take():
+        BATCH_STATS["jev-sim"] += 1
+        if PROVIDER == "jev":
+            BATCH_STATS["overflow"] += 1
+        return _sim_answers(questions, state, sim, "jev-sim", (time.perf_counter() - t) * 1000, rng)
+    from langchain_typesafe import Choice, Noul
+
+    asks = {q: Choice(instructions=text, criteria=opts) if kind == "choice" else Noul(instructions=text)
+            for q, (kind, text, opts) in questions.items()}
+    try:
+        r = await _jev().ainvoke({"state": state, "questions": asks})
+    except Exception:
+        BATCH_STATS["errors"] += 1
+        return _sim_answers(questions, state, sim, "jev-sim", (time.perf_counter() - t) * 1000, rng)
+    ms = (time.perf_counter() - t) * 1000
+    BATCH_STATS["jev"] += 1
+    out = {}
+    for q in questions:
+        if q in r.choices:
+            c = r.choices[q]
+            out[q] = Answer(c.choice, c.probabilities.get(c.choice, c.confidence), dict(c.probabilities), "jev", ms)
+        elif q in r.nouls:
+            py = r.nouls[q].noul
+            out[q] = Answer(py >= 0.5, py if py >= 0.5 else 1 - py, {}, "jev", ms)
+        else:
+            out.update(_sim_answers({q: questions[q]}, state, sim, "jev-sim", ms, rng))
+    return out
