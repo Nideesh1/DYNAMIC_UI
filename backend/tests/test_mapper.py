@@ -144,3 +144,35 @@ def test_hatchet_arbitrary_parallel_and_retried_steps():
     assert steps[10][0] == "x" * 40  # capped
     done = m.tick(2200 + 61000)
     assert done[-1]["type"] == "run" and done[-1]["status"] == "completed"  # the retried step does not fail the run
+
+
+def test_hatchet_parallel_and_retried_step_agents_share_upstream_parent():
+    m = Mapper()
+    h = lambda step: {"hatchet.workflow_run_id": "inc-2", "hatchet.step_name": step, "hatchet.workflow_name": "incident_triage"}
+    evs = []
+
+    def step(sid, name, agent, t0, t1, st="ok", end=True):
+        nonlocal evs
+        evs += m.feed("start", span(sid, "hatchet.start_step_run", None, h(name), t0, trace=sid))
+        evs += m.feed("start", span(sid + "a", agent, sid, {"agentglow.agent": agent}, t0 + 1, trace=sid))
+        if end:
+            evs += m.feed("end", span(sid + "a", agent, sid, {"agentglow.agent": agent}, t0 + 1, t1, trace=sid, status=st))
+            evs += m.feed("end", span(sid, "hatchet.start_step_run", None, h(name), t0, t1, trace=sid, status=st))
+
+    step("a", "triage", "triage_lead", 1000, 1100)
+    step("b", "logs", "logs_hunter", 1200, 0, end=False)
+    step("c", "code", "code_sleuth", 1210, 0, end=False)  # starts while logs_hunter is still working
+    for sid, name, agent, t0 in [("b", "logs", "logs_hunter", 1200), ("c", "code", "code_sleuth", 1210)]:
+        evs += m.feed("end", span(sid + "a", agent, sid, {"agentglow.agent": agent}, t0 + 1, 1500, trace=sid))
+        evs += m.feed("end", span(sid, "hatchet.start_step_run", None, h(name), t0, 1500, trace=sid))
+    step("d", "review", "reviewer", 1700, 1800, "error")
+    step("e", "review", "reviewer", 1900, 2000)  # the retry
+    ids = {}
+    parents = {}
+    for e in by_type(evs, "spawn"):
+        ids.setdefault(e["agent"], []).append(e["id"])
+        parents[e["id"]] = e["parent_id"]
+    assert parents[ids["logs_hunter"][0]] == ids["triage_lead"][0]
+    assert parents[ids["code_sleuth"][0]] == ids["triage_lead"][0]  # a sibling of logs_hunter, not its child
+    first, retry = ids["reviewer"]
+    assert parents[first] == ids["code_sleuth"][0] and parents[retry] == parents[first]  # the retry hangs off the same upstream

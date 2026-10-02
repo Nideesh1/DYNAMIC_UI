@@ -163,6 +163,7 @@ class Agent:
     turn_text: str = ""  # text of its latest LLM output, empty if that output was only tool calls
     request: str = ""  # latest user message its LLM saw (langgraph-supervisor delegation text)
     skill_paths: set = field(default_factory=set)  # deepagents SKILL.md paths already counted as a skill use
+    done: bool = False  # exited (a top-level agent started meanwhile is a parallel step, not its successor)
 
 
 @dataclass
@@ -175,6 +176,7 @@ class Run:
     failed_steps: set = field(default_factory=set)  # steps whose LAST attempt failed (a retry that succeeds clears it)
     done_at: int | None = None
     last_top: str | None = None
+    top_parent: dict = field(default_factory=dict)  # top-level agent id -> the agent that handed off to it
     final: bool = False
     synthetic: str | None = None
     last_text: str = ""  # last top-level agent's output: final fallback at completion
@@ -370,6 +372,8 @@ class Mapper:
                 run.last_text = result
         if s.agent and not s.persist:
             ag = self.agents.get(s.id)
+            if ag:
+                ag.done = True
             result = a.get("agentglow.output_text") or text_of(a.get("output.value"), 2000) or (ag.last_text if ag else "")
             if s.parent_agent:
                 out.append({"type": "message", "run_id": s.run, "from_id": s.id, "to_id": s.parent_agent, "text": result[:160] or "done", "ts": ts})
@@ -464,9 +468,15 @@ class Mapper:
             pa = self.agents.get(parent)
             text = (pa.tasks.pop(name, "") if pa else "") or text_of(s.attrs.get("input.value")) or self._tool_preview_above(s) or f"delegate → {name}"
         elif run:
-            if run.last_top and run.last_top != s.id:  # handoff between top-level agents of one run (e.g. workflow steps)
-                parent = run.last_top
-                text = f"handoff → {name}"
+            prev = run.last_top
+            if prev and prev != s.id:  # handoff between top-level agents of one run (e.g. workflow steps)
+                pa = self.agents.get(prev)
+                # Hatchet: a parallel step (prev still working) or a retry (same agent again) shares prev's upstream agent
+                sibling = run.hatchet and pa is not None and (not pa.done or pa.name == name)
+                parent = run.top_parent.get(prev) if sibling else prev
+                if parent:
+                    text = f"handoff → {name}"
+            run.top_parent[s.id] = parent
             run.last_top = s.id
         s.parent_agent = parent
         self.agents[s.id] = Agent(name, s.run)
