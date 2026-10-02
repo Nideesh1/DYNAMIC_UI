@@ -11,7 +11,7 @@ import { FlareLabels, GraphCentral, HUB_R, Transfers } from "./Hub";
 import { reduced, trunkSpan } from "./layout";
 import { RunLine } from "./Lines";
 import { Train } from "./Trains";
-import { Airport, Streaks, Tethers } from "./Transit";
+import { Airport, Streaks, Terminal, Tethers } from "./Transit";
 import "./subway.css";
 
 const _p = new THREE.Vector3();
@@ -66,6 +66,7 @@ export default function Scene() {
       Agent={Train}
       RunMarker={RunLine}
       McpServer={Airport}
+      Backend={Terminal}
       GraphResource={GraphCentral}
       cluster={{ radius: 1.9, variant: "stars", pointSize: 1.1 }}
       clusterOffset={[0, 1.9, 0]}

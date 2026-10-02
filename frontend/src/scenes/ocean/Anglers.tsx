@@ -1,10 +1,10 @@
-/** MCP servers as anglerfish lurking at the edge of the abyss; pending calls = live lure-line tethers to the jelly. */
+/** MCP servers as anglerfish lurking at the edge of the abyss (their backends = glowing pearls on a lure line); pending calls = live lure-line tethers to the jelly. */
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { mcpGlow, waitSeconds, world } from "../shared/world";
-import { agentLive, type McpServerSlotProps } from "../shared/kit";
+import { agentLive, ResourceWire, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { ANGLER_SCALE, MOTION, arcPoint, dotTexture, lurePos } from "./layout";
 import { makeBellMaterial } from "./materials";
 
@@ -97,6 +97,57 @@ export function Angler({ mcp }: McpServerSlotProps) {
       </group>
       <Label3D ref={label} position={[0, -1.15, 0]} text={`mcp · ${srv.name}`} color={srv.color} size={0.3} opacity={0} pxRange={[9, 13]} />
     </group>
+  );
+}
+
+/** Backend slot: a bioluminescent pearl in a soft shell behind its anglerfish, on a swaying glow line. */
+export function Pearl({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const group = useRef<THREE.Group>(null);
+  const core = useRef<THREE.Mesh>(null);
+  const halo = useRef<THREE.Sprite>(null);
+  const label = useRef<Label3DHandle>(null);
+  const shellMat = useMemo(() => makeBellMaterial(srv.color), [srv.color]);
+  const coreMat = useMemo(() => new THREE.MeshBasicMaterial({ toneMapped: false }), []);
+  const haloMat = useMemo(() => new THREE.SpriteMaterial({ color: srv.color, map: dotTexture(), transparent: true, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false }), [srv.color]);
+  const base = useMemo(() => new THREE.Color(srv.color).lerp(new THREE.Color(1, 1, 1), 0.3), [srv.color]);
+  useFrame(({ clock }) => {
+    const now = performance.now();
+    const t = clock.elapsedTime * MOTION;
+    const busy = res.inflight > 0;
+    const act = mcpGlow(res.activeAt, now, 2);
+    const g = group.current;
+    if (g) {
+      g.position.copy(backend.pos);
+      g.position.y += Math.sin(t * 0.6 + backend.k * 1.7) * 0.15;
+    }
+    const pulse = busy ? 0.5 + 0.5 * Math.sin(now / 120) : 0;
+    coreMat.color.copy(base).multiplyScalar(0.8 + act * 2.6 + pulse * 1.4);
+    core.current?.scale.setScalar(1 + act * 0.3 + pulse * 0.15);
+    shellMat.uniforms.uIntensity.value = 0.12 + act * 0.35 + (busy ? 0.15 : 0);
+    shellMat.uniforms.uOpacity.value = 0.6;
+    if (halo.current) {
+      halo.current.scale.setScalar(1.1 + act * 1.4 + pulse * 0.5);
+      haloMat.opacity = 0.25 + act * 0.45 + pulse * 0.2;
+    }
+    label.current?.setOpacity(busy ? 1 : 0.6 + act * 0.4);
+    label.current?.setEmphasis(busy);
+  });
+  return (
+    <>
+      <ResourceWire mcp={mcp} backend={backend} wave={0.18} gain={1.2} />
+      <group ref={group}>
+        <mesh material={shellMat} scale={[0.55, 0.42, 0.5]}>
+          <sphereGeometry args={[1, 20, 14]} />
+        </mesh>
+        <mesh ref={core} material={coreMat}>
+          <sphereGeometry args={[0.16, 14, 10]} />
+        </mesh>
+        <sprite ref={halo} material={haloMat} />
+        <Label3D ref={label} position={[0, -0.8, 0]} text={res.name} color={srv.color} size={0.24} opacity={0.6} pxRange={[7.5, 11]} />
+      </group>
+    </>
   );
 }
 

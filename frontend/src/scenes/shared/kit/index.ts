@@ -66,5 +66,7 @@ export { fit, fitTick, setFitProfile, FitCamera, measureInsets, DEFAULT_FIT } fr
 export { labels, LabelScope } from "./labels";
 export type { LabelKind, LabelScopeValue } from "./labels";
 export type { FitProfile } from "./fit";
+export { ResourceWire, wireState } from "./ResourceWire";
+export type { ResourceWireProps } from "./ResourceWire";
 export { KitScene, GraphStageSpace, useKitAgents, useKitRuns, useKitMcp, useKitList, useKitGalaxy } from "./KitScene";
 export type { KitSceneProps, AgentSlotProps, EdgeSlotProps, RunSlotProps, McpServerSlotProps, BackendSlotProps, GraphSlotProps, ClusterSlotProps } from "./KitScene";

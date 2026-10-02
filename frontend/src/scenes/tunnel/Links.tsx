@@ -1,11 +1,11 @@
-/** Messages (arcing bolts ship -> ship), MCP stations just outside the tunnel wall, MCP packets punching through the
- * wall, and live tethers for pending MCP calls. Positions come from the kit (agentLive / serverPos). */
+/** Messages (arcing bolts ship -> ship), MCP stations just outside the tunnel wall (+ their backend pods), MCP packets
+ * punching through the wall, and live tethers for pending MCP calls. Positions come from the kit (agentLive / serverPos). */
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
-import { Label3D } from "../shared/Label3D";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { mcpGlow, TYPE_COLOR, waitSeconds, world } from "../shared/world";
-import { agentLive, serverPos, type McpServerSlotProps } from "../shared/kit";
+import { agentLive, ResourceWire, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { MOTION, glowTexture, ships, tube } from "./lanes";
 
 const TRAIL = 12;
@@ -318,5 +318,57 @@ export function Station({ mcp }: McpServerSlotProps) {
         <Label3D text={`mcp · ${name}`} color={srv?.color ?? "#94a3b8"} size={0.36} pxRange={[9, 13]} />
       </group>
     </group>
+  );
+}
+
+/** Backend slot: a docking pod (spinning ring + core + halo) beside its station, on a straight beam. */
+export function Pod({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const color = useMemo(() => new THREE.Color(srv.color ?? "#94a3b8"), [srv.color]);
+  const glow = useMemo(() => glowTexture(), []);
+  const root = useRef<THREE.Group>(null);
+  const ring = useRef<THREE.Mesh>(null);
+  const core = useRef<THREE.Mesh>(null);
+  const halo = useRef<THREE.Mesh>(null);
+  const label = useRef<Label3DHandle>(null);
+  useFrame(({ clock }, dt) => {
+    root.current?.position.copy(backend.pos);
+    const now = performance.now();
+    const act = mcpGlow(res.activeAt, now, 2.2);
+    const busy = res.inflight > 0 ? 1 : 0;
+    if (ring.current) ring.current.rotation.z += dt * (0.4 + busy * 2.6 + act * 1.5) * Math.max(0.2, MOTION);
+    if (core.current) {
+      (core.current.material as THREE.MeshBasicMaterial).color.copy(color).multiplyScalar(0.9 + busy * 1.4 + act * 2.4 + (busy ? Math.sin(clock.elapsedTime * 7) * 0.5 : 0));
+      core.current.scale.setScalar(1 + act * 0.3);
+    }
+    if (halo.current) {
+      (halo.current.material as THREE.MeshBasicMaterial).opacity = 0.15 + busy * 0.25 + act * 0.4;
+      halo.current.scale.setScalar(1 + act * 0.6 + busy * 0.2);
+    }
+    label.current?.setOpacity(busy ? 1 : 0.6 + act * 0.4);
+    label.current?.setEmphasis(busy === 1);
+  });
+  return (
+    <>
+      <ResourceWire mcp={mcp} backend={backend} gain={1.3} />
+      <group ref={root}>
+        <mesh ref={core}>
+          <boxGeometry args={[0.42, 0.42, 0.42]} />
+          <meshBasicMaterial toneMapped={false} />
+        </mesh>
+        <mesh ref={ring}>
+          <torusGeometry args={[0.62, 0.03, 6, 40, Math.PI * 1.5]} />
+          <meshBasicMaterial color={color.clone().multiplyScalar(1.8)} toneMapped={false} />
+        </mesh>
+        <mesh ref={halo}>
+          <planeGeometry args={[2.6, 2.6]} />
+          <meshBasicMaterial map={glow} color={color} transparent blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
+        </mesh>
+        <group position={[0, -1.05, 0]}>
+          <Label3D ref={label} text={res.name} color={srv.color ?? "#94a3b8"} size={0.28} opacity={0.6} pxRange={[7.5, 11]} />
+        </group>
+      </group>
+    </>
   );
 }

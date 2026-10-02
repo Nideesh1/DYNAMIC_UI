@@ -12,7 +12,7 @@ import { KitScene, kit, runLocal } from "../shared/kit";
 import { TunnelRings, TunnelShell, VanishGlow, WallStruts, WarpStreaks } from "./Environment";
 import { STAR_R, StarShell } from "./Graph";
 import { flight, reduced } from "./lanes";
-import { Bolts, Station, Tethers } from "./Links";
+import { Bolts, Pod, Station, Tethers } from "./Links";
 import { RunLane } from "./Runs";
 import { Forks, Ship, ShipStreaks } from "./Ships";
 import "./tunnel.css";
@@ -72,6 +72,7 @@ export default function Scene() {
       Agent={Ship}
       RunMarker={RunLane}
       McpServer={Station}
+      Backend={Pod}
       GraphResource={StarShell}
       cluster={{ radius: 0.95, variant: "swarm", glowGain: 1.1, labelBelow: 1.1 }}
       extents={extents}

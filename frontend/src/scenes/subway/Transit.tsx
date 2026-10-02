@@ -1,11 +1,11 @@
-/** Moving things between trains: message packets (comets), MCP express shuttles + tethers, and the MCP airport slot. */
+/** Moving things between trains: message packets (comets), MCP express shuttles + tethers, the MCP airport and terminal slots. */
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
-import { Label3D } from "../shared/Label3D";
+import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { mcpGlow, MCP_COLORS, TYPE_COLOR, waitSeconds, world } from "../shared/world";
-import { agentLive, serverPos, type McpServerSlotProps } from "../shared/kit";
-import { hdr, reduced } from "./layout";
+import { agentLive, ResourceWire, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
+import { hdr, reduced, TRACK_Y } from "./layout";
 
 const _m = new THREE.Vector3();
 function arc(from: THREE.Vector3, to: THREE.Vector3, t: number, lift: number, out: THREE.Vector3) {
@@ -158,6 +158,48 @@ export function Airport({ mcp }: McpServerSlotProps) {
       </mesh>
       <Label3D position={[0, 1.55, 0]} text={name} color={color} size={0.34} pxRange={[9, 13]} />
     </group>
+  );
+}
+
+/** Backend slot: a terminal (hex platform + lit gate) behind its airport, on a neon express spur. */
+export function Terminal({ mcp, backend }: BackendSlotProps) {
+  const srv = mcp.srv;
+  const res = backend.res;
+  const color = srv.color ?? MCP_COLORS[srv.name] ?? "#94a3b8";
+  const at = useRef<THREE.Group>(null);
+  const gate = useRef<THREE.Mesh>(null);
+  const pad = useRef<THREE.Mesh>(null);
+  const label = useRef<Label3DHandle>(null);
+  const gateMat = useMemo(() => new THREE.MeshBasicMaterial({ color, toneMapped: false }), [color]);
+  const padMat = useMemo(() => new THREE.MeshBasicMaterial({ color, toneMapped: false, side: THREE.DoubleSide }), [color]);
+  useFrame(({ clock }) => {
+    at.current?.position.set(backend.pos.x, 0, backend.pos.z);
+    const now = performance.now();
+    const act = mcpGlow(res.activeAt, now, 2.2);
+    const busy = res.inflight > 0;
+    gateMat.color.set(color).multiplyScalar(0.7 + act * 2.4 + (busy ? 1.2 + Math.sin(clock.elapsedTime * 8) * 0.6 : 0));
+    padMat.color.set(color).multiplyScalar(0.35 + act * 1.4 + (busy ? 0.6 : 0));
+    gate.current?.scale.setScalar(1 + act * 0.25);
+    label.current?.setOpacity(busy ? 1 : 0.6 + act * 0.4);
+    label.current?.setEmphasis(busy);
+  });
+  return (
+    <>
+      <ResourceWire mcp={mcp} backend={backend} y={TRACK_Y + 0.02} gain={1.4} />
+      <group ref={at}>
+        <mesh ref={pad} material={padMat} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]}>
+          <ringGeometry args={[0.62, 0.8, 6]} />
+        </mesh>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+          <circleGeometry args={[0.62, 6]} />
+          <meshBasicMaterial color="#070b18" />
+        </mesh>
+        <mesh ref={gate} material={gateMat} position={[0, 0.55, 0]}>
+          <torusGeometry args={[0.36, 0.05, 8, 6]} />
+        </mesh>
+        <Label3D ref={label} position={[0, 1.3, 0]} text={res.name} color={color} size={0.26} opacity={0.6} pxRange={[7.5, 11]} />
+      </group>
+    </>
   );
 }
 

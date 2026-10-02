@@ -6,7 +6,7 @@
 import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
 import { KitScene } from "../shared/kit";
 import { Abyss } from "./Abyss";
-import { Angler, McpTethers } from "./Anglers";
+import { Angler, McpTethers, Pearl } from "./Anglers";
 import { Current } from "./Currents";
 import { Jelly, Tethers } from "./Jellies";
 import { oceanDrift } from "./layout";
@@ -31,6 +31,7 @@ export default function Scene() {
       Agent={Jelly}
       RunMarker={Current}
       McpServer={Angler}
+      Backend={Pearl}
       GraphResource={ReefPatch}
       cluster={{ radius: 1.25, variant: "swarm", pointSize: 0.9, labelBelow: 1.15 }}
       PostFX={
