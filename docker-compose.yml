@@ -108,6 +108,13 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Amazon Bedrock Mantle (AGENT_MODEL=bedrock_mantle_openai:... / bedrock_mantle_anthropic:...): a Bedrock API key
+      # or standard AWS credentials; AWS_REGION picks the endpoint (default us-east-1)
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       # decisions (app/decide.py): TypeSafe Jev when set, else an LLM judge (DECIDE_MODEL, default AGENT_MODEL)
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
       DECIDE_MODEL: ${DECIDE_MODEL:-}

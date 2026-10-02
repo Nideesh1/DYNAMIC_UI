@@ -11,6 +11,7 @@ dependencies = [
   "langchain-google-genai",
   "langchain-openai",
   "langchain-anthropic",
+  "langchain-aws[openai,anthropic]>=1.7.9",  # Bedrock Mantle: bedrock_mantle_openai: / bedrock_mantle_anthropic: specs
   "langchain-typesafe==0.0.1a3",  # TypeSafe Jev decisions (app/decide.py); used only when TYPESAFE_API_KEY is set
   "langchain-mcp-adapters",
   "mcp",

@@ -102,7 +102,7 @@ agent that made it, with its result, probability and latency (the span's duratio
 
 | Where | Kind / purpose | Question | Effect |
 |---|---|---|---|
-| `vendor_category` | `choice` / route | which model for this analyst? (`small` / `large`, from the category's vendor count and spend) | the analyst runs on the chosen model: small = `claude-haiku-4-5`, `gpt-5-mini` or `gemini-3.5-flash-lite` by `AGENT_MODEL`'s provider (`ROUTER_SMALL_MODEL` overrides), large = `AGENT_MODEL` |
+| `vendor_category` | `choice` / route | which model for this analyst? (`small` / `large`, from the category's vendor count and spend) | the analyst runs on the chosen model: small = `claude-haiku-4-5`, `gpt-5-mini`, `gemini-3.5-flash-lite`, Mantle `openai.gpt-oss-20b` or Mantle `anthropic.claude-haiku-4-5` by `AGENT_MODEL`'s provider (`ROUTER_SMALL_MODEL` overrides), large = `AGENT_MODEL` |
 | `code` (code_sleuth) | `noul` / guard, target `rollback_deploy` | safe to run without a human? | p(safe) < 0.5 → the call is blocked: the agent gets `blocked by guardrail ...` and the tool never runs (`GuardRiskyTools` middleware in `app/incident.py`) |
 | `review` (reviewer) | `noul` / check | diagnosis grounded in evidence? | no → the reviewer fails and Hatchet retries the step (`GroundedCheck` middleware) |
 
@@ -169,8 +169,28 @@ Models are built with LangChain `init_chat_model(AGENT_MODEL)`, so any of these 
 | `google_genai:gemini-3.8-flash` (default) | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
 | `openai:<model>` e.g. `openai:gpt-5-mini` | `OPENAI_API_KEY` |
 | `anthropic:claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
+| `bedrock_mantle_openai:<model>` / `bedrock_mantle_anthropic:<model>` | `AWS_BEARER_TOKEN_BEDROCK` or AWS credentials, `AWS_REGION` |
 
 Agents get the spec string (`create_deep_agent(model=AGENT_MODEL)`) and deepagents builds the model through its provider profiles:
 OpenAI uses the Responses API (deepagents' built-in `openai` profile), Gemini runs with `thinking_level=low` and temperature 0.2
 (one `register_provider_profile` call in `app/config.py`), Anthropic runs with provider defaults.
 The legacy `OBS_MODEL=<gemini model>` is still honored when `AGENT_MODEL` is unset.
+
+### Bedrock Mantle
+
+[Amazon Bedrock Mantle](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html)
+(`https://bedrock-mantle.<region>.api.aws`) serves OpenAI-compatible and Anthropic Messages APIs. `langchain-aws`
+adds two `init_chat_model` providers for it, so it is just another `AGENT_MODEL`:
+
+```bash
+AWS_BEARER_TOKEN_BEDROCK=...   # Bedrock API key; or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (short-term keys are minted)
+AWS_REGION=us-east-1           # picks the Mantle endpoint (default us-east-1)
+AGENT_MODEL=bedrock_mantle_openai:openai.gpt-5.6-luna            # GPT on Mantle: Responses API
+# AGENT_MODEL=bedrock_mantle_openai:openai.gpt-oss-120b          # open-weight: Chat Completions
+# AGENT_MODEL=bedrock_mantle_anthropic:anthropic.claude-sonnet-5
+DECIDE_MODEL=bedrock_mantle_openai:openai.gpt-oss-20b            # optional: cheaper LLM judge for decisions
+```
+
+`app/config.py` registers a provider profile per Mantle provider that passes `region_name`; `ChatOpenAIMantle` itself
+uses the Responses API for `openai.gpt-*` models. Structured output (planner, decision judge) goes through tool calling
+on Mantle, since not every Mantle model supports native structured outputs.

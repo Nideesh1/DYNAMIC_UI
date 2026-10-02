@@ -46,6 +46,14 @@ def make_model(spec: str | None = None) -> BaseChatModel:
     return init_chat_model(spec, **apply_provider_profile(spec))
 
 
+def structured_model(schema: type[BaseModel], spec: str | None = None):
+    """make_model(spec).with_structured_output(schema). Bedrock Mantle does not offer native structured outputs on
+    every model (e.g. Claude Haiku 4.5), so Mantle specs use tool calling, which every Mantle chat model supports."""
+    spec = spec or MODEL
+    kw = {"method": "function_calling"} if spec.startswith("bedrock_mantle_") else {}
+    return make_model(spec).with_structured_output(schema, **kw)
+
+
 agent_smoke = hatchet.workflow(name=WORKFLOW, input_validator=BriefInput)
 
 
@@ -71,7 +79,7 @@ async def plan(input: BriefInput, ctx: Context) -> dict:
     step_span(input.topic)
     # A bare structured LLM call isn't an agent to any instrumentation, so name it one.
     with tracer.start_as_current_span("planner", attributes={"agentglow.agent": "planner", "agentglow.run.topic": input.topic}):
-        planner = make_model().with_structured_output(Plan)
+        planner = structured_model(Plan)
         p: Plan = await planner.ainvoke(
             "You plan research for a short business brief. Data available: a knowledge graph of companies, products, customers, "
             "regions, teams and incidents, plus an analytics MCP server (warehouse metrics, Spark jobs, customer records).\n"

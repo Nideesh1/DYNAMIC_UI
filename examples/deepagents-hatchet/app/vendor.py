@@ -7,7 +7,8 @@ vendors):
               CONCURRENCY limit of 3 per parent run, so the categories queue and drain 3 at a time. Each runs its own
               <category>_analyst deep agent (graph read + erp) and returns a recommendation. A ROUTER decision
               (Choice small|large on the category's spend / vendor count, app/decide.py) first picks the analyst's
-              model: small = claude-haiku-4-5 / gpt-5-mini / gemini-3.5-flash-lite (by AGENT_MODEL's provider), large =
+              model: small = claude-haiku-4-5 / gpt-5-mini / gemini-3.5-flash-lite / Mantle gpt-oss-20b /
+              Mantle claude-haiku-4-5 (by AGENT_MODEL's provider), large =
               AGENT_MODEL (override: ROUTER_SMALL_MODEL / ROUTER_LARGE_MODEL).
   approval    DURABLE task: waits (ctx.aio_wait_for) for the user event `vendor:approve` for this run, or auto-approves
               after APPROVAL_TIMEOUT_S (default 30 min). Approve with POST /approve on the trigger service.
@@ -47,7 +48,13 @@ tracer = trace.get_tracer("deepagents-hatchet.vendor")
 
 
 # ROUTER: model spec per route ("" = AGENT_MODEL); small defaults per AGENT_MODEL provider.
-_SMALL = {"anthropic": "anthropic:claude-haiku-4-5", "openai": "openai:gpt-5-mini", "google_genai": "google_genai:gemini-3.5-flash-lite"}
+_SMALL = {
+    "anthropic": "anthropic:claude-haiku-4-5",
+    "openai": "openai:gpt-5-mini",
+    "google_genai": "google_genai:gemini-3.5-flash-lite",
+    "bedrock_mantle_openai": "bedrock_mantle_openai:openai.gpt-oss-20b",
+    "bedrock_mantle_anthropic": "bedrock_mantle_anthropic:anthropic.claude-haiku-4-5",
+}
 MODEL_ROUTES = {
     "small": os.environ.get("ROUTER_SMALL_MODEL") or _SMALL.get(MODEL.split(":", 1)[0], ""),
     "large": os.environ.get("ROUTER_LARGE_MODEL") or "",
