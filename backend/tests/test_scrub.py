@@ -115,3 +115,10 @@ def test_claude_code_hooks_path_is_scrubbed():
     assert_clean(c)
     runs = [e for e in c.app.state.hub.buffer if e["type"] == "run"]
     assert runs and all(e["topic"].startswith("Claude Code · myproject · ") for e in runs)
+
+
+def test_step_name_passes_any_identifier_and_caps():
+    from agentglow.scrub import step_name
+
+    assert step_name("postmortem") == "postmortem" and step_name("Fetch Logs!") == "Fetch-Logs"
+    assert len(step_name("s" * 99)) == 40 and step_name(None) == "" and step_name({"a": 1}) == ""

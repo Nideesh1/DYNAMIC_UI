@@ -126,3 +126,21 @@ def test_bare_llm_gets_implicit_agent():
     evs = m.feed("start", span("root", "RunnableSequence"))
     evs += m.feed("start", span("l", "ChatOpenAI", "root", start=1001))
     assert by_type(evs, "spawn")[0]["id"] == "root" and by_type(evs, "agent")[0]["id"] == "root"
+
+
+def test_hatchet_arbitrary_parallel_and_retried_steps():
+    m = Mapper()
+    h = lambda step: {"hatchet.workflow_run_id": "inc-1", "hatchet.step_name": step, "hatchet.workflow_name": "incident_triage"}
+    feed = lambda ph, sid, step, t0, t1=None, st="ok": m.feed(ph, span(sid, "hatchet.start_step_run", None, h(step), t0, t1, trace=sid, status=st))
+    evs = feed("start", "a", "triage", 1000) + feed("end", "a", "triage", 1000, 1100)
+    evs += feed("start", "b", "logs", 1200) + feed("start", "c", "code", 1210)  # parallel steps
+    evs += feed("end", "b", "logs", 1200, 1500) + feed("end", "c", "code", 1210, 1600)
+    evs += feed("start", "d", "review", 1700) + feed("end", "d", "review", 1700, 1800, "error")  # fails once ...
+    evs += feed("start", "e", "review", 1900) + feed("end", "e", "review", 1900, 2000)  # ... then the retry succeeds
+    evs += feed("start", "f", "x" * 100, 2100) + feed("end", "f", "x" * 100, 2100, 2200)
+    steps = [(e["step"], e["status"]) for e in by_type(evs, "step")]
+    assert steps[:6] == [("triage", "running"), ("triage", "done"), ("logs", "running"), ("code", "running"), ("logs", "done"), ("code", "done")]
+    assert steps[6:10] == [("review", "running"), ("review", "failed"), ("review", "running"), ("review", "done")]
+    assert steps[10][0] == "x" * 40  # capped
+    done = m.tick(2200 + 61000)
+    assert done[-1]["type"] == "run" and done[-1]["status"] == "completed"  # the retried step does not fail the run

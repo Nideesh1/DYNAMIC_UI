@@ -44,7 +44,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .scrub import SKILL_KEY, skill_name
+from .scrub import SKILL_KEY, skill_name, step_name
 
 LLM_OPS = {"chat", "text_completion", "generate_content"}
 LG_NODES = {"model", "tools", "agent", "call_model", "__start__", "__end__"}
@@ -172,6 +172,7 @@ class Run:
     root: str | None = None
     hatchet: bool = False
     failed: bool = False
+    failed_steps: set = field(default_factory=set)  # steps whose LAST attempt failed (a retry that succeeds clears it)
     done_at: int | None = None
     last_top: str | None = None
     final: bool = False
@@ -266,9 +267,9 @@ class Mapper:
         run.done_at = None
         run.hatchet = run.hatchet or "hatchet.workflow_run_id" in a
 
-        step = a.get("agentglow.step") or (a.get("hatchet.step_name") if s.name.startswith("hatchet.start_step_run") else None)
-        if step:
-            s.step = str(step)
+        step = step_name(a.get("agentglow.step") or (a.get("hatchet.step_name") if s.name.startswith("hatchet.start_step_run") else None))
+        if step:  # any workflow-defined step name passes (no whitelist); scrubbed and capped
+            s.step = step
             out.append({"type": "step", "run_id": run_id, "step": s.step, "status": "running", "ts": ts})
 
         name = self._agent_name(s)
@@ -382,7 +383,9 @@ class Mapper:
 
         if run:
             run.open = max(0, run.open - 1)
-            if failed and (s.step or run.root == s.id):
+            if s.step:
+                (run.failed_steps.add if failed else run.failed_steps.discard)(s.step)
+            if failed and run.root == s.id:
                 run.failed = True
             if run.open == 0:
                 if run.hatchet:
@@ -391,6 +394,7 @@ class Mapper:
                     self._complete(run, ts, out)
 
     def _complete(self, run: Run, ts: int, out: list) -> None:
+        run.failed = run.failed or bool(run.failed_steps)
         self._final(run.id, run.last_text, out, ts)
         if run.synthetic:
             out.append({"type": "exit", "run_id": run.id, "id": run.synthetic, "status": "failed" if run.failed else "done", "ts": ts})
