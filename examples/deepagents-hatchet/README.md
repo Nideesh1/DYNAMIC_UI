@@ -56,11 +56,47 @@ docker compose exec worker uv run python trigger.py --incident      # or from th
 
 `POST /live/run` forwards the optional `workflow` field to the trigger service (`app/trigger_api.py`).
 
+## Third workflow: vendor consolidation (long-running)
+
+Hatchet workflow `vendor_consolidation` (`app/vendor.py`) is an enterprise agent that runs for minutes to hours: it
+fans out under a concurrency limit, waits on a human, and sleeps between email rounds, all as durable Hatchet tasks.
+
+| Step | Agents | Touches |
+|---|---|---|
+| `inventory` | **procurement_analyst** pulls every contract and writes it to the graph | `erp` MCP server (:8203) → SAP / Coupa; FalkorDB writes (`Vendor` -`IN_CATEGORY`-> `Category`) |
+| `analyze` | one child run of `vendor_category` per spend category (10), each with its own **&lt;category&gt;_analyst**; Hatchet concurrency **3 per run**, so the categories queue and drain 3 at a time | FalkorDB reads; `erp` (scorecards, renewals) |
+| `approval` | **durable** task: `ctx.aio_wait_for` the user event `vendor:approve` for this run, or auto-approves after `APPROVAL_TIMEOUT_S` (default 30 min) | - |
+| `negotiate` | **durable** task: **negotiator** drafts and sends outreach, then `ctx.aio_sleep_for(DEMO_SLEEP_S)` between 3 rounds (stands in for days) | `email` MCP server (:8204) → Exchange |
+| `report` | **plan_writer** writes the consolidation plan (final answer) | FalkorDB write (`Plan` -`CONSOLIDATES`-> `Vendor`) |
+
+The waits are declared for AgentGlow with a span carrying `agentglow.wait` (`approval`, `vendor reply`) and
+`agentglow.wait.until` (see `docs/SPEC.md`, "Waits"), so the step shows *waiting on approval* / *vendor reply* and the
+run stays one open run instead of timing out. The child category runs fold into the parent run.
+
+Run it and approve it:
+
+```bash
+curl -X POST localhost:8101/live/run -H 'content-type: application/json' \
+  -d '{"topic": "Consolidate Q3 SaaS vendors under $2M spend", "workflow": "vendor"}'   # or the HUD picker
+docker compose exec worker uv run python trigger.py --vendor                            # or from the CLI
+
+# when the approval step shows "waiting on approval":
+curl -X POST localhost:8300/approve                                     # approves every vendor run waiting
+curl -X POST localhost:8300/approve -H 'content-type: application/json' \
+  -d '{"run_id": "<hatchet run id>", "approver": "cfo", "note": "go"}'  # one run
+docker compose exec worker uv run python trigger.py --approve [<run id>]
+```
+
+The trigger service listens on `127.0.0.1:8300` (`POST /approve` pushes the Hatchet event `vendor:approve` with
+`{"run_id": "<id>" | "*"}`; the approval task matches its own run id or `*`). An approval sent before the run reaches
+the `approval` step is not remembered: approve once it is waiting. Timings: `DEMO_SLEEP_S` (default 20) and
+`APPROVAL_TIMEOUT_S` (default 1800) in `.env` or the shell.
+
 ## Run with docker compose (repo root)
 
 ```bash
 cp .env.example .env            # set one LLM key (+ AGENT_MODEL if not Gemini; see "LLM provider" below)
-docker compose up -d --build    # agentglow, falkordb, hatchet, 3 MCP servers, worker, trigger
+docker compose up -d --build    # agentglow, falkordb, hatchet, 5 MCP servers, worker, trigger
 open http://localhost:8101      # scenes - press ▶ Run agents, or:
 docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
@@ -85,11 +121,13 @@ cd examples/deepagents-hatchet                   # uv run here uses the workspac
 uv run python -m app.mcp_server                  # :8200/mcp
 uv run python -m app.obs_mcp_server              # :8201/mcp (incident demo)
 uv run python -m app.github_mcp_server           # :8202/mcp (incident demo)
+uv run python -m app.erp_mcp_server              # :8203/mcp (vendor demo)
+uv run python -m app.email_mcp_server            # :8204/mcp (vendor demo)
 uv run python -m app.worker
 uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
 
-Env: `AGENTGLOW_URL` (default `http://localhost:8100`), `MCP_URL` (default `http://localhost:8200/mcp`), `OBS_MCP_URL` / `GITHUB_MCP_URL` (defaults `:8201/mcp` / `:8202/mcp`),
+Env: `AGENTGLOW_URL` (default `http://localhost:8100`), `MCP_URL` (default `http://localhost:8200/mcp`), `OBS_MCP_URL` / `GITHUB_MCP_URL` / `ERP_MCP_URL` / `EMAIL_MCP_URL` (defaults `:8201/mcp` .. `:8204/mcp`), `DEMO_SLEEP_S`, `APPROVAL_TIMEOUT_S`,
 `AGENT_MODEL` (see below), `LANGFUSE_EXPORT=0` to skip Langfuse even when keys are set.
 
 ## LLM provider

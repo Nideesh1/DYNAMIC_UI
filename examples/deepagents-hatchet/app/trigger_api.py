@@ -2,8 +2,11 @@
 
   POST /run {"topic": "..."}                         →  agent_smoke run (churn brief)
   POST /run {"topic": "...", "workflow": "incident"}  →  incident_triage run
+  POST /run {"topic": "...", "workflow": "vendor"}    →  vendor_consolidation run (long: waits on POST /approve)
   both return {"run_id": "<hatchet workflow run id>", "topic": "...", "workflow": "<hatchet workflow>"}
   GET /run  →  {"workflows": [{id, label, topic}]}  (agentglow's GET /live/run proxies it for the HUD picker)
+  POST /approve {"run_id"?: "...", "approver"?: "...", "note"?: "..."}  →  pushes the `vendor:approve` Hatchet event;
+       without run_id it approves every vendor_consolidation run currently waiting on approval
 
 Run: uv run python -m app.trigger_api   (:8300; compose service `trigger`, internal only)
 """
@@ -16,16 +19,19 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .incident import IncidentInput, incident_triage
-from .workflow import BriefInput, agent_smoke
+from .vendor import APPROVE_EVENT, VendorInput, vendor_consolidation
+from .workflow import BriefInput, agent_smoke, hatchet
 
 app = FastAPI(title="agentglow example trigger")
 
 # "workflow" value → (Hatchet workflow, input model). Missing / "brief" keeps the original churn brief.
 WORKFLOWS = {"brief": (agent_smoke, BriefInput), "agent_smoke": (agent_smoke, BriefInput),
-             "incident": (incident_triage, IncidentInput), "incident_triage": (incident_triage, IncidentInput)}
+             "incident": (incident_triage, IncidentInput), "incident_triage": (incident_triage, IncidentInput),
+             "vendor": (vendor_consolidation, VendorInput), "vendor_consolidation": (vendor_consolidation, VendorInput)}
 
 # what GET /run advertises (the HUD workflow picker); topic is each workflow's example topic
-PICKER = [("brief", "Churn brief", BriefInput), ("incident", "Incident triage", IncidentInput)]
+PICKER = [("brief", "Churn brief", BriefInput), ("incident", "Incident triage", IncidentInput),
+          ("vendor", "Vendor consolidation (long)", VendorInput)]
 
 
 class RunRequest(BaseModel):
@@ -46,6 +52,20 @@ async def run(req: RunRequest) -> dict:
 @app.get("/run")
 def workflows() -> dict:
     return {"workflows": [{"id": i, "label": label, "topic": model().topic} for i, label, model in PICKER]}
+
+
+class ApproveRequest(BaseModel):
+    run_id: str = "*"  # "*" = every vendor run waiting on approval
+    approver: str = "human"
+    note: str = ""
+
+
+@app.post("/approve")
+async def approve(req: ApproveRequest | None = None) -> dict:
+    req = req or ApproveRequest()  # no body: approve every waiting vendor run
+    payload = {"run_id": req.run_id or "*", "approver": req.approver, "note": req.note}
+    await hatchet.event.aio_push(APPROVE_EVENT, payload)
+    return {"event": APPROVE_EVENT, **payload}
 
 
 @app.get("/health")

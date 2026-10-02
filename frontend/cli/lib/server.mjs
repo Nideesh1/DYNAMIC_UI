@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { probe } from "./net.mjs";
+import { fetchText, probe } from "./net.mjs";
 import { cacheDir, findRunner } from "./uv.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -19,10 +19,21 @@ export function pySpecs(version, env = process.env) {
   return /^\d+\.\d+\.\d+$/.test(version || "") ? [`agentglow==${version}`, "agentglow"] : ["agentglow"];
 }
 
-export function serveArgv(runner, spec, port) {
+/**
+ * Launch attempts in order: the pinned spec, the same pin again with uv's cached PyPI index refreshed (a version
+ * published after uv last fetched the index is otherwise "not found"), then the latest agentglow.
+ */
+export function pyAttempts(version, env = process.env) {
+  const [first, ...rest] = pySpecs(version, env);
+  const pinned = /^agentglow==/.test(first);
+  return [{ spec: first }, ...(pinned ? [{ spec: first, refresh: true }] : []), ...rest.map((spec) => ({ spec }))];
+}
+
+export function serveArgv(runner, spec, port, { refresh = false } = {}) {
   // a local checkout (AGENTGLOW_PY_SPEC=/path/to/backend): run it editable, uvx otherwise serves a stale cached build
   const local = /^(\/|\.|~|[A-Za-z]:[\\/])/.test(spec);
-  return [...runner.args, ...(local ? ["--with-editable", spec] : []), "--from", spec,
+  return [...runner.args, ...(refresh ? ["--refresh-package", "agentglow"] : []),
+    ...(local ? ["--with-editable", spec] : []), "--from", spec,
     "agentglow", "serve", "--host", "127.0.0.1", "--port", String(port)];
 }
 
@@ -35,6 +46,22 @@ export function readPid(port) {
     const j = JSON.parse(fs.readFileSync(pidFile(port), "utf8"));
     return j && alive(j.pid) ? j : null;
   } catch { return null; }
+}
+
+/** What to log when attempt i failed and attempt i + 1 (if any) comes next. */
+export function retryNote(attempts, i, version) {
+  const { spec } = attempts[i], next = attempts[i + 1];
+  if (!next) return `${spec} failed to start, giving up`;
+  if (next.refresh) return `${spec} failed to start, refreshing uv's cached PyPI index and retrying`;
+  return `${spec} failed to start, falling back to the latest agentglow on PyPI` +
+    (version ? ` (this CLI expects ${version}, the server may be older)` : "");
+}
+
+/** After a fallback start: say which server version is running when it is not the one this CLI expects. */
+async function noteVersion(port, version, log) {
+  let v = "";
+  try { v = JSON.parse((await fetchText(localBase(port) + "/live/health", 2000))?.body || "{}").version || ""; } catch { /* unknown */ }
+  if (v !== version) log(`  WARNING: running agentglow server ${v || "?"}, expected ${version}. Restart it once ${version} is on PyPI.`);
 }
 
 function tail(file, n = 15) {
@@ -50,9 +77,10 @@ export async function startBackground({ port, version, log = console.error, time
       "First run downloads Python + agentglow, about 30-60s ...");
   const logPath = logFile(port);
   let lastErr = "";
-  for (const spec of pySpecs(version)) {
+  const attempts = pyAttempts(version);
+  for (const [i, { spec, refresh }] of attempts.entries()) {
     const fd = fs.openSync(logPath, "w");
-    const child = spawn(runner.cmd, serveArgv(runner, spec, port), {
+    const child = spawn(runner.cmd, serveArgv(runner, spec, port, { refresh }), {
       detached: true, stdio: ["ignore", fd, fd], windowsHide: true,
       env: { ...process.env, PYTHONUNBUFFERED: "1" },
     });
@@ -65,7 +93,10 @@ export async function startBackground({ port, version, log = console.error, time
     const t0 = Date.now();
     let noted = false;
     while (Date.now() - t0 < timeoutMs) {
-      if ((await probe(localBase(port), 1500)) === "agentglow") return { pid: child.pid, started: true };
+      if ((await probe(localBase(port), 1500)) === "agentglow") {
+        if (spec !== attempts[0].spec) await noteVersion(port, version, log);
+        return { pid: child.pid, started: true };
+      }
       if (exited !== null) break;
       if (!noted && Date.now() - t0 > 15000) { log("  still preparing the Python environment ..."); noted = true; }
       await sleep(500);
@@ -77,7 +108,7 @@ export async function startBackground({ port, version, log = console.error, time
     }
     fs.rmSync(pidFile(port), { force: true });
     lastErr = tail(logPath) || lastErr;
-    log(`  ${spec} failed to start, ${spec === "agentglow" ? "giving up" : "retrying with the latest agentglow"} ...`);
+    log(`  ${retryNote(attempts, i, version)} ...`);
   }
   throw new Error(`AgentGlow server failed to start. Log: ${logPath}\n${lastErr}`);
 }
@@ -166,12 +197,12 @@ export function removeCliCopies() {
 /** Run the server in the foreground (stdio inherited). Resolves with its exit code. */
 export async function serveForeground({ port, version, log = console.error }) {
   const runner = await findRunner({ log });
-  const specs = pySpecs(version);
+  const attempts = pyAttempts(version);
   let stopping = false;
-  for (const [i, spec] of specs.entries()) {
+  for (const [i, { spec, refresh }] of attempts.entries()) {
     const t0 = Date.now();
     const code = await new Promise((resolve) => {
-      const child = spawn(runner.cmd, serveArgv(runner, spec, port), { stdio: "inherit" });
+      const child = spawn(runner.cmd, serveArgv(runner, spec, port, { refresh }), { stdio: "inherit" });
       // A requested stop (Ctrl-C, `launchctl stop`, `systemctl stop`) must exit 0, or a supervisor with
       // "restart unless it exited successfully" (launchd KeepAlive/SuccessfulExit) would bring it right back.
       const fwd = (sig) => () => { stopping = true; child.kill(sig); };
@@ -184,10 +215,10 @@ export async function serveForeground({ port, version, log = console.error }) {
         resolve(stopping ? 0 : (c ?? (sig ? 130 : 1)));
       });
     });
-    // a pinned version missing on PyPI fails fast; fall back to latest once
+    // a pinned version missing from uv's index fails fast: refresh the index once, then fall back to latest
     if (stopping) return 0;
-    if (code !== 0 && i < specs.length - 1 && Date.now() - t0 < 30000) {
-      log(`${spec} failed, retrying with the latest agentglow ...`);
+    if (code !== 0 && i < attempts.length - 1 && Date.now() - t0 < 30000) {
+      log(`${retryNote(attempts, i, version)} ...`);
       continue;
     }
     return code;

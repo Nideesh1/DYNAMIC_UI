@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from langchain_core.tools import tool
 from openinference.instrumentation.langchain import get_current_span
 from opentelemetry import context, trace
+from pydantic import BaseModel
 
 from . import config  # noqa: F401
 from . import demo_graph as dg
@@ -83,6 +84,51 @@ def graph_write_brief(topic: str, summary: str, entities: list[str]) -> str:
 
 GRAPH_TOOLS = [graph_resolve, graph_neighbors]
 WRITE_TOOLS = [graph_write_brief]
+
+
+# ---- vendor consolidation demo -----------------------------------------------------------------
+class VendorRow(BaseModel):
+    vendor: str
+    category: str
+    annual_spend_usd: int = 0
+
+
+@tool
+def graph_write_vendors(vendors: list[VendorRow]) -> str:
+    """Write vendor contracts into the knowledge graph: one Vendor node per vendor, linked IN_CATEGORY to its Category node.
+    Pass ALL vendors in one call."""
+    with graph_span("write", dg.VENDOR_Q) as span:
+        names = []
+        for v in vendors[:60]:
+            dg.write_vendor(v.vendor, v.category, v.annual_spend_usd)
+            names += [v.vendor, v.category]
+        nodes = list(dict.fromkeys(names))
+        set_nodes(span, nodes)
+    return json.dumps({"written": len(vendors[:60]), "categories": sorted({v.category for v in vendors})})
+
+
+@tool
+def graph_category_vendors(category: str) -> str:
+    """Vendors in a spend category from the knowledge graph, biggest annual spend first."""
+    with graph_span("read", dg.CATEGORY_VENDORS_Q) as span:
+        found = dg.category_vendors(category)
+        set_nodes(span, [r["vendor"] for r in found] + ([found[0]["category"]] if found else []))
+    return json.dumps({"vendors": found})
+
+
+@tool
+def graph_write_plan(title: str, summary: str, vendors: list[str]) -> str:
+    """Save the consolidation plan to the knowledge graph, linked CONSOLIDATES to each vendor it affects."""
+    name = f"Plan: {title}"[:120]
+    with graph_span("write", dg.PLAN_Q) as span:
+        linked = dg.write_plan(name, summary[:2000], vendors[:20])
+        set_nodes(span, [name, *linked])
+    return json.dumps({"nodes": [name, *linked], "saved": True})
+
+
+VENDOR_WRITE_TOOLS = [graph_write_vendors]
+VENDOR_READ_TOOLS = [graph_category_vendors]
+PLAN_TOOLS = [graph_write_plan]
 
 
 def _in_tool_context(t):

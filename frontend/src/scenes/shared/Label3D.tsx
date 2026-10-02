@@ -26,7 +26,7 @@ import interUrl from "./fonts/inter-latin-500-normal.woff";
 import monoUrl from "./fonts/jetbrains-mono-latin-500-normal.woff";
 import { fit } from "./kit/fit";
 import { LabelScope, labels, newLabelEntry, registerLabel, unregisterLabel, type LabelKind } from "./kit/labels";
-import { slotLabel, stepChips, useWorld, type Run } from "./world";
+import { runWait, slotLabel, stepChips, useWorld, waitLabel, type Run } from "./world";
 
 /** kit/dim.ts skips this subtree (the label fades itself) */
 const NO_DIM = { kitNoDim: true };
@@ -225,7 +225,7 @@ function flattenLine(line: LabelLine | null | undefined, upper: boolean, tmp: TH
 
 /**
  * The shared run sub-line "hatchet · plan › research › write" as colored segments (current step bright, done
- * steps light, queued dim). Runs without Hatchet steps show `fallback` [working, finished, failed?].
+ * steps light, queued dim; a step paused in a wait amber, followed by " · waiting on approval"). Runs without Hatchet steps show `fallback` [working, finished, failed?].
  */
 export function runStepsLine(
   run: Run,
@@ -239,11 +239,16 @@ export function runStepsLine(
   shown.forEach((st, i) => {
     if (i) segs.push({ text: " › ", color: c.base });
     const state = run.steps[st];
-    segs.push({ text: st, color: state === "running" ? c.current : state === "done" ? c.done : state === "failed" ? "#ff5d5d" : (c.queued ?? dimHex(c.base)) });
+    const paused = state === "running" && !!run.waits[st];
+    segs.push({ text: st, color: paused ? WAIT_COLOR : state === "running" ? c.current : state === "done" ? c.done : state === "failed" ? "#ff5d5d" : (c.queued ?? dimHex(c.base)) });
   });
   if (more) segs.push({ text: ` +${more}`, color: c.base });
+  const w = finished ? null : runWait(run);
+  if (w) segs.push({ text: ` · ${waitLabel(w)}`, color: WAIT_COLOR });
   return segs;
 }
+/** a step paused in a wait (approval, durable sleep) */
+export const WAIT_COLOR = "#f59e0b";
 const dimTmp = new THREE.Color();
 const dimHex = (h: string) => "#" + dimTmp.set(h).lerp(BG, 0.45).getHexString();
 

@@ -25,6 +25,11 @@ MCP_URL = os.environ.get("MCP_URL", "http://localhost:8200/mcp")
 # incident demo MCP servers
 OBS_MCP_URL = os.environ.get("OBS_MCP_URL", "http://localhost:8201/mcp")
 GITHUB_MCP_URL = os.environ.get("GITHUB_MCP_URL", "http://localhost:8202/mcp")
+# vendor consolidation demo MCP servers + timings
+ERP_MCP_URL = os.environ.get("ERP_MCP_URL", "http://localhost:8203/mcp")
+EMAIL_MCP_URL = os.environ.get("EMAIL_MCP_URL", "http://localhost:8204/mcp")
+DEMO_SLEEP_S = int(os.environ.get("DEMO_SLEEP_S", "20"))  # durable sleep between negotiation rounds (stands in for days)
+APPROVAL_TIMEOUT_S = int(os.environ.get("APPROVAL_TIMEOUT_S", "1800"))  # auto-approve after this long (30 min)
 # LLM: any LangChain `init_chat_model` spec "<provider>:<model>" - google_genai:, openai:, anthropic:.
 # Keys come from the standard env vars: GEMINI_API_KEY (or GOOGLE_API_KEY), OPENAI_API_KEY, ANTHROPIC_API_KEY.
 # (Legacy OBS_MODEL=<gemini model> still works.)

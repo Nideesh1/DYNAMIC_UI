@@ -129,7 +129,7 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 | langgraph-supervisor | team graph whose supervisor node (`<sup>` node → `<sup>` graph) calls a `transfer_to_*` tool | ONE supervisor agent for the run (later turns alias it; exits when the team graph ends); workers (`<name>` → `call_agent` → `<name>` graph) → `subagent: true` under it, delegation text = supervisor's turn text else latest user request; supervisor `waiting` while a worker runs; `transfer_*` tools emit no `tool` event |
 | LLM | OpenInference kind `LLM` or `gen_ai.operation.name ∈ {chat, text_completion, generate_content}` | `agent thinking` on start; `llm` on end - a span guessed from its parent node but ending with a non-LLM kind (react agent's RunnableSequence/call_model/should_continue) is dropped (tokens from `gen_ai.usage.input_tokens/output_tokens` or `llm.token_count.prompt/completion`) |
 | Tool | OpenInference kind `TOOL` or `gen_ai.operation.name=execute_tool` | `tool` |
-| MCP | span with `mcp.server.name` or `agentglow.mcp.server` (+ `agentglow.mcp.resource`, `agentglow.mcp.resource_kind` ∈ db,warehouse,spark,api,storage,queue) | `mcp call` (start, pending) / `mcp result` (end); auto `mcp_register` of server+resource |
+| MCP | span with `mcp.server.name` or `agentglow.mcp.server` (+ `agentglow.mcp.resource`, `agentglow.mcp.resource_kind` ∈ db,warehouse,spark,api,storage,queue) | `mcp call` (start, pending) / `mcp result` (end); auto `mcp_register` of server+resource. An MCP span whose parent span is not known yet (the MCP server's process reported before the caller's tool span) is held until the parent arrives, dropped after 10 s; it never starts a run |
 | Graph/DB | `db.system` set | `graph` read/write (`agentglow.db.op` or inferred from query text); node names from `agentglow.graph.nodes` (list or JSON string) |
 | Final | `agentglow.final` attr on any span | `final` text |
 | Skill | hint attribute `agentglow.skill` = skill name on any span (usually a tool span); set by the Claude Code hooks adapter for the `Skill` tool (`tool_input.skill`, e.g. `hello`, `plugin:skill`), by the traces-only path from the `claude_code.tool` span's `skill_name` (needs `OTEL_LOG_TOOL_DETAILS=1`), and by the manual `skill()` | `skill` `status: "start"` when the span starts (or at end if the attribute only arrives then), `"end"` when it ends, on the owning agent; the normal `tool` event is still emitted (Claude Code `Skill` args preview = the skill name only) |
@@ -137,6 +137,49 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 | Claude Code hooks | `POST /v1/claude-code` (`claude_code.py`) | one prompt = one run (topic `Claude Code · <cwd basename>`); main agent `claude`; `Agent` tool → `task` + subagent named after its type; tools; 0-token thinking pulses |
 | Claude Code traces | `claude_code.*` spans on `/v1/traces` (`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`) | `interaction` = run + `claude`; each `agent_id` = subagent (`subagent: true`, parent `claude`, linked via its `Agent` tool's `tool.execution` span; named from `query_source_safe` `agent.<kind>.<type>`, else `subagent <id>`); `llm_request` = `llm` with `tokens_in` = input + cache_creation, `tokens_out`, `tokens_cached` = cache_read; `tool` = tool event (`tool.blocked_on_user`/`tool.execution` skipped). Merged with hooks when `session.id` is a hooks session: no new agents/tools, token `llm` events go to the hooks agents (by `agent_id`), hook pulses muted, exits wait up to 15 s for the agent's trace spans |
 Unknown spans are kept only for tree/ownership. Ids: agent instance id = span id (stable string).
+
+### Waits and long-running runs (durable tasks)
+A run stays open while any of its spans is open, however long it is silent; only when nothing is open (and no step is
+parked, below) does the Hatchet idle grace (`AGENTGLOW_HATCHET_IDLE_MS`, default 60 s; 3 s once the run has a
+`final`) apply. Hard bound: a run with no span start/end for `AGENTGLOW_RUN_MAX_IDLE_MS` (default 24 h) completes.
+
+**App wait contract.** Open a span around the wait, inside the step (a child of the step span), with these attributes
+set at span start; the wait lasts while the span is open:
+
+| Attribute | Value |
+|---|---|
+| `agentglow.wait` | required: what it waits on, a short label, e.g. `"approval"`, `"vendor reply"`; `"sleep"` for a timer. Secrets redacted, max 60 chars |
+| `agentglow.wait.until` | optional: deadline / wake-up time: epoch ms (int), epoch seconds (< 1e11), or ISO-8601 string (`2026-10-01T15:00:00Z`) |
+
+```python
+with tracer.start_as_current_span("await approval", attributes={"agentglow.wait": "approval",
+                                                                 "agentglow.wait.until": deadline_ms}):
+    await ctx.aio_wait_for("approval", UserEventCondition(event_key="vendor:approved"))
+with tracer.start_as_current_span("cool-off", attributes={"agentglow.wait": "sleep", "agentglow.wait.until": wake_ms}):
+    await ctx.aio_sleep_for(timedelta(hours=48))
+```
+Without it, HatchetInstrumentor's own `hatchet.durable.wait_for` span (every `ctx.aio_wait_for` / `aio_sleep_for` /
+`aio_wait_for_event`) is used: it carries only `hatchet.signal_key` (`sleep:<N><s|m|h>-<i>` → reason `sleep`, until =
+start + N; `event:<key>-<i>` → reason `<key>`), `hatchet.num_conditions` and `hatchet.step_run_id` (its parent is the
+trigger's traceparent, so the run comes from the step span with that step run id). The app span wins when both are open.
+
+**Events.** Wait start: `step` `{"status": "waiting", "reason", "until"?}` on its step, and `agent`
+`{"status": "waiting", "reason", "until"?}` on the owning agent (declared wait: nearest ancestor agent; else the newest
+live agent in that step), if any. Wait end: `step running` again (while the step is open), `agent thinking`.
+
+**Eviction.** Hatchet evicts a durable task waiting longer than its eviction policy TTL (default 15 min): the task is
+cancelled (wait and step spans end together, status unset) and re-run with the same step run id when the wait is
+satisfied. A step that ends within 1 s of a wait nested in it therefore stays `waiting` (parked) instead of `done`; the
+run is held until the wait's `until` + idle grace (no `until`: the 24 h bound) or until a step starts again (other parked
+steps then get `step done`). A workflow whose LAST step returns right after an un-dated wait should set `agentglow.final`.
+
+**Fan-out.** A child workflow run folds into its parent run when its step span has `hatchet.parent_workflow_run_id` of a
+run still open, or (the engine often leaves that empty, e.g. `aio_run_many` from a task) when the step span's OTel parent,
+the traceparent HatchetInstrumentor injects at trigger time, belongs to another open Hatchet run. Its agents become
+subagents of the agent that owns the triggering span (a step with no agent of its own is promoted to an agent named after
+the step, which stays alive until the step ends), else of the parent run's newest live agent outside child steps. Parallel
+instances of one step name keep the step `running` until the last ends (failed if any instance failed). Queued
+(concurrency-limited) tasks emit nothing until they start.
 
 ## Manual API (backend `manual.py`)
 For hand-written agent loops (no framework). Plain OpenTelemetry spans (`opentelemetry-api`) on the global provider
@@ -195,6 +238,8 @@ them as a "you: / claude:" conversation).
 an agent (main or subagent) started / finished using a skill.
 `llm` may carry an extra `tokens_cached` (prompt-cache reads) when known.
 `run` may carry status `renamed` (same `run_id`, new `topic`, e.g. a Claude Code session /rename): relabel only.
+`step` may carry status `waiting` with `reason` (wait label) and optional `until` (epoch ms); `agent` status `waiting` may
+carry the same `reason` / `until` (see "Waits and long-running runs").
 
 ## Frontend (`frontend/`, npm `agentglow`)
 - App build: gallery at `/`, `/<theme>`; data source = same origin `/live/stream` (`?source=<url>` override, `?sim=1` simulator, `?hud=0` hide HUD). Output copied to `backend/agentglow/static/`.

@@ -6,7 +6,7 @@ import "./hud.css";
 import { startLiveRun, useRunAvailable, useRunWorkflows } from "./useSceneSetup";
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
-import { getInstance, isDone, isLive, selectInstance, stepChips, TYPE_COLOR, useWorld, waitSeconds, world, type Instance, type WorldEvent } from "./world";
+import { getInstance, isDone, isLive, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -26,13 +26,13 @@ export function describe(e: WorldEvent): string {
     case "run":
       return `run ${e.status} · ${e.topic}`;
     case "step":
-      return `step ${e.step} ${e.status} · ${shortRun(e.run_id)}`;
+      return e.status === "waiting" ? `step ${e.step} ${waitLabel({ reason: e.reason || "wait", until: e.until ?? 0 })} · ${shortRun(e.run_id)}` : `step ${e.step} ${e.status} · ${shortRun(e.run_id)}`;
     case "spawn":
       return `spawned ${short(e.id)}`;
     case "exit":
       return `${short(e.id)} ${e.status}`;
     case "agent":
-      return `${short(e.id)} ${e.status}`;
+      return e.status === "waiting" && e.reason ? `${short(e.id)} ${waitLabel({ reason: e.reason, until: e.until ?? 0 })}` : `${short(e.id)} ${e.status}`;
     case "llm":
       return e.tokens_in || e.tokens_out ? `${short(e.id)} · LLM ${e.tokens_in}→${e.tokens_out} tok` : `${short(e.id)} · thinking…`; // no usage (e.g. Claude Code hooks): no fake 0→0
     case "message":
@@ -56,6 +56,12 @@ export function describe(e: WorldEvent): string {
 
 /** skill badge accent (3D chip + HUD chips) */
 export const SKILL_COLOR = "#f5b83d";
+
+/** a step chip's status ("waiting" while paused in a wait) and tooltip */
+function chipState(run: Run, s: string): [string, string] {
+  const w = run.steps[s] === "running" ? run.waits[s] : undefined;
+  return w ? ["waiting", `${s}: ${waitLabel(w)}`] : [run.steps[s], `${s}: ${run.steps[s]}`];
+}
 
 function colorOf(e: WorldEvent) {
   if (e.type === "skill") return SKILL_COLOR;
@@ -608,6 +614,12 @@ function AgentList() {
   );
 }
 
+/** "approval: waiting on approval" for a run paused in a wait, else "" */
+function runWaitText(run: Run): string {
+  const s = run.stepOrder.find((x) => chipState(run, x)[0] === "waiting");
+  return s ? chipState(run, s)[1] : "";
+}
+
 function AgentDetail({ i }: { i: Instance }) {
   const w = useWorld();
   const run = w.runs.get(i.run);
@@ -621,7 +633,7 @@ function AgentDetail({ i }: { i: Instance }) {
         <i /> {i.name} <small>{i.subagent ? "subagent" : "agent"} · {shortRun(i.run)}</small>
       </h3>
       <div className="ap-status" data-status={isLive(i) ? i.status : "done"}>
-        {isLive(i) ? i.status : `finished (${i.status})`} · alive {age(i)}
+        {isLive(i) ? (i.status === "waiting" && i.wait ? waitLabel(i.wait) : i.status) : `finished (${i.status})`} · alive {age(i)}
       </div>
       <dl className="ap-stats">
         <div>
@@ -644,14 +656,18 @@ function AgentDetail({ i }: { i: Instance }) {
       <section>
         <h4>Run</h4>
         <p>{run ? run.topic : i.run}</p>
+        {run && runWaitText(run) && <p className="ap-wait">{runWaitText(run)}</p>}
         {run && chips && (
           <div className="ap-steps">
-            {chips.shown.map((s) => (
-              <span key={s} data-status={run.steps[s]} title={`${s}: ${run.steps[s]}`}>
-                {s}
-              </span>
-            ))}
-            {chips.more > 0 && <span title={run.stepOrder.slice(-chips.more).map((s) => `${s}: ${run.steps[s]}`).join("\n")}>+{chips.more}</span>}
+            {chips.shown.map((s) => {
+              const [st, title] = chipState(run, s);
+              return (
+                <span key={s} data-status={st} title={title}>
+                  {s}
+                </span>
+              );
+            })}
+            {chips.more > 0 && <span title={run.stepOrder.slice(-chips.more).map((s) => chipState(run, s)[1]).join("\n")}>+{chips.more}</span>}
           </div>
         )}
       </section>

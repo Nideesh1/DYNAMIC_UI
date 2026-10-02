@@ -106,6 +106,7 @@
 .ap-detail h3 small { color: #64748b; font-size: 11px; font-weight: 500; }
 .ap-status { margin-top: 3px; font-size: 12px; color: #cbd5e1; }
 .ap-status[data-status="thinking"] { color: #fde68a; }
+.ap-status[data-status="waiting"] { color: #fcd34d; }
 .ap-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(46px, 1fr)); gap: 4px; margin: 10px 0 4px; }
 .ap-stats div { background: rgba(3, 5, 11, 0.45); border-radius: 8px; padding: 6px; text-align: center; }
 .ap-stats dt { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; }
@@ -116,6 +117,7 @@
 .ap-steps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .ap-steps span { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 999px; border: 1px solid #334155; color: #64748b; }
 .ap-steps span[data-status="running"] { border-color: #fbbf24; color: #fde68a; }
+.ap-steps span[data-status="waiting"] { border-color: #f59e0b; color: #fcd34d; background: rgba(245, 158, 11, 0.14); animation: ap-wait-pulse 1.8s ease-in-out infinite; }
 .ap-steps span[data-status="done"] { border-color: #22c55e; color: #86efac; }
 .ap-steps span[data-status="failed"] { border-color: #ef4444; color: #fca5a5; }
 .ap-chip-link { all: unset; cursor: pointer; display: block; font-size: 12px; color: #e2e8f0; padding: 3px 6px; border-left: 2px solid var(--c); margin: 2px 0; border-radius: 0 6px 6px 0; }
@@ -175,3 +177,6 @@
 @container agscene (max-height: 520px) {
   .scene-root .hud-sub { max-height: 4.5em; overflow: auto; }
 }
+
+@keyframes ap-wait-pulse { 50% { box-shadow: 0 0 10px rgba(245, 158, 11, 0.55); border-color: #fbbf24; } }
+@media (prefers-reduced-motion: reduce) { .ap-steps span[data-status="waiting"] { animation: none; } }
