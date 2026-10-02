@@ -136,7 +136,7 @@ function Ticker() {
     lodTick(now);
     kitTick(now);
     labelTick(now, size.width, size.height);
-  });
+  }, -2);
   return null;
 }
 
@@ -222,6 +222,8 @@ function Mcp({ McpServer, Backend }: { McpServer?: ComponentType<McpServerSlotPr
 /**
  * Fades a resource slot (MCP server / backend) in and out with its `mix`: the slot draws in stage space at
  * item.pos, so the wrapper scales everything about that point (T(pos) S(mix) T(-pos)); hidden at mix 0.
+ * Runs before the slots' own useFrames (priority -1, after the ticker's -2): a px-clamped Label3D inside undoes its
+ * parents' world scale, and a stale (last-frame) scale would draw it many times too big while the slot fades in.
  */
 function Fade({ item, children }: { item: { pos: THREE.Vector3; mix: number }; children: ReactNode }) {
   const outer = useRef<THREE.Group>(null);
@@ -236,7 +238,7 @@ function Fade({ item, children }: { item: { pos: THREE.Vector3; mix: number }; c
     o.scale.setScalar(Math.max(0.0001, s));
     i.position.copy(item.pos).negate();
     o.visible = s > 0.002;
-  });
+  }, -1);
   return (
     <group ref={outer} scale={0.0001} visible={false}>
       <group ref={inner}>{children}</group>
@@ -282,7 +284,7 @@ function SideGraph({ galaxy, Graph }: { galaxy: Galaxy; Graph: ComponentType<Gra
     o.position.copy(G.pos);
     o.scale.setScalar(Math.max(0.0001, G.scale));
     o.visible = G.mix > 0.002;
-  });
+  }, -1);
   if (!on) return null;
   return (
     <group ref={g} scale={0.0001} visible={false}>
@@ -305,7 +307,7 @@ export function GraphStageSpace({ children }: { children?: ReactNode }) {
     const gs = Math.max(1e-4, kit.graph.scale);
     o.scale.setScalar(1 / gs);
     o.position.copy(kit.graph.pos).multiplyScalar(-1 / gs);
-  });
+  }, -1);
   return <group ref={g}>{children}</group>;
 }
 

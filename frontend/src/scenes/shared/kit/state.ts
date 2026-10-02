@@ -5,7 +5,7 @@
 import * as THREE from "three";
 import type { Instance, McpResource, McpServer, Run } from "../world";
 
-/** Which world plane the 2D layout lives on. "xy": camera looks down -z (neural). "xz": ground plane (subway). */
+/** Which world plane the 2D layout lives on. "xy": camera looks down -z (neural). "xz": ground plane (orbit, flow). */
 export type Plane = "xy" | "xz";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;

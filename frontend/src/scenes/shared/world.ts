@@ -1,5 +1,5 @@
 /**
- * Shared "world" for every 3D scene (/orbit, /neural, /subway, /city, /ocean, /circuit, /tunnel, /flow).
+ * Shared "world" for every 3D scene (/neural, /constellation, /orbit, /atom, /flow).
  *
  * Models a Hatchet + deepagents + FalkorDB system as LIVING agent instances:
  *   - runs:      Hatchet workflow runs (several concurrent), each with the steps it reports (e.g. plan → research → write),
@@ -771,6 +771,18 @@ export function setHasGraph(v: boolean, doNotify = true) {
   // sim starts with a graph: no fade, it is simply there from the first frame
   world.hasGraphAt = world.mode === "sim" ? -1e9 : performance.now();
   if (doNotify) notify();
+}
+
+/** An MCP server / backend stays fully lit this long after its last call or result, then its glow decays. */
+export const MCP_GLOW_HOLD_MS = 2500;
+/**
+ * 0..1 "recently active" glow of an MCP server or backend (its `activeAt`): 1 for MCP_GLOW_HOLD_MS after the last
+ * call/result, then exp(-rate * seconds). Shared by every theme so MCP activity stays visible alongside the graph
+ * reads that usually follow it.
+ */
+export function mcpGlow(activeAt: number, now: number, rate = 1.5): number {
+  const s = (now - activeAt - MCP_GLOW_HOLD_MS) / 1000;
+  return s <= 0 ? 1 : Math.exp(-s * rate);
 }
 
 /** An MCP server with no calls for this long (and none in flight) fades out; the next call fades it back in. */

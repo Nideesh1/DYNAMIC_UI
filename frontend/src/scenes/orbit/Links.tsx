@@ -7,7 +7,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, waitSeconds, world, type Comet, type McpCall } from "../shared/world";
+import { mcpGlow, TYPE_COLOR, waitSeconds, world, type Comet, type McpCall } from "../shared/world";
 import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { isScout, nodeWorld, reduced } from "./layout";
 import { isExpanded, lod } from "../shared/lod";
@@ -292,7 +292,7 @@ export function Satellite({ mcp }: McpServerSlotProps) {
     const t = clock.elapsedTime;
     g.current.position.copy(mcp.pos);
     g.current.position.y += satAlt(srv.slot);
-    const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.8);
+    const act = mcpGlow(srv.activeAt, now, 1.8);
     const busy = srv.inflight > 0;
     const sp = reduced ? 0.25 : 1;
     if (panels.current) panels.current.rotation.x += dt * (busy ? 2.4 : 0.35) * sp;
@@ -350,7 +350,7 @@ export function Probe({ mcp, backend }: BackendSlotProps) {
   useFrame(({ clock }) => {
     const now = performance.now();
     const busy = res.inflight > 0;
-    const act = Math.exp(-((now - res.activeAt) / 1000) * 1.5);
+    const act = mcpGlow(res.activeAt, now, 1.5);
     const beat = busy && !reduced ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 5) : 0;
     _bv.copy(backend.pos);
     _bv.y += satAlt(srv.slot) * 0.6;

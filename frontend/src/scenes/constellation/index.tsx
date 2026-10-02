@@ -35,7 +35,7 @@ export default function Scene() {
       gl={{ antialias: true }}
       fit={{ nRef: 4, min: 0.62, max: 1.6, minRadius: 5.5 }}
       agentRadius={1.3}
-      graph={{ natural: NEBULA_RX * 1.1, radius: 3.0 }}
+      graph={{ natural: NEBULA_RX * 1.1, radius: 3.6 }}
       Background={<Sky />}
       Agent={Star}
       RunMarker={RunGlow}

@@ -21,7 +21,7 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
 | Path | What | Published as |
 |---|---|---|
 | `backend/` | Python package `agentglow`: server + `watch()` + CLI. Built UI copied into `backend/agentglow/static/` | PyPI `agentglow` |
-| `frontend/` | React + react-three-fiber: 8 themes + HUD. Two builds: **app** (→ backend static) and **library** (`<AgentScene/>`) | npm `agentglow` |
+| `frontend/` | React + react-three-fiber: 5 themes + HUD. Two builds: **app** (→ backend static) and **library** (`<AgentScene/>`) | npm `agentglow` |
 | `examples/deepagents-hatchet/` | Hatchet + deepagents + MCP + FalkorDB, instrumented only via `agentglow.watch()` | - |
 | `docker-compose.yml` | agentglow + example stack (Hatchet, FalkorDB; Langfuse under profile `langfuse`) | - |
 

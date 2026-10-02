@@ -69,19 +69,18 @@ Nested `agentglow.agent(...)` = subagent; also `agentglow.mcp(...)`, `agentglow.
 cp .env.example .env                 # add one LLM key (OpenAI, Anthropic or Gemini) - that's all the setup
 docker compose up                    # then open http://localhost:8101 and press ▶ Run agents
 ```
+Pick a workflow next to the button: **Churn brief** (plan, research, write) or **Incident triage** (a runbook skill,
+parallel steps across two MCP servers, a review that fails once and retries, a postmortem).
 Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d`.
 
 ▶ [Watch the demo in HD](docs/media/hero.mp4)
 
-## 15 themes
+## 5 themes
 
 | | | |
 |:-:|:-:|:-:|
-| ![neural](docs/media/neural.jpg) **neural** | ![hive](docs/media/hive.jpg) **hive** | ![constellation](docs/media/constellation.jpg) **constellation** |
-| ![orbit](docs/media/orbit.jpg) **orbit** | ![forest](docs/media/forest.jpg) **forest** | ![mycelium](docs/media/mycelium.jpg) **mycelium** |
-| ![atom](docs/media/atom.jpg) **atom** | ![airport](docs/media/airport.jpg) **airport** | ![factory](docs/media/factory.jpg) **factory** |
-| ![city](docs/media/city.jpg) **city** | ![ocean](docs/media/ocean.jpg) **ocean** | ![subway](docs/media/subway.jpg) **subway** |
-| ![circuit](docs/media/circuit.jpg) **circuit** | ![tunnel](docs/media/tunnel.jpg) **tunnel** | ![flow](docs/media/flow.jpg) **flow** |
+| ![neural](docs/media/neural.jpg) **neural** | ![constellation](docs/media/constellation.jpg) **constellation** | ![orbit](docs/media/orbit.jpg) **orbit** |
+| ![atom](docs/media/atom.jpg) **atom** | ![flow](docs/media/flow.jpg) **flow** | |
 
 ## In your React / Next.js app
 
@@ -97,7 +96,7 @@ import { AgentScene } from "agentglow";
 ```
 | Prop | Default | |
 |---|---|---|
-| `theme` | `"neural"` | one of the 15 themes |
+| `theme` | `"neural"` | one of the 5 themes: `neural`, `constellation`, `orbit`, `atom`, `flow` |
 | `source` | `""` (same origin) | your `agentglow serve` URL (default port 8100). In a deployed app, use a URL your users' browsers can reach, e.g. `https://agentglow.yourco.com` |
 | `hud` | `true` | overlay panels (title, agent list, event log, stats); `hud={false}` = just the 3D scene |
 | `sim` | `false` | built-in fake agents, no server needed (also kicks in automatically if `source` is unreachable) |
@@ -107,7 +106,7 @@ import { AgentScene } from "agentglow";
 | `token` | - | viewer token minted by your backend; sent as `Authorization: Bearer` |
 
 ```tsx
-<AgentScene theme="hive" sim hud={false} style={{ height: 400 }} />   // demo background, no server
+<AgentScene theme="constellation" sim hud={false} style={{ height: 400 }} />   // demo background, no server
 ```
 Works in Next.js App Router out of the box (the package is `"use client"`). See [examples/react-embed](examples/react-embed).
 
@@ -152,10 +151,10 @@ shared server never receives prompts. `npx agentglow status` shows `prompts: cap
 | agents / subagents | shapes that spawn, think, wait and exit - subagents smaller, linked to their parent with directional edges |
 | LLM calls | pulses sized by tokens |
 | tool & MCP calls | MCP server + its backends (Postgres, Snowflake, Spark…) appear at the side when first called, with data-flow arrows; idle ones fade away |
-| DB / graph queries (`db.system`) | a knowledge graph appears at the side once agents read or write it (real nodes from FalkorDB if configured) |
+| DB / graph queries (`db.system`) | a knowledge graph appears at the side once agents read or write it (real nodes from FalkorDB if configured) and fades out with the run |
 | handoffs | agents chained with a message along the edge |
-| skills (Claude Code skills, `agentglow.skill`) | a skill badge on the agent using it |
-| Hatchet workflow runs | runs and their step-by-step progress |
+| skills (Claude Code, deepagents and OpenAI Agents skills, `agentglow.skill`) | a `skill:name` ring on the agent using it |
+| Hatchet workflow runs | runs and their steps, whatever they are named, including parallel steps and retries |
 
 **Agents are always the center.** Graphs, databases and MCP servers are side resources that only show up when used, and the camera
 frames everything calmly: one smooth zoom per burst of spawns, never a jittery in-and-out. Stats sit in a slim top bar;

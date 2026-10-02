@@ -7,15 +7,12 @@ when its span ends. Works with LangChain, LangGraph (incl. `langgraph-supervisor
 
 ![AgentGlow - neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.webp)
 
-15 themes:
+5 themes:
 
 | | | |
 |:-:|:-:|:-:|
-| ![neural](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/neural.jpg) **neural** | ![hive](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hive.jpg) **hive** | ![constellation](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/constellation.jpg) **constellation** |
-| ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/orbit.jpg) **orbit** | ![forest](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/forest.jpg) **forest** | ![mycelium](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/mycelium.jpg) **mycelium** |
-| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![airport](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/airport.jpg) **airport** | ![factory](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/factory.jpg) **factory** |
-| ![city](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/city.jpg) **city** | ![ocean](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/ocean.jpg) **ocean** | ![subway](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/subway.jpg) **subway** |
-| ![circuit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/circuit.jpg) **circuit** | ![tunnel](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/tunnel.jpg) **tunnel** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** |
+| ![neural](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/neural.jpg) **neural** | ![constellation](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/constellation.jpg) **constellation** | ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/orbit.jpg) **orbit** |
+| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** | |
 
 ## Quickstart
 

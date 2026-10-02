@@ -5,12 +5,8 @@
  * scales spacing by fit.spread and frames the camera. A preset never sees instances; only counts and extents.
  *
  *   radial  runs on a ring around the centre, subagents fan outward (1 run = centred, fanning down).
- *           Stretched to the free area's aspect. neural, orbit, atom, constellation, hive, mycelium, forest.
- *   radar   radial without stretch (a round scope), periphery on the rim. airport.
- *   lanes   runs are parallel horizontal lines stacked vertically, subagents stack on spurs below their
- *           parent. subway, tunnel, factory, circuit.
- *   grid    runs fill a grid of districts sized to the aspect. city.
- *   drift   radial with looser spacing (themes add their own drift to `live`). ocean, flow.
+ *           Stretched to the free area's aspect. neural, orbit, atom, constellation.
+ *   drift   radial with looser spacing (themes add their own drift to `live`). flow.
  *
  * Cluster balls (grouped mode) are spaced by the on-screen size of their count badge (clusterCell): badges are
  * px-clamped labels, so their world size follows the camera distance (fit.wpp).
@@ -113,21 +109,6 @@ function cell(ring = 0) {
   return clusterCellSize;
 }
 
-/**
- * Cluster balls in rows below the runs (lanes / grid presets): as many per row as fit under the core's width
- * (at least 2), rows spaced by the badge height. `b0` = layout b of the first row.
- */
-export function clusterRows(k: number, m: number, ctx: PresetCtx & { hw: number; hh: number }, b0: number, out: Point2) {
-  const c = cell();
-  const cols = Math.min(m, Math.max(2, Math.floor(Math.max(2 * ctx.hw + c.w * 0.6, c.w * 2) / c.w)));
-  const row = Math.floor(k / cols);
-  const inRow = Math.min(cols, m - row * cols);
-  // rows on a tilted ground plane are foreshortened on screen: stretch b so badges keep their screen gap
-  const fb = Math.min(1.7, 1 / Math.max(0.35, fit.foreshorten));
-  out.a = ((k % cols) - (inRow - 1) / 2) * c.w;
-  out.b = b0 - row * c.h * fb;
-}
-
 function ringCluster(k: number, m: number, ctx: PresetCtx & { hw: number; hh: number }, out: Point2, doStretch: boolean) {
   // compact ring just outside the runs (and the run labels above them), evenly spread over the active clusters;
   // neighbours sit at least one badge width apart
@@ -148,15 +129,6 @@ export const radial: LayoutPreset = {
   periphery: "sides",
 };
 
-export const radar: LayoutPreset = {
-  name: "radar",
-  local: { topGap: 3.2, fanLen: 3, subGap: 2.5, fan: "spread", stackGap: 2, pad: 1.2 },
-  run: (i, ctx, out) => ring(i, ctx, out, false, GAP),
-  cluster: (_lane, k, m, ctx, out) => ringCluster(k, m, ctx, out, false),
-  periphery: "rim",
-  round: true,
-};
-
 export const drift: LayoutPreset = {
   name: "drift",
   local: { topGap: 4, fanLen: 3.8, subGap: 3, fan: "spread", stackGap: 2.2, pad: 1.5 },
@@ -165,64 +137,5 @@ export const drift: LayoutPreset = {
   periphery: "sides",
 };
 
-/** Columns for n cells of size cw x ch that best match the free area's aspect. */
-export function bestCols(n: number, cw: number, ch: number, aspect: number) {
-  let best = 1;
-  let bestErr = Infinity;
-  for (let cols = 1; cols <= n; cols++) {
-    const rows = Math.ceil(n / cols);
-    const err = Math.abs(Math.log((cols * cw) / (rows * ch) / aspect));
-    if (err < bestErr - 1e-6) (bestErr = err), (best = cols);
-  }
-  return best;
-}
-
-/** room kept above each lane for its line label */
-const LANE_LABEL = 2.4;
-export const lanes: LayoutPreset = {
-  name: "lanes",
-  local: { topGap: 4.6, fanLen: 2, subGap: 1.6, fan: "stack", stackGap: 1.5, pad: 1.2, subShift: 2.8 },
-  run(i, ctx, out) {
-    const n = ctx.n;
-    const cw = 2 * ctx.hu + GAP * 2.5;
-    const ch = 2 * ctx.hv + GAP + LANE_LABEL;
-    const cols = bestCols(n, cw, ch, ctx.aspect);
-    const rows = Math.ceil(n / cols);
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const inRow = Math.min(cols, n - row * cols); // a partial last row stays centred
-    out.a = (col - (inRow - 1) / 2) * cw;
-    out.b = ((rows - 1) / 2 - row) * ch - LANE_LABEL / 2;
-    out.angle = -PI / 2;
-  },
-  cluster(_lane, k, m, ctx, out) {
-    // rows of interchanges under the lines
-    clusterRows(k, m, ctx, -(ctx.hh + 4), out);
-  },
-  periphery: "sides",
-};
-
-export const grid: LayoutPreset = {
-  name: "grid",
-  local: { topGap: 3.4, fanLen: 3, subGap: 2.4, fan: "spread", stackGap: 2, pad: 1.3 },
-  run(i, ctx, out) {
-    const n = ctx.n;
-    const cw = 2 * ctx.hu + GAP;
-    const ch = 2 * ctx.hv + GAP;
-    const cols = bestCols(n, cw, ch, ctx.aspect);
-    const rows = Math.ceil(n / cols);
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const inRow = Math.min(cols, n - row * cols);
-    out.a = (col - (inRow - 1) / 2) * cw;
-    out.b = ((rows - 1) / 2 - row) * ch;
-    out.angle = -PI / 2;
-  },
-  cluster(_lane, k, m, ctx, out) {
-    clusterRows(k, m, ctx, -(ctx.hh + 4), out);
-  },
-  periphery: "sides",
-};
-
-export const PRESETS = { radial, radar, drift, lanes, grid } as const;
+export const PRESETS = { radial, drift } as const;
 export type PresetName = keyof typeof PRESETS;

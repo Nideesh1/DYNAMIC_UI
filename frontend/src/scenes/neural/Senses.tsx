@@ -7,7 +7,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { mcpGlow, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
 import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { ARROW_GEO, ArrowPool, SPHERE_GEO, TUBE_GEO, additiveBasic, placeOnCurve, reduced, bezier, bowControl, clamp01, easeInOut, easeOut, glowSpriteMaterial, tubeMaterial } from "./fx";
 
@@ -69,7 +69,7 @@ export function Backend({ mcp, backend }: BackendSlotProps) {
     at.current?.position.copy(backend.pos);
     const now = performance.now();
     const busy = res.inflight > 0;
-    const act = Math.exp(-((now - res.activeAt) / 1000) * 1.5);
+    const act = mcpGlow(res.activeAt, now, 1.5);
     // idle = dim; the backend being queried lights up hard and pulses
     const beat = busy ? 0.5 + 0.5 * Math.sin(clock.elapsedTime * 5) : 0;
     const k2 = busy ? 1.6 + beat * 0.9 : 0.12 + act * 0.9;
@@ -172,7 +172,7 @@ export function Server({ mcp }: McpServerSlotProps) {
     at.current?.position.copy(mcp.pos);
     const now = performance.now();
     const busy = srv.inflight > 0;
-    const act = Math.exp(-((now - srv.activeAt) / 1000) * 1.5);
+    const act = mcpGlow(srv.activeAt, now, 1.5);
     const k = (busy ? 0.75 : 0.3) + act * 0.45;
     m.fill.color.copy(col).multiplyScalar(k * 0.45);
     m.line.color.copy(col).multiplyScalar(k * 2.2);

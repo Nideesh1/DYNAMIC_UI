@@ -313,8 +313,10 @@ function layoutRuns() {
   }
   ctx.n = order.length;
   // the periphery columns (MCP, side graph) eat horizontal room: the core aims for a narrower shape. Constant on
-  // purpose: a graph or server appearing later must not re-arrange the agents.
-  ctx.aspect = fit.aspect * (P.periphery === "sides" ? 0.72 : 1);
+  // purpose: a graph or server appearing later must not re-arrange the agents. A tilted ground plane ("xz") shows
+  // depth foreshortened, so the core aims for a deeper layout (bStretch = 1 / foreshortening, with hysteresis):
+  // stacked lanes / rows instead of one flat strip across the screen.
+  ctx.aspect = (fit.aspect * (P.periphery === "sides" ? 0.72 : 1)) / (kit.plane === "xz" ? bStretch : 1);
   ctx.hu = hu;
   ctx.hv = hv;
   for (let i = 0; i < order.length; i++) {

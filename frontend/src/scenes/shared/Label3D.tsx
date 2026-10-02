@@ -13,7 +13,7 @@
  *
  * Many labels: each label = 1 plate draw + 1 draw per text line, zero per-frame allocations, and a label faded
  * to 0 skips drawing entirely. For dynamic sets (graph-node tags etc.) use a fixed pool: render N <Label3D>
- * once, then per frame move `handle.object` (or a wrapper group), `setText`, `setOpacity` (see hive/Comb.tsx).
+ * once, then per frame move `handle.object` (or a wrapper group), `setText`, `setOpacity` (see neural/Cortex.tsx).
  * If draw calls ever matter at 100s of labels, troika's BatchedText (one draw for many texts) is the next step;
  * it needs `troika-three-text` imported directly, which the lib build would then bundle instead of sharing
  * drei's copy - stay on drei <Text> until that's worth it.
@@ -30,6 +30,8 @@ import { runWait, slotLabel, stepChips, useWorld, waitLabel, type Run } from "./
 
 /** kit/dim.ts skips this subtree (the label fades itself) */
 const NO_DIM = { kitNoDim: true };
+/** camera distance (world units) over which a label fades in: hidden closer than [0], full beyond [1] */
+const NEAR_FADE = [1.2, 3.2] as const;
 
 // ------------------------------------------------------------------ types
 /** A run of text with its own color (e.g. the active hatchet step). */
@@ -616,7 +618,9 @@ function Label3DInner(props: Label3DProps) {
     }
     // a finished agent's label dims with it (kit dim); its slot's other meshes are dimmed by kit/dim.ts
     const ag = scope.agent;
-    const a = s.cur * s.dc * (ag ? 1 - 0.55 * ag.dim : 1) * (1 - q.depthFade * THREE.MathUtils.smoothstep(dist, q.fadeRange[0], q.fadeRange[1]));
+    // labels right in front of the camera fade out (never a giant glyph across the screen when the view passes one)
+    const near = THREE.MathUtils.smoothstep(dist, NEAR_FADE[0], NEAR_FADE[1]);
+    const a = near * s.cur * s.dc * (ag ? 1 - 0.55 * ag.dim : 1) * (1 - q.depthFade * THREE.MathUtils.smoothstep(dist, q.fadeRange[0], q.fadeRange[1]));
     if (a <= 0.004) {
       b.visible = false;
       return;
