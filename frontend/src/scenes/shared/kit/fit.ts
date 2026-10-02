@@ -231,6 +231,8 @@ const IN_MS = 2000;
 const USER_HOLD_MS = 10000;
 const RESIZE_MS = 450;
 const STEADY_MS = 300;
+/** the first framing of a scene zooms in to at most this fraction of the theme's start distance */
+const FIRST_MIN = 0.75;
 /** content beyond this fraction of the free half extent counts as clipped (under a HUD panel / off canvas) */
 const CLIP_K = 0.985;
 
@@ -427,10 +429,11 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
       goTo = desired;
       goMs = s.want ? RESIZE_MS : 0;
       s.refit = false;
-    } else if (!s.framed && n && !following && steady >= STEADY_MS) {
-      // first content after an empty scene: frame it now (both ways), not only once it outgrows the theme's start
-      // distance; later changes go through the calm policy below
-      goTo = desired;
+    } else if (!s.framed && n && !following && steady >= STEADY_MS && now - Math.max(fitClock.activityAt, world.spawnHintAt) >= BATCH_QUIET_MS) {
+      // first content after an empty scene: frame it once it is quiet (both ways), not only once it outgrows the
+      // theme's start distance; later changes go through the calm policy below. Not closer than FIRST_MIN of the
+      // start distance: a lone first agent is usually joined by its subagents / MCP servers moments later.
+      goTo = Math.max(desired, Math.min(s.want, s.base * FIRST_MIN));
       goMs = OUT_MS;
     } else if (s.phase2) {
       // phase 2: one camera move to the layout at its new size (any direction: the camera hasn't moved yet),
