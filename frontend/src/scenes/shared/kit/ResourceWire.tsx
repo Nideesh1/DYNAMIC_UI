@@ -1,6 +1,6 @@
 /**
- * <ResourceWire> - the link from an MCP server to one of its backends, for Backend slots that don't draw their own
- * (flow, ocean, subway, tunnel). One pooled-free LineSegments polyline in stage space, server (t=0) -> backend
+ * <ResourceWire> - the link from an MCP server to one of its backends, for Backend slots that don't draw their own (flow).
+ * One pooled-free LineSegments polyline in stage space, server (t=0) -> backend
  * (t=1), with an optional arc (`lift`, stage +y) and sway (`wave`). Idle = faint; a call in flight = dashes flowing
  * out to the backend; a result = a bright pulse running back to the server; recently used = brighter (mcpGlow).
  * Theme look: `color`, `gain`, `y` (altitude of both ends on a ground plane; `yFrom` = server end), `lift`, `wave`.

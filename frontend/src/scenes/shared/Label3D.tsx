@@ -13,7 +13,7 @@
  *
  * Many labels: each label = 1 plate draw + 1 draw per text line, zero per-frame allocations, and a label faded
  * to 0 skips drawing entirely. For dynamic sets (graph-node tags etc.) use a fixed pool: render N <Label3D>
- * once, then per frame move `handle.object` (or a wrapper group), `setText`, `setOpacity` (see hive/Comb.tsx).
+ * once, then per frame move `handle.object` (or a wrapper group), `setText`, `setOpacity` (see neural/Cortex.tsx).
  * If draw calls ever matter at 100s of labels, troika's BatchedText (one draw for many texts) is the next step;
  * it needs `troika-three-text` imported directly, which the lib build would then bundle instead of sharing
  * drei's copy - stay on drei <Text> until that's worth it.

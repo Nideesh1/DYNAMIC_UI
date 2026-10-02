@@ -73,15 +73,12 @@ Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT
 
 ▶ [Watch the demo in HD](docs/media/hero.mp4)
 
-## 15 themes
+## 5 themes
 
 | | | |
 |:-:|:-:|:-:|
-| ![neural](docs/media/neural.jpg) **neural** | ![hive](docs/media/hive.jpg) **hive** | ![constellation](docs/media/constellation.jpg) **constellation** |
-| ![orbit](docs/media/orbit.jpg) **orbit** | ![forest](docs/media/forest.jpg) **forest** | ![mycelium](docs/media/mycelium.jpg) **mycelium** |
-| ![atom](docs/media/atom.jpg) **atom** | ![airport](docs/media/airport.jpg) **airport** | ![factory](docs/media/factory.jpg) **factory** |
-| ![city](docs/media/city.jpg) **city** | ![ocean](docs/media/ocean.jpg) **ocean** | ![subway](docs/media/subway.jpg) **subway** |
-| ![circuit](docs/media/circuit.jpg) **circuit** | ![tunnel](docs/media/tunnel.jpg) **tunnel** | ![flow](docs/media/flow.jpg) **flow** |
+| ![neural](docs/media/neural.jpg) **neural** | ![constellation](docs/media/constellation.jpg) **constellation** | ![orbit](docs/media/orbit.jpg) **orbit** |
+| ![atom](docs/media/atom.jpg) **atom** | ![flow](docs/media/flow.jpg) **flow** | |
 
 ## In your React / Next.js app
 
@@ -97,7 +94,7 @@ import { AgentScene } from "agentglow";
 ```
 | Prop | Default | |
 |---|---|---|
-| `theme` | `"neural"` | one of the 15 themes |
+| `theme` | `"neural"` | one of the 5 themes: `neural`, `constellation`, `orbit`, `atom`, `flow` |
 | `source` | `""` (same origin) | your `agentglow serve` URL (default port 8100). In a deployed app, use a URL your users' browsers can reach, e.g. `https://agentglow.yourco.com` |
 | `hud` | `true` | overlay panels (title, agent list, event log, stats); `hud={false}` = just the 3D scene |
 | `sim` | `false` | built-in fake agents, no server needed (also kicks in automatically if `source` is unreachable) |
@@ -107,7 +104,7 @@ import { AgentScene } from "agentglow";
 | `token` | - | viewer token minted by your backend; sent as `Authorization: Bearer` |
 
 ```tsx
-<AgentScene theme="hive" sim hud={false} style={{ height: 400 }} />   // demo background, no server
+<AgentScene theme="constellation" sim hud={false} style={{ height: 400 }} />   // demo background, no server
 ```
 Works in Next.js App Router out of the box (the package is `"use client"`). See [examples/react-embed](examples/react-embed).
 

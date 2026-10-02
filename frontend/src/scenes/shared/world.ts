@@ -1,5 +1,5 @@
 /**
- * Shared "world" for every 3D scene (/orbit, /neural, /subway, /city, /ocean, /circuit, /tunnel, /flow).
+ * Shared "world" for every 3D scene (/neural, /constellation, /orbit, /atom, /flow).
  *
  * Models a Hatchet + deepagents + FalkorDB system as LIVING agent instances:
  *   - runs:      Hatchet workflow runs (several concurrent), each with the steps it reports (e.g. plan → research → write),

@@ -3,7 +3,7 @@
  *
  * A kit theme renders <KitScene> with a layout preset and a handful of slot components. The kit decides WHERE
  * everything is and HOW BIG it is; the theme decides what it LOOKS like. A cross-cutting change (graph placement,
- * scaling, grouping, spacing) is one edit here instead of fifteen.
+ * scaling, grouping, spacing) is one edit here instead of one per theme.
  *
  * ---------------------------------------------------------------------------------------------- product rules
  *  1. Agents are always the centre. Visible runs are laid out around the stage centre by the theme's preset;
@@ -33,7 +33,7 @@
  *               graph (KitGraph), core extents; helpers agentLive / serverPos / backendPos / runLocal /
  *               graphToStage / stageToGraph / planePoint. One KitScene per page (like `world`).
  *  presets.ts   LayoutPreset = run anchor + fan angle for run i of n, local agent style, cluster ring/row,
- *               periphery style. Built in: radial, radar, lanes, grid, drift.
+ *               periphery style. Built in: radial, drift.
  *  layout.ts    kitTick(): membership -> run-local coords -> run anchors -> clusters/core/periphery -> easing.
  *  fit.ts       fit (scale/spread/label/aspect/insets/cam/wpp), fitTick(), <FitCamera> (frames the content's
  *               screen bounds, labels included, and centres them in the free area), measureInsets().
@@ -59,7 +59,7 @@
  */
 export { kit, kitSummary, reduced, agentLive, serverPos, backendPos, runLocal, graphToStage, stageToGraph, planePoint, planeA, planeB } from "./state";
 export type { Plane, KitAgent, KitRun, KitMcp, KitBackend, KitGraph } from "./state";
-export { PRESETS, radial, radar, lanes, grid, drift, bestCols, clusterRows, clusterCellSize } from "./presets";
+export { PRESETS, radial, drift, clusterCellSize } from "./presets";
 export type { LayoutPreset, LocalStyle, PresetCtx, PresetName } from "./presets";
 export { kitTick, kitExtents, kitActiveLanes, kitRoleU, config as kitConfig } from "./layout";
 export { fit, fitTick, setFitProfile, FitCamera, measureInsets, DEFAULT_FIT } from "./fit";

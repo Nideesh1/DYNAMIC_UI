@@ -19,7 +19,7 @@ import { AgentScene } from "agentglow";   // also pulls in agentglow's CSS
 ```
 
 `<AgentScene/>` fills its container, so give the container a size (here `.scene { position: fixed; inset: 0 }`).
-Props: `theme` (`neural` · `orbit` · `subway` · `city` · `ocean` · `circuit` · `tunnel` · `flow`), `source`,
+Props: `theme` (`neural` · `constellation` · `orbit` · `atom` · `flow`), `source`,
 `hud` (default `true`), `sim` (default `false`), `scope`, `run`, `token`, `className`, `style`.
 
 Server on another port/host? `VITE_AGENTGLOW_URL=http://localhost:8124 npm run dev`.
