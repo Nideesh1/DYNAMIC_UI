@@ -255,6 +255,37 @@ def test_run_webhook_gets_scope_dev_and_secure():
     assert c.get("/live/run").status_code == 401  # the workflow list is a viewer endpoint too
 
 
+def test_approve_webhook_auth_and_scope():
+    seen = []
+
+    def handler(req: httpx.Request):
+        import json
+
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json={"ok": True})
+
+    def waiting(c, sid, run, scope):
+        w = sp(sid + "w", run, scope=scope, parent=sid)
+        w["attributes"] = {"agentglow.run.id": run, "agentglow.wait": "approval", **({"agentglow.scope": scope} if scope else {})}
+        c.post("/v1/live", json=[{"kind": "start", "span": sp(sid, run, scope=scope)}, {"kind": "start", "span": w}])
+
+    c = TestClient(create_app(approve_webhook="http://trigger/approve", run_transport=httpx.MockTransport(handler), secret=SECRET))
+    waiting(c, "1", "ra", "alice")
+    waiting(c, "2", "rb", "bob")
+    body = {"run_id": "ra", "agent_id": "1", "approve": True}
+    assert c.post("/live/approve", json=body).status_code == 401
+    assert c.post("/live/approve", json=body, headers=bearer(make_token(SECRET, scope="bob"))).status_code == 403
+    assert c.post("/live/approve", json=body, headers=bearer(make_token(SECRET, run="rb"))).status_code == 403
+    assert c.post("/live/approve", json=body, headers=bearer(make_token(SECRET, scope="alice"))).json() == {"ok": True}
+    assert c.post("/live/approve", json={**body, "run_id": "rb", "agent_id": "2"}, headers=bearer(make_token(SECRET))).status_code == 200
+    assert [(e["run_id"], e.get("scope"), e["reason"]) for e in seen] == [("ra", "alice", "approval"), ("rb", "bob", "approval")]
+    # dev mode: the scope header narrows like everywhere else
+    c = TestClient(create_app(approve_webhook="http://trigger/approve", run_transport=httpx.MockTransport(handler)))
+    waiting(c, "1", "ra", "alice")
+    assert c.post("/live/approve", json=body, headers={"X-AgentGlow-Scope": "bob"}).status_code == 403
+    assert c.post("/live/approve", json=body).status_code == 200
+
+
 # ---------------------------------------------------------------------- python with-block tagging
 def _provider():
     exp = InMemorySpanExporter()

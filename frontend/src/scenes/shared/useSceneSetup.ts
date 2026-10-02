@@ -181,6 +181,7 @@ type Conn = {
 };
 let conn: Conn | null = null;
 let runAvailable = false;
+let approveAvailable = false;
 const subs = new Set<() => void>();
 const emit = () => subs.forEach((f) => f());
 
@@ -188,6 +189,42 @@ function setRunAvailable(v: boolean) {
   if (runAvailable !== v) {
     runAvailable = v;
     emit();
+  }
+}
+
+function setApproveAvailable(v: boolean) {
+  if (approveAvailable !== v) {
+    approveAvailable = v;
+    emit();
+  }
+}
+
+/** True when the server forwards approvals (health `approve: true`, AGENTGLOW_APPROVE_WEBHOOK): the HUD shows
+ * Approve / Reject on agents waiting on a human. */
+export function useApproveAvailable(): boolean {
+  return useSyncExternalStore(
+    (f) => (subs.add(f), () => subs.delete(f)),
+    () => approveAvailable,
+    () => false,
+  );
+}
+
+/** Approve / reject what an agent waits on (POST /live/approve). "ok", "gone" (409: nothing waiting there any more) or
+ * "error". The wait clearing itself arrives through the event stream. */
+export async function sendApproval(runId: string, agentId: string, approve: boolean): Promise<"ok" | "gone" | "error"> {
+  const source = conn?.source ?? "";
+  const auth = conn?.auth ?? {};
+  try {
+    const r = await fetch(`${source}/live/approve`, {
+      method: "POST",
+      headers: { ...authHeaders(auth), "content-type": "application/json" },
+      body: JSON.stringify({ run_id: runId, agent_id: agentId, approve }),
+    });
+    if (r.status === 404 || r.status === 405) setApproveAvailable(false);
+    if (r.status === 401 || r.status === 403) setUnauthorized(true);
+    return r.ok ? "ok" : r.status === 409 ? "gone" : "error";
+  } catch {
+    return "error";
   }
 }
 
@@ -292,6 +329,7 @@ function start(c: Conn, sim: boolean | "hf") {
       if (c.dead) return;
       setUnauthorized(true);
       setRunAvailable(false);
+      setApproveAvailable(false);
     };
     if (h === UNAUTHORIZED) return denied(); // no simulator fallback: say so in the HUD
     if (!h) {
@@ -299,6 +337,7 @@ function start(c: Conn, sim: boolean | "hf") {
       return useSim();
     }
     setMode("live");
+    setApproveAvailable(h.approve === true);
     const headers = authHeaders(c.auth);
     probeRun(c.source, c.auth, h).then((ok) => {
       if (c.dead) return;
@@ -342,6 +381,7 @@ function teardown(c: Conn) {
   if (conn === c) {
     conn = null;
     setRunAvailable(false);
+    setApproveAvailable(false);
     setRunWorkflows([]);
   }
 }

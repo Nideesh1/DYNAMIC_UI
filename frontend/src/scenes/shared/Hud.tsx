@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { useSceneConfig } from "./config";
 import { HUD_LAYOUT_EVENT } from "./kit/fit";
 import "./hud.css";
-import { startLiveRun, useRunAvailable, useRunWorkflows } from "./useSceneSetup";
+import { sendApproval, startLiveRun, useApproveAvailable, useRunAvailable, useRunWorkflows } from "./useSceneSetup";
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
 import { decisionTint } from "./kit/DecisionGlyph";
@@ -142,6 +142,7 @@ const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 function HudPanels({ title, subtitle, onClose, inset, children }: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; inset?: ReactNode; children?: ReactNode }) {
   const { embedded, scope, run: runFilter } = useSceneConfig();
   const canRun = useRunAvailable();
+  const canApprove = useApproveAvailable();
   const w = useWorld();
   const lastDec = w.ticker.find((e): e is Extract<WorldEvent, { type: "decision" }> => e.type === "decision");
   const [, tick] = useState(0);
@@ -368,6 +369,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
         </div>
       </aside>
 
+      {w.mode === "live" && canApprove && <ApprovalTray rail={side.collapsed} />}
       {children}
     </>
   );
@@ -539,6 +541,99 @@ export function RunButton() {
   );
 }
 
+// ------------------------------------------------------------------ live: optional POST /live/approve
+
+/** A live agent waiting on a human (the wait contract's reason, e.g. "approval", "human approval yes 12"). */
+export function needsHuman(i: Instance): boolean {
+  return isLive(i) && i.status === "waiting" && !!i.wait && /human|approv/i.test(i.wait.reason);
+}
+
+type Verdict = "approving" | "rejecting" | "approved" | "rejected" | "gone" | "error";
+/** per wait (agent id + reason + deadline), shared by the tray and the Selected panel; a new wait starts clean */
+const verdicts = new Map<string, Verdict>();
+const verdictSubs = new Set<() => void>();
+const waitKey = (i: Instance) => `${i.id}|${i.wait?.reason}|${i.wait?.until}`;
+
+async function decide(i: Instance, approve: boolean) {
+  const k = waitKey(i);
+  const set = (v: Verdict) => {
+    verdicts.set(k, v);
+    if (verdicts.size > 500) verdicts.delete(verdicts.keys().next().value as string);
+    verdictSubs.forEach((f) => f());
+  };
+  set(approve ? "approving" : "rejecting");
+  const r = await sendApproval(i.run, i.id, approve);
+  set(r === "ok" ? (approve ? "approved" : "rejected") : r);
+}
+
+const VERDICT_TEXT: Record<Verdict, string> = {
+  approving: "approving…", rejecting: "rejecting…", approved: "approved · resuming…", rejected: "rejected · resuming…",
+  gone: "no longer waiting", error: "failed, try again",
+};
+
+/** Approve / Reject for one waiting agent; after a click, its state until the wait clears (from the event stream). */
+function ApproveButtons({ i, compact }: { i: Instance; compact?: boolean }) {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const f = () => bump((x) => x + 1);
+    verdictSubs.add(f);
+    return () => void verdictSubs.delete(f);
+  }, []);
+  const v = verdicts.get(waitKey(i));
+  const locked = v !== undefined && v !== "error";
+  return (
+    <div className={`hud-approve${compact ? " is-compact" : ""}`} data-verdict={v}>
+      {!locked && (
+        <>
+          <button className="ha-yes" onClick={() => decide(i, true)} title={`Approve: ${i.wait?.reason}`}>
+            Approve
+          </button>
+          <button className="ha-no" onClick={() => decide(i, false)} title={`Reject: ${i.wait?.reason}`}>
+            Reject
+          </button>
+        </>
+      )}
+      {v && <span role="status">{VERDICT_TEXT[v]}</span>}
+    </div>
+  );
+}
+
+const TRAY_MAX = 3;
+
+/** Bottom-left "needs you" tray: agents waiting on a human, soonest deadline first, each with Approve / Reject. */
+function ApprovalTray({ rail }: { rail: boolean }) {
+  const w = useWorld();
+  const waiting = [...w.instances.values()].filter(needsHuman).sort((a, b) => (a.wait!.until || Infinity) - (b.wait!.until || Infinity));
+  if (!waiting.length) return null;
+  const now = Date.now();
+  return (
+    <section className={`hud hud-approvals${rail ? " is-rail" : ""}`} aria-label="Agents waiting on you">
+      <h4>
+        Needs you <em>{waiting.length}</em>
+      </h4>
+      <ul>
+        {waiting.slice(0, TRAY_MAX).map((i) => {
+          const left = i.wait!.until ? Math.max(0, Math.round((i.wait!.until - now) / 1000)) : null;
+          return (
+            <li key={i.id} style={{ ["--c" as string]: TYPE_COLOR[i.type] }}>
+              <button className="ha-who" onClick={() => selectInstance(i.id)} title={`${i.name} · ${shortRun(i.run)}\n${waitLabel(i.wait!)}`}>
+                <i />
+                <b>{i.name}</b>
+                <span>
+                  {i.wait!.reason}
+                  {left !== null && ` · ${left}s`}
+                </span>
+              </button>
+              <ApproveButtons i={i} compact />
+            </li>
+          );
+        })}
+      </ul>
+      {waiting.length > TRAY_MAX && <p>+{waiting.length - TRAY_MAX} more waiting (Agents → waiting)</p>}
+    </section>
+  );
+}
+
 // ------------------------------------------------------------------ sidebar: Agents tab + Selected inspector
 
 type StatusFilter = "all" | "alive" | "thinking" | "waiting" | "done";
@@ -677,6 +772,7 @@ function runWaitText(run: Run): string {
 
 function AgentDetail({ i }: { i: Instance }) {
   const w = useWorld();
+  const canApprove = useApproveAvailable() && w.mode === "live";
   const run = w.runs.get(i.run);
   const chips = run?.hasSteps ? stepChips(run) : null;
   const parent = getInstance(i.parent);
@@ -690,6 +786,7 @@ function AgentDetail({ i }: { i: Instance }) {
       <div className="ap-status" data-status={isLive(i) ? i.status : "done"}>
         {isLive(i) ? (i.status === "waiting" && i.wait ? waitLabel(i.wait) : i.status) : `finished (${i.status})`} · alive {age(i)}
       </div>
+      {canApprove && needsHuman(i) && <ApproveButtons i={i} />}
       <dl className="ap-stats">
         <div>
           <dt>tokens</dt>

@@ -208,3 +208,32 @@
 
 @keyframes ap-wait-pulse { 50% { box-shadow: 0 0 10px rgba(245, 158, 11, 0.55); border-color: #fbbf24; } }
 @media (prefers-reduced-motion: reduce) { .ap-steps span[data-status="waiting"] { animation: none; } }
+
+/* ── Approve / Reject: agents waiting on a human (POST /live/approve), in Selected and the bottom-left tray ── */
+.hud-approve { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.hud-approve button { border: 1px solid transparent; border-radius: 999px; padding: 5px 13px; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.hud-approve .ha-yes { background: linear-gradient(135deg, #34d399, #22d3ee); color: #03050b; }
+.hud-approve .ha-no { background: rgba(251, 59, 92, 0.14); border-color: rgba(251, 113, 133, 0.6); color: #fecdd3; }
+.hud-approve .ha-yes:hover { filter: brightness(1.1); }
+.hud-approve .ha-no:hover { background: rgba(251, 59, 92, 0.28); }
+.hud-approve span { font-size: 11px; color: #94a3b8; }
+.hud-approve[data-verdict="approved"] span, .hud-approve[data-verdict="approving"] span { color: #86efac; }
+.hud-approve[data-verdict="rejected"] span, .hud-approve[data-verdict="rejecting"] span, .hud-approve[data-verdict="error"] span { color: #fda4af; }
+.hud-approve.is-compact { margin-top: 0; flex: none; gap: 4px; }
+.hud-approve.is-compact button { padding: 3px 9px; font-size: 11px; }
+.hud-approvals { left: 12px; bottom: 12px; z-index: 9; width: max-content; max-width: min(460px, calc(100% - 320px - 36px)); padding: 8px 10px; font-size: 12px; box-sizing: border-box; border-color: rgba(245, 158, 11, 0.45); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), 0 0 18px rgba(245, 158, 11, 0.12); }
+.hud-approvals.is-rail { max-width: min(460px, calc(100% - 76px)); }
+.hud-approvals h4 { margin: 0 0 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #fcd34d; display: flex; gap: 6px; align-items: baseline; }
+.hud-approvals h4 em { font-style: normal; font-variant-numeric: tabular-nums; color: #fde68a; }
+.hud-approvals ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.hud-approvals li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hud-approvals .ha-who { all: unset; cursor: pointer; flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; padding: 2px 4px; border-radius: 6px; }
+.hud-approvals .ha-who:hover { background: rgba(148, 163, 255, 0.1); }
+.hud-approvals .ha-who i { flex: 0 0 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); align-self: center; }
+.hud-approvals .ha-who b { color: #e2e8f0; font-weight: 650; white-space: nowrap; }
+.hud-approvals .ha-who span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fbbf24; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.hud-approvals p { margin: 6px 0 0; font-size: 11px; color: #64748b; }
+@container agscene (max-width: 719px) {
+  .scene-root .hud-approvals { max-width: calc(100% - 76px); padding: 6px 8px; }
+  .scene-root .hud-approvals .ha-who span { display: none; }
+}
