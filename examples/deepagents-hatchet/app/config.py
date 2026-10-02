@@ -35,6 +35,12 @@ APPROVAL_TIMEOUT_S = int(os.environ.get("APPROVAL_TIMEOUT_S", "1800"))  # auto-a
 # (Legacy OBS_MODEL=<gemini model> still works.)
 MODEL = os.environ.get("AGENT_MODEL") or (f"google_genai:{os.environ['OBS_MODEL']}" if os.environ.get("OBS_MODEL") else "google_genai:gemini-3.8-flash")
 
+# deepagents builds every agent model from its "<provider>:<model>" string (create_deep_agent(model=MODEL)) via its provider
+# profiles: built-in `openai` -> Responses API. Our only addition: low temperature / low thinking for Gemini.
+from deepagents import ProviderProfile, register_provider_profile  # noqa: E402
+
+register_provider_profile("google_genai", ProviderProfile(init_kwargs={"temperature": 0.2, "thinking_level": "low"}))
+
 # Optional: Langfuse over plain OTLP - on when keys are set (scripts/gen-obs-env.sh) unless LANGFUSE_EXPORT=0.
 # Start Langfuse with `docker compose --profile langfuse up -d`.
 LANGFUSE_PK, LANGFUSE_SK = os.environ.get("OBS_LANGFUSE_PUBLIC_KEY", ""), os.environ.get("OBS_LANGFUSE_SECRET_KEY", "")

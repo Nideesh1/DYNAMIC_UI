@@ -46,7 +46,7 @@ ROUNDS = 3
 tracer = trace.get_tracer("deepagents-hatchet.vendor")
 
 
-# ROUTER: model spec per route ("" = AGENT_MODEL via make_model()); small defaults per AGENT_MODEL provider.
+# ROUTER: model spec per route ("" = AGENT_MODEL); small defaults per AGENT_MODEL provider.
 _SMALL = {"anthropic": "anthropic:claude-haiku-4-5", "openai": "openai:gpt-5-mini", "google_genai": "google_genai:gemini-3.5-flash-lite"}
 MODEL_ROUTES = {
     "small": os.environ.get("ROUTER_SMALL_MODEL") or _SMALL.get(MODEL.split(":", 1)[0], ""),

@@ -16,6 +16,7 @@ from datetime import timedelta
 
 from . import config  # noqa: F401  (must be first: Hatchet env)
 
+from deepagents.profiles.provider import apply_provider_profile
 from hatchet_sdk import Context, Hatchet
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
@@ -39,17 +40,10 @@ class Plan(BaseModel):
 
 
 def make_model(spec: str | None = None) -> BaseChatModel:
-    """Chat model from `spec` or AGENT_MODEL (e.g. google_genai:gemini-3.8-flash, openai:gpt-5.6-luna,
-    anthropic:claude-sonnet-5-5). Low temperature / low thinking for Gemini only; OpenAI uses the Responses API,
-    as deepagents does for an `openai:` model string (newer OpenAI models reject tools on chat completions)."""
+    """Model object for `spec` or AGENT_MODEL, only where one is needed (with_structured_output, per-call model swaps,
+    the decide judge). Same provider profiles as create_deep_agent(model="<provider>:<model>") (see config.py)."""
     spec = spec or MODEL
-    provider = spec.split(":", 1)[0] if ":" in spec else ""
-    kwargs: dict = {}
-    if provider == "google_genai":
-        kwargs = {"temperature": 0.2, "thinking_level": "low"}
-    elif provider == "openai":
-        kwargs = {"use_responses_api": True}
-    return init_chat_model(spec, **kwargs)
+    return init_chat_model(spec, **apply_provider_profile(spec))
 
 
 agent_smoke = hatchet.workflow(name=WORKFLOW, input_validator=BriefInput)

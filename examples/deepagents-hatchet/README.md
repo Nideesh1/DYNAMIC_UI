@@ -170,5 +170,7 @@ Models are built with LangChain `init_chat_model(AGENT_MODEL)`, so any of these 
 | `openai:<model>` e.g. `openai:gpt-5-mini` | `OPENAI_API_KEY` |
 | `anthropic:claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
 
-Gemini runs with `thinking_level=low` and temperature 0.2; Anthropic and OpenAI run with provider defaults.
+Agents get the spec string (`create_deep_agent(model=AGENT_MODEL)`) and deepagents builds the model through its provider profiles:
+OpenAI uses the Responses API (deepagents' built-in `openai` profile), Gemini runs with `thinking_level=low` and temperature 0.2
+(one `register_provider_profile` call in `app/config.py`), Anthropic runs with provider defaults.
 The legacy `OBS_MODEL=<gemini model>` is still honored when `AGENT_MODEL` is unset.

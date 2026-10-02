@@ -61,16 +61,16 @@ async def vendor_agents() -> dict:
     erp_tools = await load_mcp_tools(erp_mcp.SERVER, config.ERP_MCP_URL)
     email_tools = await load_mcp_tools(email_mcp.SERVER, config.EMAIL_MCP_URL)
     erp_read = [t for t in erp_tools if t.name in ("vendor_scorecard", "renewal_calendar", "vendor_spend")]
-    routes = {route: make_model(spec or None) for route, spec in MODEL_ROUTES.items()}
+    routes = {route: make_model(spec or None) for route, spec in MODEL_ROUTES.items()}  # objects: request.override(model=) takes a BaseChatModel
     agents = {
-        "procurement_analyst": create_deep_agent(model=make_model(), tools=erp_tools + VENDOR_WRITE_TOOLS, system_prompt=PROCUREMENT, name="procurement_analyst"),
-        "negotiator": create_deep_agent(model=make_model(), tools=email_tools, system_prompt=NEGOTIATOR, name="negotiator"),
-        "plan_writer": create_deep_agent(model=make_model(), tools=PLAN_TOOLS, system_prompt=PLAN_WRITER, name="plan_writer"),
+        "procurement_analyst": create_deep_agent(model=config.MODEL, tools=erp_tools + VENDOR_WRITE_TOOLS, system_prompt=PROCUREMENT, name="procurement_analyst"),
+        "negotiator": create_deep_agent(model=config.MODEL, tools=email_tools, system_prompt=NEGOTIATOR, name="negotiator"),
+        "plan_writer": create_deep_agent(model=config.MODEL, tools=PLAN_TOOLS, system_prompt=PLAN_WRITER, name="plan_writer"),
     }
     for cat in erp_mcp.CATEGORIES:
         name = f"{slug(cat)}_analyst"
         agents[name] = create_deep_agent(
-            model=routes["large"], tools=VENDOR_READ_TOOLS + erp_read, system_prompt=CATEGORY.format(cat=cat), name=name,
+            model=MODEL_ROUTES["large"] or config.MODEL, tools=VENDOR_READ_TOOLS + erp_read, system_prompt=CATEGORY.format(cat=cat), name=name,
             middleware=[RouteModel(cat, routes)],  # ROUTER decision: small or large model for this analyst's run
         )
     print(f"vendor agents ready · mcp tools: {[t.name for t in erp_tools + email_tools]}")
@@ -85,13 +85,13 @@ async def incident_agents() -> dict:
     obs_tools = await load_mcp_tools(obs_mcp.SERVER, config.OBS_MCP_URL)
     gh_tools = await load_mcp_tools(gh_mcp.SERVER, config.GITHUB_MCP_URL)
     skills_fs = FilesystemBackend(root_dir=AGENT_FS, virtual_mode=True)
-    reviewer = dict(model=make_model(), tools=[], system_prompt=REVIEWER, name="reviewer")
+    reviewer = dict(model=config.MODEL, tools=[], system_prompt=REVIEWER, name="reviewer")
     print(f"incident agents ready · mcp tools: {[t.name for t in obs_tools + gh_tools]}")
     return {
-        "triage_lead": create_deep_agent(model=make_model(), tools=[], system_prompt=TRIAGE, skills=SKILLS, backend=skills_fs, name="triage_lead"),
-        "logs_hunter": create_deep_agent(model=make_model(), tools=obs_tools, system_prompt=LOGS_HUNTER, name="logs_hunter"),
+        "triage_lead": create_deep_agent(model=config.MODEL, tools=[], system_prompt=TRIAGE, skills=SKILLS, backend=skills_fs, name="triage_lead"),
+        "logs_hunter": create_deep_agent(model=config.MODEL, tools=obs_tools, system_prompt=LOGS_HUNTER, name="logs_hunter"),
         "code_sleuth": create_deep_agent(
-            model=make_model(),
+            model=config.MODEL,
             tools=gh_tools,
             system_prompt=CODE_SLEUTH,
             subagents=[{"name": "dep_mapper", "description": "Maps service dependencies in the knowledge graph (FalkorDB).", "system_prompt": DEP_MAPPER, "tools": GRAPH_TOOLS}],
@@ -101,7 +101,7 @@ async def incident_agents() -> dict:
         # CHECK decision on the verdict; reviewer_strict (attempt 1, DEMO_FORCE_FIRST_REVIEW_FAIL=1) also rejects a pass
         "reviewer_strict": create_deep_agent(**reviewer, middleware=[GroundedCheck(force_fail=True)]),
         "reviewer": create_deep_agent(**reviewer, middleware=[GroundedCheck()]),
-        "postmortem_writer": create_deep_agent(model=make_model(), tools=[], system_prompt=POSTMORTEM, name="postmortem_writer"),
+        "postmortem_writer": create_deep_agent(model=config.MODEL, tools=[], system_prompt=POSTMORTEM, name="postmortem_writer"),
     }
 
 
@@ -111,7 +111,7 @@ async def lifespan():
     agentglow.register_mcp(SERVER, RESOURCES, url=config.AGENTGLOW_URL)
     mcp_tools = await load_mcp_tools()
     researcher = create_deep_agent(
-        model=make_model(),
+        model=config.MODEL,
         tools=[],
         system_prompt=RESEARCHER,
         subagents=[
@@ -120,7 +120,7 @@ async def lifespan():
         ],
         name="researcher",
     )
-    writer = create_deep_agent(model=make_model(), tools=WRITE_TOOLS, system_prompt=WRITER, name="writer")
+    writer = create_deep_agent(model=config.MODEL, tools=WRITE_TOOLS, system_prompt=WRITER, name="writer")
     print(f"agents ready · mcp tools: {[t.name for t in mcp_tools]}")
     yield {"researcher": researcher, "writer": writer, **(await incident_agents()), **(await vendor_agents())}
 
