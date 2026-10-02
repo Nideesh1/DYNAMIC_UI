@@ -6,7 +6,7 @@ import "./hud.css";
 import { startLiveRun, useRunAvailable } from "./useSceneSetup";
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
-import { getInstance, isDone, isLive, selectInstance, STEPS, TYPE_COLOR, useWorld, waitSeconds, world, type Instance, type WorldEvent } from "./world";
+import { getInstance, isDone, isLive, selectInstance, stepChips, TYPE_COLOR, useWorld, waitSeconds, world, type Instance, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -574,6 +574,7 @@ function AgentList() {
 function AgentDetail({ i }: { i: Instance }) {
   const w = useWorld();
   const run = w.runs.get(i.run);
+  const chips = run?.hasSteps ? stepChips(run) : null;
   const parent = getInstance(i.parent);
   const children = [...w.instances.values(), ...w.archive.values()].filter((c) => c.parent === i.id);
   const pending = [...w.mcpPending.values()].filter((p) => p.instance === i.id);
@@ -606,13 +607,14 @@ function AgentDetail({ i }: { i: Instance }) {
       <section>
         <h4>Run</h4>
         <p>{run ? run.topic : i.run}</p>
-        {run?.hasSteps && (
+        {run && chips && (
           <div className="ap-steps">
-            {STEPS.map((s) => (
-              <span key={s} data-status={run.steps[s]}>
+            {chips.shown.map((s) => (
+              <span key={s} data-status={run.steps[s]} title={`${s}: ${run.steps[s]}`}>
                 {s}
               </span>
             ))}
+            {chips.more > 0 && <span title={run.stepOrder.slice(-chips.more).map((s) => `${s}: ${run.steps[s]}`).join("\n")}>+{chips.more}</span>}
           </div>
         )}
       </section>

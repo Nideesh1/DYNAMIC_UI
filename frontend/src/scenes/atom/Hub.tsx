@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine, type LabelSeg } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, hash01, isLive, useWorld, world, type Run } from "../shared/world";
+import { RUN_LINGER_MS, STEP_SLOTS, hash01, slotStatus, isLive, useWorld, world, type Run } from "../shared/world";
 import { fit, kit, runLocal, type KitRun, type RunSlotProps } from "../shared/kit";
 import { AMBER, BLUE, ICE, PINK, WHITE, additive, clamp01, easeOut, glowSprite, hubs, reduced, runTops } from "./fx";
 
@@ -101,7 +101,7 @@ export function RunAtom({ run: kr }: RunSlotProps) {
     () => ({
       core: glowSprite(new THREE.Color("#7a5cff").multiplyScalar(0.35)),
       cloud: glowSprite("#000"),
-      beads: STEPS.map(() => additive("#fff")),
+      beads: STEP_SLOTS.map(() => additive("#fff")),
     }),
     [],
   );
@@ -139,12 +139,12 @@ export function RunAtom({ run: kr }: RunSlotProps) {
     mat.uniforms.uGain.value = (0.55 + 0.45 * live) * fade * (0.7 + 0.3 * grow);
     m.cloud.color.copy(col).multiplyScalar(0.22 * fade * live * breathe * grow);
     // Hatchet step beads circle the nucleus (amber = running, ice = done)
-    for (let k = 0; k < STEPS.length; k++) {
+    for (let k = 0; k < STEP_SLOTS.length; k++) {
       const b = beadRefs.current[k];
       if (!b) continue;
       b.visible = !!run?.hasSteps;
       if (!run?.hasSteps) continue;
-      const st = run.steps[STEPS[k]];
+      const st = slotStatus(run, k);
       const a = (k / 3) * Math.PI * 2 + (reduced ? 0 : t * 0.35);
       b.position.set(Math.cos(a) * 0.72, Math.sin(a) * 0.72 * 0.42, Math.sin(a) * 0.3);
       const pulse = 0.5 + 0.5 * Math.sin(t * 4);
@@ -167,8 +167,8 @@ export function RunAtom({ run: kr }: RunSlotProps) {
         <sprite material={m.cloud} scale={4.2} position={[0, 0, -0.6]} />
         <sprite material={m.core} scale={1.8} />
         <primitive object={data.mesh} />
-        {STEPS.map((st, k) => (
-          <mesh key={st} ref={(x) => void (beadRefs.current[k] = x)} geometry={BEAD_GEO} material={m.beads[k]} visible={false} />
+        {STEP_SLOTS.map((k) => (
+          <mesh key={k} ref={(x) => void (beadRefs.current[k] = x)} geometry={BEAD_GEO} material={m.beads[k]} visible={false} />
         ))}
       </group>
       <group ref={labelG}>{kr.run && <RunLabel run={kr.run} color={`#${col.getHexString()}`} />}</group>

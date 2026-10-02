@@ -2,7 +2,8 @@
  * Shared "world" for every 3D scene (/orbit, /neural, /subway, /city, /ocean, /circuit, /tunnel, /flow).
  *
  * Models a Hatchet + deepagents + FalkorDB system as LIVING agent instances:
- *   - runs:      Hatchet workflow runs (several concurrent), each with steps plan → research → write
+ *   - runs:      Hatchet workflow runs (several concurrent), each with the steps it reports (e.g. plan → research → write),
+ *                in first-seen order; parallel steps can run at once and a retried step goes failed → running → done
  *   - instances: agent instances spawned during a run (planner, researcher, N scouts fanned out, writer);
  *                each is born (spawn), works (thinking/waiting), and exits (done/failed) - then fades out
  *   - comets:    messages between instances (handoffs, delegations, results)
@@ -16,7 +17,9 @@
 import { useSyncExternalStore } from "react";
 
 export type AgentType = "planner" | "researcher" | "graph_scout" | "records_scout" | "data_scout" | "writer";
-export type StepName = "plan" | "research" | "write";
+/** Any workflow-defined step name (the backend scrubs and caps it). */
+export type StepName = string;
+export type StepStatus = "queued" | "running" | "done" | "failed";
 export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "failed";
 
 // ------------------------------------------------------------------ event contract (v2)
@@ -51,7 +54,13 @@ export const AGENT_TYPES: { type: AgentType; label: string; color: string }[] = 
 ];
 export const TYPE_COLOR = Object.fromEntries(AGENT_TYPES.map((a) => [a.type, a.color])) as Record<AgentType, string>;
 export const TYPE_LABEL = Object.fromEntries(AGENT_TYPES.map((a) => [a.type, a.label])) as Record<AgentType, string>;
-export const STEPS: StepName[] = ["plan", "research", "write"];
+/**
+ * Scenes draw a run's steps in 3 fixed slots (the planner / researcher / writer positions): slot 0 = the 1st step seen,
+ * slot 1 = the 2nd, slot 2 = everything after. A 3-step workflow (plan / research / write) maps 1:1.
+ */
+export const STEP_SLOTS = [0, 1, 2];
+/** Step chips / label segments shown per run before collapsing the rest into "+N". */
+export const MAX_STEP_CHIPS = 6;
 export const RUN_COLORS = ["#818cf8", "#f472b6", "#34d399", "#fb923c", "#38bdf8", "#e879f9"];
 export const KIND_COLOR: Record<string, string> = {
   Customer: "#f59e0b",
@@ -143,16 +152,48 @@ export type Run = {
   color: string;
   slot: number; // 0..N stable lane/position for scenes
   status: "started" | "completed" | "failed";
-  steps: Record<StepName, "queued" | "running" | "done" | "failed">;
+  /** status of every step seen so far; a step is only known once its first event arrives */
+  steps: Record<StepName, StepStatus>;
+  /** step names in first-seen order */
+  stepOrder: StepName[];
   /** true once a step event arrives (e.g. Hatchet); plain agent runs have no steps */
   hasSteps: boolean;
   startedAt: number;
   endedAt: number;
   handoffAt: number;
-  handoffFrom: StepName;
-  handoffTo: StepName;
+  /** handoff between step SLOTS (see STEP_SLOTS), never within one */
+  handoffFrom: number;
+  handoffTo: number;
+  /** the step that finished most recently (handoff source) */
+  lastDone: StepName;
   final: string;
 };
+/** Which of the 3 scene slots a step is drawn in (see STEP_SLOTS). */
+export function stepSlot(r: Run, step: StepName): number {
+  return Math.min(Math.max(r.stepOrder.indexOf(step), 0), STEP_SLOTS.length - 1);
+}
+function slotNames(r: Run, k: number): StepName[] {
+  return k < STEP_SLOTS.length - 1 ? r.stepOrder.slice(k, k + 1) : r.stepOrder.slice(k);
+}
+/** A slot's status: running if any of its steps runs, failed if any (last attempt) failed, done once all are done. */
+export function slotStatus(r: Run, k: number): StepStatus {
+  const st = slotNames(r, k).map((s) => r.steps[s]);
+  if (!st.length) return "queued";
+  return st.includes("running") ? "running" : st.includes("failed") ? "failed" : st.every((x) => x === "done") ? "done" : "queued";
+}
+/** A slot's caption: its step, or the running (else latest) one plus "+N" when the last slot holds several; "" if none yet. */
+export function slotLabel(r: Run, k: number): string {
+  const names = slotNames(r, k);
+  if (names.length < 2) return names[0] ?? "";
+  const cur = names.find((s) => r.steps[s] === "running") ?? names[names.length - 1];
+  return `${cur} +${names.length - 1}`;
+}
+/** Steps for chips / label lines: the first MAX_STEP_CHIPS in order, plus how many more are hidden. */
+export function stepChips(r: Run, max = MAX_STEP_CHIPS): { shown: StepName[]; more: number } {
+  const n = r.stepOrder.length;
+  const cut = n > max ? max - 1 : n; // the "+N" chip takes the last place
+  return { shown: r.stepOrder.slice(0, cut), more: n - cut };
+}
 export type Comet = { id: number; run: string; from: string; to: string; start: number; dur: number; text: string };
 /** External MCP servers agents call (persistent "satellites"; registered on first use). */
 export type McpResource = { name: string; kind: ResourceKind; activeAt: number; inflight: number; calls: number };
@@ -290,13 +331,15 @@ export function apply(ev: WorldEvent) {
           color: RUN_COLORS[slot % RUN_COLORS.length],
           slot,
           status: "started",
-          steps: { plan: "queued", research: "queued", write: "queued" },
+          steps: {},
+          stepOrder: [],
           hasSteps: false,
           startedAt: now,
           endedAt: 0,
           handoffAt: 0,
-          handoffFrom: "plan",
-          handoffTo: "plan",
+          handoffFrom: 0,
+          handoffTo: 0,
+          lastDone: "",
           final: "",
         });
         world.stats.runs++;
@@ -315,12 +358,21 @@ export function apply(ev: WorldEvent) {
       const r = world.runs.get(ev.run_id);
       if (!r) break;
       r.hasSteps = true;
-      const prev = STEPS.find((s) => r.steps[s] === "running");
-      r.steps[ev.step] = ev.status;
-      if (ev.status === "running" && prev && prev !== ev.step) {
-        r.handoffAt = now;
-        r.handoffFrom = prev;
-        r.handoffTo = ev.step;
+      if (!(ev.step in r.steps)) r.stepOrder.push(ev.step);
+      const was = r.steps[ev.step];
+      r.steps[ev.step] = ev.status; // a retry just overwrites: failed → running → done
+      if (ev.status === "done") r.lastDone = ev.step;
+      if (ev.status === "running" && was !== "running") {
+        // hand off from the step that finished last, else from one still running; skipped within a slot
+        // (parallel siblings, retries in place)
+        const prev = r.lastDone || r.stepOrder.find((s) => s !== ev.step && r.steps[s] === "running");
+        const from = prev ? stepSlot(r, prev) : -1;
+        const to = stepSlot(r, ev.step);
+        if (from >= 0 && from !== to) {
+          r.handoffAt = now;
+          r.handoffFrom = from;
+          r.handoffTo = to;
+        }
       }
       break;
     }

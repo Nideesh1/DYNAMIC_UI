@@ -26,7 +26,7 @@ import interUrl from "./fonts/inter-latin-500-normal.woff";
 import monoUrl from "./fonts/jetbrains-mono-latin-500-normal.woff";
 import { fit } from "./kit/fit";
 import { LabelScope, labels, newLabelEntry, registerLabel, unregisterLabel, type LabelKind } from "./kit/labels";
-import { STEPS, useWorld, type Run } from "./world";
+import { slotLabel, stepChips, useWorld, type Run } from "./world";
 
 /** kit/dim.ts skips this subtree (the label fades itself) */
 const NO_DIM = { kitNoDim: true };
@@ -235,11 +235,13 @@ export function runStepsLine(
   const finished = run.status !== "started";
   if (!run.hasSteps) return [{ text: finished ? (run.status === "failed" ? (fallback[2] ?? "failed") : fallback[1]) : fallback[0], color: c.base }];
   const segs: LabelSeg[] = [{ text: "hatchet · ", color: c.base }];
-  STEPS.forEach((st, i) => {
+  const { shown, more } = stepChips(run);
+  shown.forEach((st, i) => {
     if (i) segs.push({ text: " › ", color: c.base });
     const state = run.steps[st];
     segs.push({ text: st, color: state === "running" ? c.current : state === "done" ? c.done : state === "failed" ? "#ff5d5d" : (c.queued ?? dimHex(c.base)) });
   });
+  if (more) segs.push({ text: ` +${more}`, color: c.base });
   return segs;
 }
 const dimTmp = new THREE.Color();
@@ -250,6 +252,13 @@ const dimHex = (h: string) => "#" + dimTmp.set(h).lerp(BG, 0.45).getHexString();
 export function GraphLabel3D({ prefix = "", suffix = "", ...props }: Omit<Label3DProps, "text"> & { prefix?: string; suffix?: string }) {
   const w = useWorld();
   return <Label3D declutter="resource" {...props} text={prefix + w.graphLabel + suffix} />;
+}
+
+/** A step slot's caption (`prefix` + its step name, e.g. "gate · plan"); renders nothing until a step lands in the slot. */
+export function SlotLabel3D({ run, slot, prefix = "", ...props }: Omit<Label3DProps, "text"> & { run: Run; slot: number; prefix?: string }) {
+  useWorld();
+  const name = slotLabel(run, slot);
+  return name ? <Label3D {...props} text={prefix + name} /> : null;
 }
 
 /** In-scene label. Suspends (renders nothing) only until the bundled font is parsed, once per app. */

@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, isLive, world, type AgentType, type Run, type StepName } from "../shared/world";
+import { RUN_LINGER_MS, STEP_SLOTS, isLive, slotStatus, stepChips, world, type AgentType, type Run } from "../shared/world";
 import { fit, kit, kitRoleU, runLocal, type KitRun, type RunSlotProps } from "../shared/kit";
 import { AVENUE_GAP, clamp01, easeInOut, reduced, STEP_COLOR } from "./layout";
 
@@ -18,7 +18,8 @@ const _x = new THREE.Vector3();
 const _z = new THREE.Vector3();
 const _d = new THREE.Vector3();
 const _m = new THREE.Matrix4();
-const STEP_ROLE: Record<StepName, AgentType> = { plan: "planner", research: "researcher", write: "writer" };
+/** step slot → the role position its gate sits at */
+const STEP_ROLE: AgentType[] = ["planner", "researcher", "writer"];
 const PLANE = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 const OUTLINE = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.5, 0, -0.5), new THREE.Vector3(0.5, 0, -0.5), new THREE.Vector3(0.5, 0, 0.5), new THREE.Vector3(-0.5, 0, 0.5)]);
 
@@ -35,7 +36,7 @@ export function lotOf(r: KitRun, out: Lot): Lot {
   return out;
 }
 
-function Gate({ run, step, gref }: { run: Run; step: StepName; gref: (g: THREE.Group | null) => void }) {
+function Gate({ run, slot, gref }: { run: Run; slot: number; gref: (g: THREE.Group | null) => void }) {
   const mats = useMemo(
     () => ({
       frame: new THREE.MeshBasicMaterial({ toneMapped: false }),
@@ -47,7 +48,7 @@ function Gate({ run, step, gref }: { run: Run; step: StepName; gref: (g: THREE.G
   const column = useRef<THREE.Mesh>(null);
   const c = useMemo(() => new THREE.Color(), []);
   useFrame(({ clock }) => {
-    const st = run.steps[step];
+    const st = slotStatus(run, slot);
     const t = clock.elapsedTime;
     const pulse = st === "running" ? 1.6 + Math.sin(t * (reduced ? 2 : 6)) * 0.7 : st === "done" ? 1.8 : st === "failed" ? 2 : 0.55;
     c.set(STEP_COLOR[st] ?? STEP_COLOR.queued);
@@ -79,6 +80,14 @@ function Gate({ run, step, gref }: { run: Run; step: StepName; gref: (g: THREE.G
       </mesh>
     </group>
   );
+}
+
+/** district sign sub-line: every step (up to MAX_STEP_CHIPS, then +N) colored by status */
+function stepLine(run: Run) {
+  const { shown, more } = stepChips(run);
+  const segs = shown.map((s, q) => ({ text: `${q ? "  ·  " : ""}${s.toUpperCase()}`, color: run.steps[s] === "queued" ? "#64748b" : STEP_COLOR[run.steps[s]] }));
+  if (more) segs.push({ text: `  ·  +${more}`, color: "#64748b" });
+  return segs;
 }
 
 export function District({ run: kr }: RunSlotProps) {
@@ -140,10 +149,10 @@ function DistrictBody({ kr, run }: { kr: KitRun; run: Run }) {
     outline.scale.set(W, 1, D);
     avenue.current?.position.set(cx, 0.025, av);
     avenue.current?.scale.set(W - 0.4, 1, 1.7 * sp);
-    STEPS.forEach((s, i) => {
+    STEP_SLOTS.forEach((i) => {
       const gg = gates.current[i];
       if (gg) {
-        gg.position.set(kitRoleU(STEP_ROLE[s]), 0, av);
+        gg.position.set(kitRoleU(STEP_ROLE[i]), 0, av);
         gg.scale.setScalar(Math.max(0.6, sp * 0.95));
         gg.visible = run.hasSteps;
       }
@@ -151,8 +160,8 @@ function DistrictBody({ kr, run }: { kr: KitRun; run: Run }) {
     for (let q = 0; q < 2; q++) {
       const m = seg.current[q];
       if (!m) continue;
-      const x0 = kitRoleU(STEP_ROLE[STEPS[q]]);
-      const x1 = kitRoleU(STEP_ROLE[STEPS[q + 1]]);
+      const x0 = kitRoleU(STEP_ROLE[q]);
+      const x1 = kitRoleU(STEP_ROLE[q + 1]);
       m.position.set((x0 + x1) / 2, 0.04, av);
       m.scale.set(Math.max(0.01, Math.abs(x1 - x0) - 1.9 * sp), 1, 0.07);
       m.visible = run.hasSteps;
@@ -167,8 +176,7 @@ function DistrictBody({ kr, run }: { kr: KitRun; run: Run }) {
     lineMat.opacity = vis;
     // avenue segments light up once the handoff has passed through them
     for (let q = 0; q < 2; q++) {
-      const next = STEPS[q + 1];
-      const st = run.steps[next];
+      const st = slotStatus(run, q + 1);
       const on = st !== "queued";
       segMats[q].color.copy(runCol).multiplyScalar((on ? 1.6 : 0.25) * vis);
     }
@@ -202,14 +210,14 @@ function DistrictBody({ kr, run }: { kr: KitRun; run: Run }) {
         if (i.subagent) scouts++;
       }
     });
-    const key = `${run.steps.plan}${run.steps.research}${run.steps.write}${alive}${scouts}${run.status}`;
+    const key = `${run.stepOrder.map((s) => run.steps[s]).join()}${alive}${scouts}${run.status}`;
     if (key !== lastKey.current && label.current) {
       lastKey.current = key;
       const count = `${alive} agents${scouts ? ` · fan-out ×${scouts}` : ""}${run.status !== "started" ? ` · ${run.status}` : ""}`;
       label.current?.setText(
         [{ text: run.topic, color: "#f8fafc" }, { text: `   ${count}`, color: "#a5b4fc" }],
         run.hasSteps
-          ? STEPS.map((s, q) => ({ text: `${q ? "  ·  " : ""}${s.toUpperCase()}`, color: run.steps[s] === "queued" ? "#64748b" : STEP_COLOR[run.steps[s]] }))
+          ? stepLine(run)
           : [{ text: run.status === "started" ? "district active" : "district closed", color: "#94a3b8" }],
       );
     }
@@ -227,8 +235,8 @@ function DistrictBody({ kr, run }: { kr: KitRun; run: Run }) {
       {[0, 1].map((q) => (
         <mesh key={q} ref={(m) => void (seg.current[q] = m)} geometry={PLANE} material={segMats[q]} />
       ))}
-      {STEPS.map((s, i) => (
-        <Gate key={s} run={run} step={s} gref={(g) => void (gates.current[i] = g)} />
+      {STEP_SLOTS.map((i) => (
+        <Gate key={i} run={run} slot={i} gref={(g) => void (gates.current[i] = g)} />
       ))}
       <group ref={car} visible={false}>
         <mesh>

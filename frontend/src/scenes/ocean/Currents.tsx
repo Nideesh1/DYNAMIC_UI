@@ -6,15 +6,16 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, type Ref } from "react";
 import * as THREE from "three";
-import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEPS, world, type AgentType, type StepName } from "../shared/world";
+import { Label3D, SlotLabel3D, type Label3DHandle } from "../shared/Label3D";
+import { RUN_LINGER_MS, STEP_SLOTS, slotStatus, world, type AgentType } from "../shared/world";
 import { fit, kitRoleU, type RunSlotProps } from "../shared/kit";
 import { CURRENT_V } from "./Jellies";
 import { MOTION, clamp01, dotTexture, hash, waveY, waveZ } from "./layout";
 import { makeCurrentMaterial } from "./materials";
 
 const STATUS_TINT: Record<string, string> = { queued: "#1e3a5f", running: "#ffffff", done: "#5eead4", failed: "#ef4444" };
-const STEP_ROLE: Record<StepName, AgentType> = { plan: "planner", research: "researcher", write: "writer" };
+/** step slot → the role position its buoy sits at */
+const STEP_ROLE: AgentType[] = ["planner", "researcher", "writer"];
 /** the tube is built over x in [-1, 1] (WAVE world units of wave per unit) and stretched to the run's span */
 const WAVE = 10;
 const _c = new THREE.Color();
@@ -50,10 +51,11 @@ export function Current({ run: kr }: RunSlotProps) {
     return m;
   }, [kr.color]);
   const mats = useMemo(() => [mat, glowMat], [mat, glowMat]);
+  const run = kr.run ?? world.runs.get(kr.id);
   const runColor = useMemo(() => new THREE.Color(kr.color), [kr.color]);
-  const coreMats = useMemo(() => STEPS.map(() => new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true })), []);
-  const ringMats = useMemo(() => STEPS.map(() => new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })), []);
-  const haloMats = useMemo(() => STEPS.map(() => new THREE.SpriteMaterial({ map: dotTexture(), toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })), []);
+  const coreMats = useMemo(() => STEP_SLOTS.map(() => new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true })), []);
+  const ringMats = useMemo(() => STEP_SLOTS.map(() => new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })), []);
+  const haloMats = useMemo(() => STEP_SLOTS.map(() => new THREE.SpriteMaterial({ map: dotTexture(), toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })), []);
   const runnerMat = useMemo(() => new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true }), []);
   useEffect(
     () => () => {
@@ -127,15 +129,14 @@ export function Current({ run: kr }: RunSlotProps) {
 
     // anemone buoys lit by step status (Hatchet runs only), under the role slots
     const hasSteps = !!r?.hasSteps;
-    for (let k = 0; k < STEPS.length; k++) {
-      const s = STEPS[k];
+    for (let k = 0; k < STEP_SLOTS.length; k++) {
       const bg = buoys.current[k];
       if (!bg) continue;
       bg.visible = hasSteps;
       if (!r || !hasSteps) continue;
-      const u = kitRoleU(STEP_ROLE[s]);
+      const u = kitRoleU(STEP_ROLE[k]);
       bg.position.set(u, cy + waveAt(u), waveAtZ(u));
-      const stt = r.steps[s];
+      const stt = slotStatus(r, k);
       const appear = clamp01((reveal - uOf(u)) * 6);
       const running = stt === "running";
       const wob = running ? 0.5 + 0.5 * Math.sin(t * 5.5) : 0;
@@ -166,8 +167,8 @@ export function Current({ run: kr }: RunSlotProps) {
       <mesh ref={runner} material={runnerMat} visible={false}>
         <sphereGeometry args={[1, 16, 12]} />
       </mesh>
-      {STEPS.map((s, k) => (
-        <group key={s} ref={(g) => void (buoys.current[k] = g)} visible={false}>
+      {STEP_SLOTS.map((k) => (
+        <group key={k} ref={(g) => void (buoys.current[k] = g)} visible={false}>
           <mesh material={coreMats[k]}>
             <icosahedronGeometry args={[0.2, 2]} />
           </mesh>
@@ -184,7 +185,7 @@ export function Current({ run: kr }: RunSlotProps) {
             <torusGeometry args={[0.36, 0.012, 6, 40]} />
           </mesh>
           <sprite material={haloMats[k]} scale={2.4} />
-          <Label3D position={[0, -0.75, 0]} text={s} color={kr.color} textColor="#bae6fd" uppercase letterSpacing={0.08} size={0.22} opacity={0.8} pxRange={[7.5, 10.5]} />
+          {run && <SlotLabel3D run={run} slot={k} position={[0, -0.75, 0]} color={kr.color} textColor="#bae6fd" uppercase letterSpacing={0.08} size={0.22} opacity={0.8} pxRange={[7.5, 10.5]} />}
         </group>
       ))}
       <group ref={labelG}>
