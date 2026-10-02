@@ -18,6 +18,8 @@
  *              fit seen in it; zoom IN only when the gain is > IN_BAND and content has been stable IN_STABLE_MS,
  *              slowly (IN_MS). Between the bands nothing moves (hysteresis: no oscillation). Exiting agents keep
  *              counting until faded, so an exit never zooms in right away.
+ *   first      the first content after an empty scene is framed right away (zoom in or out, one OUT_MS move), so a
+ *              run never stays small at the theme's start distance.
  *   clipped    content (or a framed label) that ends up under a HUD panel / off the canvas at the current framing
  *              (it grew or moved within the bands) counts as "needs zoom-out": same batch window, one move that
  *              also re-centres the projection shift.
@@ -256,6 +258,8 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     phase2: 0, phase2Ms: 0,
     // the instantaneous fit has been steady (<0.5%/frame) since: layout / grouping / labels still easing otherwise
     lastDesired: 0, steadySince: 0,
+    // the committed framing was fitted to real content (false while the scene is empty: the theme's start distance)
+    framed: false,
   });
   // camera-space points of this frame (x, y, z, r, then a screen-fixed rect around the point in view-angle units
   // [x0, x1, y0, y1] for px-clamped labels), grown on demand; the visitors are created once
@@ -344,7 +348,9 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     if (now - s.lastMeasure > 700) {
       s.lastMeasure = now;
       const was = fit.insets;
-      fit.insets = measureInsets(gl.domElement, s.aspect);
+      // content aspect for the panel cut, floored at 0.9: tall content (one run fanning down) would otherwise cut the
+      // wide top bar from the LEFT (a narrow free column), and the next MCP server / graph then zooms the camera out
+      fit.insets = measureInsets(gl.domElement, Math.max(0.9, s.aspect));
       // the free area moved (sidebar collapsed / expanded): re-fit like a resize (quick, smooth), not per text tweak
       if (s.hudMoved) {
         const d = Math.max(Math.abs(was.top - fit.insets.top), Math.abs(was.right - fit.insets.right), Math.abs(was.bottom - fit.insets.bottom), Math.abs(was.left - fit.insets.left));
@@ -416,10 +422,16 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     let goTo = -1;
     let goMs = 0;
     let goDecide = false;
+    if (!n) s.framed = false;
     if (!s.want || s.refit) {
       goTo = desired;
       goMs = s.want ? RESIZE_MS : 0;
       s.refit = false;
+    } else if (!s.framed && n && !following && steady >= STEADY_MS) {
+      // first content after an empty scene: frame it now (both ways), not only once it outgrows the theme's start
+      // distance; later changes go through the calm policy below
+      goTo = desired;
+      goMs = OUT_MS;
     } else if (s.phase2) {
       // phase 2: one camera move to the layout at its new size (any direction: the camera hasn't moved yet),
       // once that layout (and any regrouping it caused) has settled
@@ -462,6 +474,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     }
     if (goTo >= 0) {
       s.outSince = s.inSince = 0;
+      if (n) s.framed = true;
       if (goDecide && scaleMoves() && !reduced) {
         fitCommit(now, goMs * 0.8);
         s.phase2 = now + goMs * 0.8 + 250;

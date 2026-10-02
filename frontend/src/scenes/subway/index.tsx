@@ -54,7 +54,7 @@ export default function Scene() {
       subtitle="neon transit map · each hatchet run is a line, each agent a train, MCP servers are airports, the knowledge graph is Graph Central"
       preset="lanes"
       plane="xz"
-      camera={{ position: [0, 29, 35], fov: 46 }}
+      camera={{ position: [0, 34, 27], fov: 46 }}
       controls={{ maxPolarAngle: Math.PI * 0.42, minPolarAngle: Math.PI * 0.12 }}
       bg="#02040a"
       gl={{ preserveDrawingBuffer: true }}

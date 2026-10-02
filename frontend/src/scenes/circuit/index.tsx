@@ -14,7 +14,7 @@ import { Chip } from "./Chip";
 import { Fx } from "./Fx";
 import { Bus, busExtents } from "./Lanes";
 import { BANK_NATURAL } from "./layout";
-import { Port } from "./Ports";
+import { Port, BackendChip } from "./Ports";
 
 const _p = new THREE.Vector3();
 /** bus labels, the chips' holo cores, port icons and power-core badges stay in view */
@@ -59,7 +59,7 @@ export default function Scene() {
       subtitle="Hatchet buses · agent chips · graph memory bank · MCP I/O ports"
       preset="lanes"
       plane="xz"
-      camera={{ position: [1.6, 21, 30], fov: 50, near: 0.1, far: 300 }}
+      camera={{ position: [1.6, 27, 23], fov: 50, near: 0.1, far: 300 }}
       controls={{ minPolarAngle: 0.6, maxPolarAngle: 1.42 }}
       bg="#010309"
       fit={{ nRef: 4, min: 0.62, max: 1.3, minRadius: 5.5 }}
@@ -70,6 +70,7 @@ export default function Scene() {
       Agent={Chip}
       RunMarker={Bus}
       McpServer={Port}
+      Backend={BackendChip}
       GraphResource={Bank}
       cluster={{ radius: 1.1, variant: "orb", glowGain: 0.85 }}
       clusterOffset={[0, 2.2, 0]}
