@@ -77,5 +77,5 @@ Models are built with LangChain `init_chat_model(AGENT_MODEL)`, so any of these 
 | `openai:<model>` e.g. `openai:gpt-5-mini` | `OPENAI_API_KEY` |
 | `anthropic:claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
 
-Gemini runs with `thinking_level=low` and temperature 0.2, Anthropic with temperature 0.2, OpenAI with provider defaults.
+Gemini runs with `thinking_level=low` and temperature 0.2; Anthropic and OpenAI run with provider defaults.
 The legacy `OBS_MODEL=<gemini model>` is still honored when `AGENT_MODEL` is unset.
