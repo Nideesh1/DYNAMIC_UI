@@ -34,6 +34,21 @@ later same-name supervisor graphs under R are aliases of it, and any agent graph
 text = the supervisor's text that turn, else the latest user request). Handoff tools emit no `tool` event; the
 supervisor is `waiting` while a worker runs. Prebuilt react agents' `agent` node has CHAIN children (RunnableSequence,
 call_model, should_continue): only spans whose kind is LLM (or unknown) produce `llm` events.
+
+Long-running Hatchet runs (durable tasks, docs/SPEC.md "Waits"): a run stays open while any of its spans is open, which
+includes waits. A wait is a span with `agentglow.wait` = what it waits on ("approval", "vendor reply", or "sleep" for a
+timer), optionally `agentglow.wait.until` = deadline / wake-up time (epoch ms, epoch s, or ISO-8601), set at span start;
+or HatchetInstrumentor's `hatchet.durable.wait_for` span (`ctx.aio_wait_for` / `aio_sleep_for` / `aio_wait_for_event`,
+signal key `sleep:<N><s|m|h>-<i>` or `event:<key>-<i>`; it carries only `hatchet.step_run_id`, so the run comes from the
+step span with that id). While a wait is open: `step` status `waiting` (+ `reason`, `until`) and the owning agent (if any)
+`agent waiting` (+ `reason`, `until`); when it ends the step is `running` again. Hatchet evicts a durable task that waits
+longer than its eviction TTL (default 15 min): the task is cancelled, so the wait and its step end together (status
+unset) and the step restarts later with the same step run id. A step that ends with its wait (within PARK_SLACK_MS)
+therefore stays `waiting` (parked) until a step starts again; a parked run is held until the wait's deadline + the idle
+grace, else until RUN_MAX_IDLE_MS. Only when nothing is open and nothing is parked does the idle grace apply. Any run
+with no span activity for RUN_MAX_IDLE_MS (default 24 h) is completed so nothing leaks. Child workflow runs
+(`hatchet.parent_workflow_run_id` of a run still open) fold into their parent run; parallel instances of one step name
+(fan-out) keep the step `running` until the last one ends.
 """
 from __future__ import annotations
 
@@ -42,9 +57,10 @@ import os
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
-from .scrub import SKILL_KEY, skill_name, step_name
+from .scrub import SKILL_KEY, session_title, skill_name, step_name
 
 LLM_OPS = {"chat", "text_completion", "generate_content"}
 LG_NODES = {"model", "tools", "agent", "call_model", "__start__", "__end__"}
@@ -65,6 +81,14 @@ log = logging.getLogger("agentglow")
 # run is over. Complete quickly once the run has produced its final answer, otherwise only after a long quiet period.
 HATCHET_GRACE_MS = int(os.environ.get("AGENTGLOW_HATCHET_IDLE_MS", "60000"))
 HATCHET_FINAL_GRACE_MS = 3000
+# hard upper bound: a run with no span activity for this long completes even with open spans / waits
+RUN_MAX_IDLE_MS = int(os.environ.get("AGENTGLOW_RUN_MAX_IDLE_MS", str(24 * 3600 * 1000)))
+PARK_SLACK_MS = 1000  # a step ending this soon after its wait ended was (likely) evicted mid-wait
+HATCHET_WAIT_SPAN = "hatchet.durable.wait_for"
+SLEEP_KEY_RE = re.compile(r"^sleep:(\d+)([smh])-\d+$")
+EVENT_KEY_RE = re.compile(r"^event:(.+)-\d+$")
+UNIT_MS = {"s": 1000, "m": 60_000, "h": 3_600_000}
+MAX_STEP_RUNS = 20_000
 
 
 MAX_SCOPED_RUNS = 20_000
@@ -124,6 +148,21 @@ def text_of(v: Any, n: int = 160) -> str:
     return " ".join(str(out).split())[:n]
 
 
+def _deadline(v: Any) -> int | None:
+    """`agentglow.wait.until` → epoch ms: a number (ms, or seconds when < 1e11) or an ISO-8601 string."""
+    if isinstance(v, bool) or v is None or v == "":
+        return None
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        try:
+            dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return int((dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp() * 1000)
+    return int(n * 1000 if n < 1e11 else n)
+
+
 @dataclass
 class Span:
     id: str
@@ -150,6 +189,8 @@ class Span:
     team: str | None = None  # langgraph-supervisor team graph: id of its supervisor agent
     persist: bool = False  # supervisor agent: exits when its team graph ends, not when its first turn ends
     skill: str | None = None  # `agentglow.skill` name once its skill start was emitted
+    wait: tuple | None = None  # (reason, until ms | None, declared by the app) while this span is a wait
+    wait_step: str | None = None  # step span the wait belongs to
 
 
 @dataclass
@@ -164,6 +205,7 @@ class Agent:
     request: str = ""  # latest user message its LLM saw (langgraph-supervisor delegation text)
     skill_paths: set = field(default_factory=set)  # deepagents SKILL.md paths already counted as a skill use
     done: bool = False  # exited (a top-level agent started meanwhile is a parallel step, not its successor)
+    step_span: str | None = None  # step span it runs in (Hatchet waits are shown on it)
 
 
 @dataclass
@@ -180,6 +222,13 @@ class Run:
     final: bool = False
     synthetic: str | None = None
     last_text: str = ""  # last top-level agent's output: final fallback at completion
+    last_ts: int = 0  # latest span start/end seen (RUN_MAX_IDLE_MS bound)
+    step_runs: dict = field(default_factory=dict)  # hatchet.step_run_id -> step span id
+    step_open: dict = field(default_factory=dict)  # step name -> open instances (fan-out, parallel children)
+    batch_failed: set = field(default_factory=set)  # steps with a failed instance among the open ones
+    waits: dict = field(default_factory=dict)  # open wait span id -> Span
+    last_wait: tuple | None = None  # (end ts, step span id, reason, until) of the last wait that ended
+    parked: dict = field(default_factory=dict)  # step name -> (reason, until): ended with its wait (evicted)
 
 
 class Mapper:
@@ -193,6 +242,7 @@ class Mapper:
         self.newly_scoped: list[str] = []  # runs whose scope became known since the Hub last looked
         self.skill_sets: dict[str, set] = {}  # trace/thread -> known deepagents skills_metadata paths (bounded)
         self.shell_calls: dict[str, None] = {}  # hosted shell_call ids already scanned (FIFO, bounded)
+        self.step_runs: dict[str, str] = {}  # hatchet.step_run_id -> run id (Hatchet wait spans carry only that)
 
     def _note_scope(self, s: "Span") -> None:
         if s.run in self.scopes:
@@ -244,7 +294,7 @@ class Mapper:
     def tick(self, now_ms: int) -> list[dict]:
         out: list[dict] = []
         for r in list(self.runs.values()):
-            if r.done_at is not None and now_ms >= r.done_at:
+            if (r.done_at is not None and now_ms >= r.done_at) or (r.last_ts and now_ms - r.last_ts >= RUN_MAX_IDLE_MS):
                 self._complete(r, now_ms, out)
         return out
 
@@ -252,7 +302,9 @@ class Mapper:
     def _start(self, d: dict, out: list) -> Span:
         a = dict(d.get("attributes") or {})
         parent = self.spans.get(d.get("parent_span_id") or "")
-        run_id = str(a.get("hatchet.workflow_run_id") or a.get("agentglow.run.id") or (parent.run if parent else d["trace_id"]))
+        up = a.get("hatchet.parent_workflow_run_id")  # child workflow run: shown inside its (still open) parent run
+        run_id = str((up if up and str(up) in self.runs else None) or a.get("hatchet.workflow_run_id") or a.get("agentglow.run.id")
+                     or self.step_runs.get(str(a.get("hatchet.step_run_id") or "")) or (parent.run if parent else d["trace_id"]))
         s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a, run_id)
         self.spans[s.id] = s
         self._note_scope(s)
@@ -267,11 +319,22 @@ class Mapper:
             out.append({"type": "run", "run_id": run_id, "status": "started", "topic": self._topic(s), "workflow": self._workflow(s), "ts": ts})
         run.open += 1
         run.done_at = None
+        run.last_ts = max(run.last_ts, ts)
         run.hatchet = run.hatchet or "hatchet.workflow_run_id" in a
 
         step = step_name(a.get("agentglow.step") or (a.get("hatchet.step_name") if s.name.startswith("hatchet.start_step_run") else None))
         if step:  # any workflow-defined step name passes (no whitelist); scrubbed and capped
             s.step = step
+            srid = a.get("hatchet.step_run_id")
+            if srid:
+                run.step_runs[str(srid)] = s.id
+                self.step_runs[str(srid)] = run_id
+                while len(self.step_runs) > MAX_STEP_RUNS:
+                    self.step_runs.pop(next(iter(self.step_runs)))
+            for p in [p for p in run.parked if p != step]:  # the run moved on: a parked step was done after all
+                out.append({"type": "step", "run_id": run_id, "step": p, "status": "done", "ts": ts})
+            run.parked.clear()
+            run.step_open[step] = run.step_open.get(step, 0) + 1
             out.append({"type": "step", "run_id": run_id, "step": s.step, "status": "running", "ts": ts})
 
         name = self._agent_name(s)
@@ -297,6 +360,9 @@ class Mapper:
         self._skill_start(s, out, ts)
         if "agentglow.final" in a:
             self._final(s.run, a["agentglow.final"], out, ts)
+        s.wait = self._wait_of(s)
+        if s.wait:
+            self._wait_start(s, run, out, ts)
         return s
 
     def _end(self, d: dict, out: list) -> None:
@@ -382,23 +448,53 @@ class Mapper:
                 self._final(s.run, result, out, ts)
             elif run and not s.subagent and result:
                 run.last_text = result
-        if s.step:
+        if s.wait and run:
+            self._wait_end(s, run, out, ts)
+        if s.step and not run:
             out.append({"type": "step", "run_id": s.run, "step": s.step, "status": "failed" if failed else "done", "ts": ts})
 
         if run:
             run.open = max(0, run.open - 1)
+            run.last_ts = max(run.last_ts, ts)
             if s.step:
-                (run.failed_steps.add if failed else run.failed_steps.discard)(s.step)
+                self._step_end(s, run, failed, out, ts)
             if failed and run.root == s.id:
                 run.failed = True
             if run.open == 0:
-                if run.hatchet:
-                    run.done_at = ts + (HATCHET_FINAL_GRACE_MS if run.final else HATCHET_GRACE_MS)
-                else:
+                if not run.hatchet:
                     self._complete(run, ts, out)
+                elif run.final:
+                    run.done_at = ts + HATCHET_FINAL_GRACE_MS
+                elif run.parked:  # evicted mid-wait: hold until the deadline (else the RUN_MAX_IDLE_MS bound)
+                    untils = [u for _, u in run.parked.values()]
+                    run.done_at = max(ts, *untils) + HATCHET_GRACE_MS if all(untils) else None
+                else:
+                    run.done_at = ts + HATCHET_GRACE_MS
+
+    def _step_end(self, s: Span, run: Run, failed: bool, out: list, ts: int) -> None:
+        """A step instance ended: the step is done/failed once its last open instance ends (fan-out); a step that
+        ends together with its wait (Hatchet eviction) stays `waiting` (parked)."""
+        n = run.step_open.get(s.step, 1) - 1
+        if failed:
+            run.batch_failed.add(s.step)
+        if n > 0:
+            run.step_open[s.step] = n
+            return
+        run.step_open.pop(s.step, None)
+        bad = s.step in run.batch_failed
+        run.batch_failed.discard(s.step)
+        (run.failed_steps.add if bad else run.failed_steps.discard)(s.step)
+        lw = run.last_wait
+        if not bad and not run.final and lw and lw[1] == s.id and ts - lw[0] <= PARK_SLACK_MS:
+            run.parked[s.step] = (lw[2], lw[3])
+            out.append(self._step_wait_ev(s.run, s.step, lw[2], lw[3], ts))
+            return
+        out.append({"type": "step", "run_id": s.run, "step": s.step, "status": "failed" if bad else "done", "ts": ts})
 
     def _complete(self, run: Run, ts: int, out: list) -> None:
         run.failed = run.failed or bool(run.failed_steps)
+        for p in run.parked:
+            out.append({"type": "step", "run_id": run.id, "step": p, "status": "done", "ts": ts})
         self._final(run.id, run.last_text, out, ts)
         if run.synthetic:
             out.append({"type": "exit", "run_id": run.id, "id": run.synthetic, "status": "failed" if run.failed else "done", "ts": ts})
@@ -461,6 +557,12 @@ class Mapper:
         s.agent, s.candidate = name, None
         parent, via_tool = self._ancestor_agent(s)
         run = self.runs.get(s.run)
+        st = self._step_span(s)
+        if not parent and st is not None and st.attrs.get("hatchet.parent_workflow_run_id") == s.run:
+            # folded child workflow run (fan-out): a subagent of the parent run's newest live non-child agent
+            parent = next((k for k, ag in reversed(self.agents.items()) if ag.run == s.run and not ag.done and not
+                           (self.spans.get(ag.step_span or "") or st).attrs.get("hatchet.parent_workflow_run_id")), None)
+            via_tool = True
         hint = s.attrs.get("agentglow.subagent")  # manual API: an agent nested directly in an agent
         s.subagent = bool(parent and (via_tool or hint is True or str(hint).lower() == "true"))
         text = ""
@@ -479,7 +581,7 @@ class Mapper:
             run.top_parent[s.id] = parent
             run.last_top = s.id
         s.parent_agent = parent
-        self.agents[s.id] = Agent(name, s.run)
+        self.agents[s.id] = Agent(name, s.run, step_span=st.id if st else None)
         out.append({"type": "spawn", "run_id": s.run, "id": s.id, "agent": name, "parent_id": parent, "subagent": s.subagent, "ts": ts})
         if parent:
             out.append({"type": "message", "run_id": s.run, "from_id": parent, "to_id": s.id, "text": text[:160], "ts": ts})
@@ -558,6 +660,87 @@ class Mapper:
         if ag and (force or not ag.thinking):
             ag.thinking = True
             out.append({"type": "agent", "run_id": run, "id": owner, "status": "thinking", "ts": ts})
+
+    # ------------------------------------------------------------------ waits (durable tasks)
+    def _wait_of(self, s: Span) -> tuple | None:
+        """(reason, until ms | None, declared) if this span is a wait: `agentglow.wait` (+ `agentglow.wait.until`), or
+        Hatchet's `hatchet.durable.wait_for` span (reason from its signal key)."""
+        a = s.attrs
+        v = a.get("agentglow.wait")
+        if v is not None and v is not False and v != "":
+            return session_title(str(v)) or "wait", _deadline(a.get("agentglow.wait.until")), True
+        if s.name != HATCHET_WAIT_SPAN:
+            return None
+        key = str(a.get("hatchet.signal_key") or "")
+        m = SLEEP_KEY_RE.match(key)
+        if m:
+            return "sleep", s.start + int(m[1]) * UNIT_MS[m[2]], False
+        m = EVENT_KEY_RE.match(key)
+        return session_title(m[1] if m else key) or "event", None, False
+
+    def _step_span(self, s: Span) -> Span | None:
+        """The step span `s` runs in: itself, the nearest step ancestor, else (Hatchet wait span) by step run id."""
+        cur, hops = s, 0
+        while cur is not None and hops < 500:
+            if cur.step:
+                return cur
+            cur, hops = self.spans.get(cur.parent or ""), hops + 1
+        run = self.runs.get(s.run)
+        sid = run.step_runs.get(str(s.attrs.get("hatchet.step_run_id") or "")) if run else None
+        return self.spans.get(sid or "")
+
+    def _wait_agent(self, s: Span, st: Span | None) -> str | None:
+        """Agent shown waiting: the owning agent of a declared wait, else the newest live agent in the wait's step."""
+        if s.wait and s.wait[2]:
+            found = s.id if s.agent else self._ancestor_agent(s)[0]
+            if found:
+                return found
+        if st is None:
+            return None
+        return next((k for k, ag in reversed(self.agents.items()) if ag.step_span == st.id and not ag.done), None)
+
+    @staticmethod
+    def _step_wait_ev(run_id: str, step: str, reason: str, until: int | None, ts: int) -> dict:
+        ev = {"type": "step", "run_id": run_id, "step": step, "status": "waiting", "reason": reason, "ts": ts}
+        if until:
+            ev["until"] = until
+        return ev
+
+    def _step_wait_state(self, run: Run, st: Span, out: list, ts: int) -> None:
+        """Step shows its open wait (a declared one over Hatchet's own), else `running` again while it is open."""
+        ws = [w for w in run.waits.values() if w.wait_step == st.id]
+        if ws:
+            w = max(ws, key=lambda w: (w.wait[2], w.start))
+            out.append(self._step_wait_ev(run.id, st.step, w.wait[0], w.wait[1], ts))
+        elif st.end is None:
+            out.append({"type": "step", "run_id": run.id, "step": st.step, "status": "running", "ts": ts})
+
+    def _wait_start(self, s: Span, run: Run, out: list, ts: int) -> None:
+        st = self._step_span(s)
+        s.wait_step = st.id if st else None
+        run.waits[s.id] = s
+        if st:
+            self._step_wait_state(run, st, out, ts)
+        owner = self._wait_agent(s, st)
+        ag = self.agents.get(owner or "")
+        if ag:
+            ag.thinking = False
+            ev = {"type": "agent", "run_id": s.run, "id": owner, "status": "waiting", "reason": s.wait[0], "ts": ts}
+            if s.wait[1]:
+                ev["until"] = s.wait[1]
+            out.append(ev)
+
+    def _wait_end(self, s: Span, run: Run, out: list, ts: int) -> None:
+        run.waits.pop(s.id, None)
+        st = self.spans.get(s.wait_step or "")
+        if s.wait_step != s.id:  # a wait nested in its step (a step span that is itself the wait never parks)
+            run.last_wait = (ts, s.wait_step, s.wait[0], s.wait[1])
+        if st:
+            self._step_wait_state(run, st, out, ts)
+        owner = self._wait_agent(s, st)
+        ag = self.agents.get(owner or "")
+        if ag and not ag.done and not any(self._wait_agent(w, self.spans.get(w.wait_step or "")) == owner for w in run.waits.values()):
+            self._thinking(owner, s.run, out, ts, force=True)
 
     # ------------------------------------------------------------------ llm / tools
     @staticmethod
