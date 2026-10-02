@@ -30,7 +30,8 @@ export type WorldEvent =
   | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; ts: number }
   | { type: "exit"; run_id: string; id: string; status: "done" | "failed"; ts: number }
   | { type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; reason?: string; until?: number; ts: number }
-  | { type: "llm"; run_id: string; id: string; tokens_in: number; tokens_out: number; latency_ms: number; ts: number }
+  // tokens_in = ALL prompt tokens (cached included); tokens_cached / tokens_cache_write are subsets of it, never added
+  | { type: "llm"; run_id: string; id: string; tokens_in: number; tokens_out: number; tokens_cached?: number; tokens_cache_write?: number; latency_ms: number; ts: number }
   | { type: "message"; run_id: string; from_id: string; to_id: string; text: string; ts: number }
   | { type: "tool"; run_id: string; id: string; tool: string; args_preview: string; ts: number }
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
@@ -214,6 +215,7 @@ export type Instance = {
   pulse: number; // last LLM pulse strength 0..2.5
   pulseAt: number;
   tokens: number;
+  tokensCached: number; // prompt-cache reads, already inside `tokens`
   index: number; // stable slot within its run (0..)
   recent: WorldEvent[];
   // per-agent counters for the inspector panel
@@ -590,6 +592,7 @@ export function apply(ev: WorldEvent) {
         pulse: 0.8,
         pulseAt: now,
         tokens: 0,
+        tokensCached: 0,
         index,
         recent: [],
         llmCalls: 0,
@@ -650,6 +653,7 @@ export function apply(ev: WorldEvent) {
         i.pulse = Math.min(2.5, 0.6 + (ev.tokens_in + ev.tokens_out) / 1500);
         i.pulseAt = now;
         i.tokens += ev.tokens_in + ev.tokens_out;
+        i.tokensCached += ev.tokens_cached ?? 0;
         i.llmCalls++;
       }
       world.stats.llmCalls++;

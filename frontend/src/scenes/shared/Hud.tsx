@@ -693,7 +693,9 @@ function AgentDetail({ i }: { i: Instance }) {
       <dl className="ap-stats">
         <div>
           <dt>tokens</dt>
-          <dd>{(i.tokens / 1000).toFixed(1)}k</dd>
+          <dd title="prompt + completion tokens; cached = prompt-cache reads, already counted in the prompt">
+            {(i.tokens / 1000).toFixed(1)}k{i.tokensCached > 0 ? ` (${(i.tokensCached / 1000).toFixed(1)}k cached)` : ""}
+          </dd>
         </div>
         <div>
           <dt>LLM calls</dt>

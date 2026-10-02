@@ -83,6 +83,9 @@ buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion 
   that filter (`buffered`, `open_runs`, plus `scope`/`run_id`); a bad token is 401.
 - `/live/stream` is plain `text/event-stream` over GET: works with `fetch()` + a stream reader (headers), and with
   `EventSource` in dev. CORS allows the `Authorization`, `X-AgentGlow-Scope` and `X-AgentGlow-Run` headers.
+  Every buffered event carries `seq` (per server instance, increasing) and is sent with `id: <epoch>-<seq>`; a
+  reconnect with `Last-Event-ID` (the app client and `EventSource` send it) replays only newer events, so llm tokens and
+  calls of in-progress runs are not applied twice. An id from another epoch (server restarted) gets the full replay.
 - `POST /live/run` `{topic, scope?}` forwards `{"topic", "scope"}` to the webhook (`scope` omitted when unknown).
   Secure: scope from the token (a different body `scope` is 403). Dev: `X-AgentGlow-Scope` header, else body `scope`.
 - Without a secret, `agentglow serve` logs a warning when bound to a non-localhost address.
