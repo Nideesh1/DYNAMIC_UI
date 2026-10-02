@@ -6,7 +6,7 @@ draws. Read `index.ts` (overview), then use the three reference ports as templat
 | reference | preset | plane | look at |
 |---|---|---|---|
 | `neural/`  | `radial` | `xy` | per-agent slot with its own edge (synapse), side graph with beams drawn in graph-local space, MCP + backend slots |
-| `subway/`  | `lanes`  | `xz` | run marker drawn in the run's local frame (tracks, stations), agents moving along their run (`live`), MCP slot without backends |
+| `subway/`  | `lanes`  | `xz` | run marker drawn in the run's local frame (tracks, stations), agents moving along their run (`live`), MCP + backend slots (backend wired with the kit `<ResourceWire>`) |
 | `airport/` | `radar`  | `xz` | backdrop sized to the kit core (`kit.core.r`), pooled renderers iterating `kit.agents` / `kit.mcp`, rim periphery, `extents` |
 
 ## Preset per remaining theme (suggested)
@@ -64,6 +64,8 @@ as `preset`; do not add per-theme placement code outside it.
    `backend.pos` EVERY FRAME (they ease when the periphery re-lays out); `mcp.out` = outward direction.
    Delete `satPos`/`airportPos`/`backendPos`/`gatePos` and the per-server `res.map(<Backend>)`.
    Tethers/packets: `agentLive(instanceId)` and `serverPos(name)` / `backendPos(server, res)`; skip when undefined.
+   Always draw the backends (Loki, Prometheus, GitHub API...): a theme without its own server -> backend edge can use
+   `<ResourceWire mcp backend />` (idle / in-flight dashes / result pulse). Recent-activity glow: `mcpGlow(activeAt, now)`.
 6. **Graph -> side resource** (`GraphResource` slot, `{ galaxy }`): draw the old centerpiece in its OWN frame
    centred at 0 with radius `graph.natural` (shrink internal constants if it was huge). The kit positions,
    scales (`kit.graph.scale`), fades and hides it (rendered only when `world.hasGraph` and the galaxy has nodes;
