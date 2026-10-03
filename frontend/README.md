@@ -1,10 +1,11 @@
 # agentglow
 
 **Live 3D views of agent systems, as a React component.** Every agent your system spawns appears as a
-living shape (a neuron, a bee, a star, a tree, a flight…): it's born when its span starts, thinks while it
-calls the LLM, waits on MCP servers, passes messages to other agents, and fades out when its span ends.
-It is driven only by OpenTelemetry, via the [`agentglow`](https://github.com/Nideesh1/agentglow#quickstart)
-Python server, so it works with LangGraph, deepagents, LangChain and anything else that emits OTel spans.
+living shape (a neuron, a star, an electron, a particle track, a firework shell): it's born when its span starts,
+thinks while it calls the LLM, waits on MCP servers, passes messages to other agents, and fades out when its span
+ends. Backend services (FastAPI, FastStream, FastMCP, Node) show up as long-lived nodes with request halos. It is
+driven only by OpenTelemetry, via the [`agentglow`](https://github.com/Nideesh1/agentglow#get-started) Python
+server, so it works with LangGraph, deepagents, LangChain and anything else that emits OTel spans.
 
 ![neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.webp)
 
@@ -15,14 +16,16 @@ npx agentglow setup        # once
 claude                     # then just use Claude Code as usual
 ```
 `setup` adds AgentGlow hooks + traces to `~/.claude/settings.json` (backup first) plus a hook that auto-starts the
-AgentGlow server with every `claude` session, then opens the 3D view. Only Node 18+ is needed (uv + Python are fetched
+AgentGlow server with every `claude` session (on macOS / Linux also a login item), then opens the 3D view. Only Node 18+ is needed (uv + Python are fetched
 on first run). Your agents and subagents appear live at http://localhost:8100/neural as Claude works.
 
 | Command | What it does |
 |---|---|
-| `npx agentglow setup [--port 8100]` | install once (backup first), start the server, open `/neural` |
+| `npx agentglow setup [--port 8100]` | install once (backup first), start the server, open `/neural`; on macOS / Linux the server also starts at login |
+| `npx agentglow setup --capture-prompts` | also show your own prompts next to Claude's replies (local server only, off by default) |
+| `npx agentglow setup --no-autostart` | no login item: the server starts with each `claude` session instead |
 | `npx agentglow status` / `open` / `stop` | check install + server / open the view / stop the background server |
-| `npx agentglow remove` | uninstall everything `setup` added and stop the server |
+| `npx agentglow remove` | uninstall everything `setup` added (hooks, env, login item) and stop the server |
 | `npx agentglow start [--background]` | run the server yourself (`serve` is an alias) |
 | `npx agentglow claude [-- <claude args>]` | try it without installing: one session with temporary settings |
 
@@ -51,7 +54,7 @@ import agentglow
 agentglow.watch()        # before your agents run
 ```
 
-See the [Python quickstart](https://github.com/Nideesh1/agentglow#quickstart) for details.
+See [Get started](https://github.com/Nideesh1/agentglow#get-started) for details.
 
 ## Use
 
@@ -169,7 +172,7 @@ Example: [examples/node-proxy](../examples/node-proxy) (a Node proxy in front of
 | `theme`     | `Theme`               | `"neural"` | Which view to render (see below). Each theme loads lazily as its own chunk. |
 | `source`    | `string`              | `""`       | Base URL of the agentglow server. `""` means same origin. The scene reads `${source}/live/stream` (SSE), `/live/graph` and `/live/health`. |
 | `hud`       | `boolean`             | `true`     | Show the glass HUD: counts, event ticker and the agent inspector panel. |
-| `sim`       | `boolean`             | `false`    | Use the built-in simulator instead of a server. |
+| `sim`       | `boolean \| "hf"`     | `false`    | Use the built-in simulator instead of a server; `"hf"` = high-frequency simulator (30 market agents, ~100 decisions/s). |
 | `scope`     | `string`              | none       | Only show agents in this scope (a user or tenant id). Sent as the `X-AgentGlow-Scope` header, also as `scope` in the `POST /live/run` body. With a token, the token decides. |
 | `run`       | `string`              | none       | Only show this one run. Sent as the `X-AgentGlow-Run` header. |
 | `token`     | `string`              | none       | Token minted by your backend. Sent as `Authorization: Bearer <token>` on every `/live/*` request, never in a URL. |
@@ -252,7 +255,7 @@ npm run build:lib    # → dist/ (this package)
 npm run build:app    # → ../backend/agentglow/static (served by `agentglow serve`)
 ```
 
-In the app, `/` is the theme gallery and `/<theme>` is a full-screen scene. It accepts `?sim=1`,
+In the app, `/` is the theme gallery and `/<theme>` is a full-screen scene. It accepts `?sim=1`, `?sim=hf`,
 `?source=http://host:8100`, `?hud=0` and `?run=<id>` (a shareable "watch this run" link). Scope and token are
 props only: they are never read from the URL.
 
