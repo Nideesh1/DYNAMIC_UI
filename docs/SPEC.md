@@ -31,20 +31,25 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
 - Endpoints:
   - `POST /v1/live` - JSON batch `[{"kind":"start"|"end","span":{...}}]` from `watch()` (real-time starts).
   - `POST /v1/traces` - standard OTLP/HTTP (protobuf + JSON), ended spans from any OTel SDK/collector.
+  - `POST /v1/events` - flat events (one object or an array), no OTel needed (see "Backend services" > "Flat events").
   - `POST /v1/claude-code` - Claude Code `"type": "http"` hook payloads (examples/claude-code/) → synthetic live spans.
   - `GET /live/stream` - SSE world events. On connect: replay MCP topology + events of runs still in progress. Keepalive 15s.
     Filtered per viewer by scope/run (see "Scopes & auth").
   - `POST /live/topology` - `{server, resources:[{name, kind}]}` → `mcp_register` (also `agentglow.register_mcp(...)`).
   - `GET /live/graph` - optional graph sample `{nodes:[{id,name,kind}],links:[{source,target}]}`; FalkorDB provider when `AGENTGLOW_FALKOR_URL`/`--falkor` set, else 404 → UI uses its built-in sample.
   - `GET /live/health`; static UI at `/`, `/<theme>`, assets.
-- Span JSON (normalized): `{trace_id, span_id, parent_span_id, name, start_time_ms, end_time_ms|null, status: ok|error|unset, attributes:{}}`.
+- Span JSON (normalized): `{trace_id, span_id, parent_span_id, name, start_time_ms, end_time_ms|null, status: ok|error|unset, attributes:{}}`,
+  plus, when known, `kind` (`internal|server|client|producer|consumer`), `service` (resource `service.name`) and `links`
+  (`[{trace_id, span_id}]`): watch() and both OTLP decoders fill them; the mapper uses them only for "Backend services".
 - `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None, api_key=None)`:
   uses the existing global TracerProvider if it's an SDK provider (keeps Langfuse etc.), else creates one;
   adds `LiveSpanProcessor(url)` (on_start + on_end → background-thread batched POST to `/v1/live`, ~50 ms,
   never blocks, drops on failure); if `instrument`, enables OpenInference LangChain instrumentation (covers
   LangChain/LangGraph/deepagents), OpenInference OpenAI Agents instrumentation (extra `[openai-agents]`, added next
   to the SDK's own trace processors) and Hatchet instrumentation when those packages are installed and not
-  already instrumented. Idempotent. Also exports `agentglow.otel.LiveSpanProcessor`, `agentglow.register_mcp`.
+  already instrumented, and OpenInference MCP trace-context propagation when `openinference-instrumentation-mcp` is
+  installed. Idempotent. Also exports `agentglow.otel.LiveSpanProcessor`, `agentglow.register_mcp`.
+  `watch(app=, broker=, mcp=, service_name=)`: see "Backend services".
 
 ## Scopes & auth
 Show each user only their own agents. A run's **scope** is a string (user id, tenant, team) set by the app; viewers
@@ -139,7 +144,7 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 | langgraph-supervisor | team graph whose supervisor node (`<sup>` node → `<sup>` graph) calls a `transfer_to_*` tool | ONE supervisor agent for the run (later turns alias it; exits when the team graph ends); workers (`<name>` → `call_agent` → `<name>` graph) → `subagent: true` under it, delegation text = supervisor's turn text else latest user request; supervisor `waiting` while a worker runs; `transfer_*` tools emit no `tool` event |
 | LLM | OpenInference kind `LLM` or `gen_ai.operation.name ∈ {chat, text_completion, generate_content}` | `agent thinking` on start; `llm` on end - a span guessed from its parent node but ending with a non-LLM kind (react agent's RunnableSequence/call_model/should_continue) is dropped (tokens from `gen_ai.usage.input_tokens/output_tokens` or `llm.token_count.prompt/completion`; cache reads from `gen_ai.usage.cache_read_input_tokens`, `gen_ai.usage.cache_read.input_tokens` or `llm.token_count.prompt_details.cache_read`, cache writes from the matching `cache_creation` / `cache_write` keys) |
 | Tool | OpenInference kind `TOOL` or `gen_ai.operation.name=execute_tool` | `tool` |
-| MCP | span with `mcp.server.name` or `agentglow.mcp.server` (+ `agentglow.mcp.resource`, `agentglow.mcp.resource_kind` ∈ db,warehouse,spark,api,storage,queue) | `mcp call` (start, pending) / `mcp result` (end); auto `mcp_register` of server+resource. An MCP span whose parent span is not known yet (the MCP server's process reported before the caller's tool span) is held until the parent arrives, dropped after 10 s; it never starts a run |
+| MCP | span with `mcp.server.name` or `agentglow.mcp.server` (+ `agentglow.mcp.resource`, `agentglow.mcp.resource_kind` ∈ db,warehouse,spark,api,storage,queue) | `mcp call` (start, pending) / `mcp result` (end); auto `mcp_register` of server+resource. An MCP span whose parent span is not known yet (the MCP server's process reported before the caller's tool span) is held until the parent arrives (with the spans inside it), dropped after 10 s; it never starts a run. An MCP span naming no resource gets its backends auto-discovered: every DB / cache / HTTP CLIENT span inside it (see "Backend services") = `mcp_register` of that server + resource and an `mcp` call/result with `resource`, on the caller's agent; a manual `agentglow.mcp.resource` wins (nothing is discovered under it). `agentglow.watch(mcp=fastmcp_server)` opens such a span (`mcp <server>.<tool>`, SERVER kind) around every FastMCP tool call |
 | Graph/DB | `db.system` set | `graph` read/write (`agentglow.db.op` or inferred from query text); node names from `agentglow.graph.nodes` (list or JSON string) |
 | Final | `agentglow.final` attr on any span | `final` text |
 | Skill | hint attribute `agentglow.skill` = skill name on any span (usually a tool span); set by the Claude Code hooks adapter for the `Skill` tool (`tool_input.skill`, e.g. `hello`, `plugin:skill`), by the traces-only path from the `claude_code.tool` span's `skill_name` (needs `OTEL_LOG_TOOL_DETAILS=1`), and by the manual `skill()` | `skill` `status: "start"` when the span starts (or at end if the attribute only arrives then), `"end"` when it ends, on the owning agent; the normal `tool` event is still emitted (Claude Code `Skill` args preview = the skill name only) |
@@ -191,6 +196,53 @@ subagents of the agent that owns the triggering span (a step with no agent of it
 the step, which stays alive until the step ends), else of the parent run's newest live agent outside child steps. Parallel
 instances of one step name keep the step `running` until the last ends (failed if any instance failed). Queued
 (concurrency-limited) tasks emit nothing until they start.
+
+## Backend services (backend `backend.py`)
+Ordinary backend OTel spans (FastAPI, FastStream, any HTTP / messaging / DB instrumentation) map onto the same world.
+Gated: only the spans below are handled here, so a pure agent trace maps exactly as before (regression test:
+`tests/test_backend_regression.py` against the v0.3.0 events of every fixture), and a service only appears once it has
+backend spans.
+
+| Backend | Rule | World |
+|---|---|---|
+| service | resource `service.name` (span JSON `service`), overridden by attribute `agentglow.service` | one long-lived agent `svc:<name>` (`svc:<scope>:<name>` when scoped) in the run `services` (`services:<scope>`), spawned (+ `agent thinking`) on its first backend span; persistent across requests, never completes with its spans; idle for `AGENTGLOW_SERVICE_IDLE_MS` (1 h) = `exit` (back on the next request). A new viewer gets the service run + spawns even after they left the replay buffer |
+| request | SERVER span with `http.request.method` / `http.method` / `http.route` or `rpc.system`; CONSUMER (or SERVER) span with `messaging.system`, not a `create` span; never a span with `hatchet.*`, `gen_ai.*`, `openinference.*`, `llm.*`, `agentglow.mcp.*` or `agentglow.agent` | `request` on the service agent when it ends: `name` = `METHOD route` (route template only, never the URL / query) or the topic, `status` = HTTP status, `error` = span status ERROR or status >= 500 |
+| rate | per service, hv.py ideas: calm (<= `AGENTGLOW_SERVICE_HV_RATE`, 5 requests in the trailing 1 s) = individual `request` events within a global budget (`AGENTGLOW_SERVICE_CAP`, 20/s); busy = aggregated, only errors still go out individually at the tick (`"hv": true`, max 3 per service per tick, within the budget) | `service_stats` per service per tick (~1 s) with any requests (calm or busy): `{"type": "service_stats", "run_id", "id", "service", "window_ms", "n", "errors", "codes": {"2xx": n, "4xx": n, "5xx": n}, "p50_ms", "p95_ms", "routes": {<name>: n} (top 6 + "other"), "ts"}` |
+| message | PRODUCER span with `messaging.system` inside a request of service A; a request (CONSUMER span) of service B whose OTel parent or a link is that producer span (FastStream: the consumer's parent is the producer's `create` span); either side may arrive first (10 s) | `message` comet A -> B, `text` = `messaging.destination.name` / `messaging.destination_publish.name` / the span name's destination; max one per edge per 250 ms |
+| task | an agent span inside a request (`agentglow.agent(...)`, GenAI `invoke_agent`, ...) or FastAPI's native `fastapi.background_task` span (name = the task function) | a subagent of the service (`subagent: true`, delegation `message`, `exit`); at most `AGENTGLOW_SERVICE_MAX_TASKS` (6) live per service, more run as the service itself |
+| resource | CLIENT span (kind client, or no kind) with `db.system` / `db.system.name` (name = the system, `system:db.name` when set; kind `db`, `warehouse` for snowflake / bigquery / redshift / clickhouse, `storage` for s3 / gcs / minio) or an HTTP client (`server.address` / `net.peer.name` / the `url.full` host, `:port` unless 80 / 443; kind `api`) inside a request, or a root CLIENT span of a service (a poll, a cron); not under an LLM span (the SDK's own HTTP call); blocking stream / list reads at the root (`XREAD`, `BLPOP`, ...) are idle polls and dropped. Attributes set after start (redis, httpx) are read at the end | `mcp_register` of the synthetic server `backend` + resource, `mcp` call / result (`server: "backend"`, `tool` = the operation) on the owning agent; max one per (agent, resource) per 250 ms; never a `graph` event |
+| errors | request `error` | `request` with `error: true`; counted in `service_stats.errors` |
+| GenAI inside a request | any span the agent rules recognize | the usual `llm` / `tool` / `mcp` / ... events, owned by the service agent or its task subagent |
+
+**Python.** `agentglow.watch(app=fastapi_app)`: FastAPI's native OTel telemetry when the app has it (FastAPI >= 0.13x;
+server span + `fastapi.background_task`), else `opentelemetry-instrumentation-fastapi` (no ASGI send / receive spans).
+`watch(broker=faststream_broker)`: FastStream's `TelemetryMiddleware` for the broker type (`faststream[otel]`; Redis,
+Kafka, Confluent, RabbitMQ, NATS), once per broker. `watch(mcp=fastmcp_server)`: one SERVER span per tool call
+(MCP section above). With any of them, httpx / requests / redis / asyncpg / pymongo clients are instrumented when their
+OTel instrumentations are installed. Extras: `agentglow[fastapi]`, `[faststream]`, `[redis]`, `[postgres]`, `[mongodb]`,
+`[mcp]`. `service_name` (else OTEL_SERVICE_NAME, the FastMCP name, the FastAPI title, `api` / `worker`) names the
+process's service, also when an existing provider's resource has none. Example: `examples/fastapi-faststream/`.
+
+### Flat events
+`POST /v1/events`: one JSON object or an array (max 5000), for anything without OTel. Same ingest key, scope (`?scope=`,
+`X-AgentGlow-Scope`, or a `scope` field per event) and privacy scrub as `/v1/live`; ids and timing are the server's
+(`ts` = now). `agentglow.pulse(service, name, *, event="request", **fields)` (Python, batched in a background thread,
+never blocks) and `pulse(url, event)` from the npm package's `agentglow/pulse` entry (fetch, never throws) send them.
+
+| Field | |
+|---|---|
+| `service` (or `agent`) | required: the service / long-lived agent |
+| `event` | `request` (default) \| `message` \| `call` \| `error` \| `llm` \| `tool`; anything else = a request named after it |
+| `name` | route / operation / tool name (scrubbed, max 60) |
+| `status` | HTTP status (>= 500 = error) or `error` / `failed` |
+| `duration_ms` | latency |
+| `to` | `message`: the consuming service; `call`: the external system |
+| `topic` | `message`: the topic / stream (comet label) |
+| `kind` | `call`: `db` \| `warehouse` \| `spark` \| `api` \| `storage` \| `queue` |
+| `tokens_in`, `tokens_out` | `llm` |
+
+`request` / `error` = a `request` (rate rules above); `message` = comet `service` -> `to` + a `message` request on `to`;
+`call` = `mcp` call + result on `backend` / `to`; `llm` = `llm` on the service agent; `tool` = `tool`.
 
 ## Manual API (backend `manual.py`)
 For hand-written agent loops (no framework). Plain OpenTelemetry spans (`opentelemetry-api`) on the global provider
@@ -337,7 +389,12 @@ JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload b
 ## World events (backend → frontend)
 Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
 `run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill, chat, decision,
-decision_stats, order`. `ts` = epoch ms.
+decision_stats, order, request, service_stats`. `ts` = epoch ms.
+`request` = `{"type": "request", "run_id", "id": <service agent id>, "service", "name", "kind": "http"|"rpc"|"message"|"event",
+"status"?, "error", "ms", "ts", "hv"?}` and `service_stats`: see "Backend services". Frontend: a request pulses its service,
+an error flashes the service halo red; `service_stats` drives the same halo as `decision_stats` (arc: ok green, 5xx /
+errors red, 4xx amber) with the label `42 req/s · 2% 5xx · p50 18ms` (`msg/s · err` for a consumer); the HUD counts
+`N req · M err`.
 `chat` (opt-in prompt capture only, see Privacy) = `{"type": "chat", "run_id", "id": <main agent instance id>,
 "role": "user"|"agent", "text", "ts"}`: the user's prompt, then Claude's reply for that turn (the agent panel shows
 them as a "you: / claude:" conversation).

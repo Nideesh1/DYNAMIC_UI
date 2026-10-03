@@ -74,7 +74,26 @@ async with agentglow.run(topic="Inbound call", scope=clinic_id):
 Nested `agentglow.agent(...)` = subagent; also `agentglow.mcp(...)`, `agentglow.graph(...)`, `@agentglow.traced_agent`,
 `@agentglow.traced_tool`. See [examples/custom-loop](examples/custom-loop).
 
-### 4. The full demo stack (Hatchet + deepagents + MCP + FalkorDB)
+### 4. Your whole backend (FastAPI, FastStream, MCP servers, anything that can POST)
+```bash
+uv add "agentglow[fastapi,faststream,redis,mcp]"
+```
+```python
+agentglow.watch(app=fastapi_app)          # API: each service = a long-lived agent, requests = pulses + a req/s halo
+agentglow.watch(broker=faststream_broker) # worker: publish -> consume = a comet between services, labelled with the topic
+agentglow.watch(mcp=fastmcp_server)       # MCP server: its Redis / Postgres / HTTP calls show up as its backends
+agentglow.pulse("billing", "invoice.paid", status=200, duration_ms=12)  # ad-hoc events, no OTel needed
+```
+DB / cache / HTTP calls light up resource nodes, 5xx and exceptions flash red, LLM calls and agents inside a request
+show on (or under) their service. Pure agent traces look exactly as before. No Python? POST flat events:
+```bash
+curl -X POST localhost:8100/v1/events -H 'content-type: application/json' \
+  -d '{"service": "checkout", "event": "request", "name": "POST /pay", "status": 200, "duration_ms": 42}'
+```
+JS / TS: `import { pulse } from "agentglow/pulse"; await pulse("http://localhost:8100", { service: "checkout", name: "POST /pay" })`.
+See [examples/fastapi-faststream](examples/fastapi-faststream) and docs/SPEC.md "Backend services".
+
+### 5. The full demo stack (Hatchet + deepagents + MCP + FalkorDB)
 ```bash
 cp .env.example .env                 # add one LLM key (OpenAI, Anthropic or Gemini) - that's all the setup
 docker compose up                    # then open http://localhost:8101 and press ▶ Run agents
@@ -169,6 +188,7 @@ shared server never receives prompts. `npx agentglow status` shows `prompts: cap
 | fast decisions (Jev, Laya, an LLM judge, code guards; `agentglow.decision`) | route fans with per-option %, guard gates (a red `BLOCKED` on a deny), check rings, with provider and latency |
 | many decisions per second | per-agent halos (`jev 42/s · 3% deny · p50 38 ms`); only denies, flips and unsure guards pop individually |
 | orders (`agentglow.order`) | BUY / SELL chips, dashed `paper` when dry-run |
+| backend services (FastAPI, FastStream, any OTel HTTP / messaging spans, `POST /v1/events`) | one long-lived agent per service with a `42 req/s · 2% 5xx · p50 18ms` halo, comets along publish -> consume edges labelled with the topic, background tasks as subagents, DB / cache / HTTP calls as resource nodes, errors flash red |
 
 **Agents are always the center.** Graphs, databases and MCP servers are side resources that only show up when used, and the camera
 frames everything calmly: one smooth zoom per burst of spawns, never a jittery in-and-out. Stats sit in a slim top bar;
@@ -188,6 +208,7 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [langgraph](examples/langgraph) | LangGraph supervisor with worker agents (`langgraph-supervisor` works too) |
 | [openai-agents](examples/openai-agents) | OpenAI Agents SDK: handoffs + agent-as-tool |
 | [custom-loop](examples/custom-loop) | no framework: a hand-written voice-call loop traced with the manual API (runs without an LLM key) |
+| [fastapi-faststream](examples/fastapi-faststream) | your backend: a FastAPI orders API + a FastStream worker on a Redis stream + a FastMCP server, a load script; one `watch(...)` line each (no LLM key needed) |
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
 | [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts) - no code |
 | [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |

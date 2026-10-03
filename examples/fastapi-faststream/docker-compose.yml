@@ -1,0 +1,7 @@
+# Redis for the example only (own project, own port: never the main demo stack).
+#   docker compose -f examples/fastapi-faststream/docker-compose.yml up -d
+name: agentglow-fastapi-faststream
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6392:6379"]

@@ -5,7 +5,8 @@
  *    outside the agent whose thickness / brightness follow its decision rate (log scale) and whose arc is split by
  *    outcome (allow green, deny red, check yes teal / no amber, route results in 4 accent colours, other grey), with a
  *    slow spark running round it. Smoothed in world.ts (EMA), fades when the agent goes quiet (haloMix).
- *  - <HaloLabel>: `jev 42/s · 3% deny · p50 38ms` above the agent, re-texted at most ~4x/s and only when it changes.
+ *  - <HaloLabel>: `jev 42/s · 3% deny · p50 38ms` above the agent (a backend service from `service_stats`:
+ *    `42 req/s · 2% 5xx · p50 18ms`), re-texted at most ~4x/s and only when it changes.
  *  - <OrderChip>: a small ticket popping out of the agent for ORDER_LIFE_MS: green BUY/YES, red SELL/NO,
  *    `YES 3 @ 42c`, dashed outline + `paper` when dry_run, grey with a strike-through when rejected / cancelled.
  *
@@ -208,14 +209,15 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
       const d = h.deny * 100;
       const dn = d > 0 && d < 1 ? "<1" : `${Math.round(d)}`;
       const p50 = `${Math.round(h.p50)}`;
-      const key = `${h.provider}|${r}|${dn}|${p50}`;
+      const key = `${h.provider}|${h.unit}|${r}|${dn}|${p50}`;
       if (key !== st.key) {
         st.key = key;
+        // a backend service (world `service_stats`): `42 req/s · 2% 5xx · p50 18ms`
         l.current?.setText([
-          { text: `${h.provider} `, color: BADGE },
-          { text: `${r}/s`, color: TEXT },
+          { text: h.unit ? `${r} ` : `${h.provider} `, color: h.unit ? TEXT : BADGE },
+          { text: h.unit ? `${h.unit}/s` : `${r}/s`, color: h.unit ? BADGE : TEXT },
           { text: " · ", color: DIM },
-          { text: `${dn}% deny`, color: d >= 1 ? RED : DIM },
+          { text: `${dn}% ${h.unit === "req" ? "5xx" : h.unit ? "err" : "deny"}`, color: d >= 1 ? RED : DIM },
           { text: ` · p50 ${p50}ms`, color: DIM },
         ]);
       }
