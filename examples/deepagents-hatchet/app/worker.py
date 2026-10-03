@@ -14,6 +14,7 @@ from deepagents.backends import FilesystemBackend  # noqa: E402
 from . import demo_graph  # noqa: E402
 from . import email_mcp_server as email_mcp  # noqa: E402
 from . import erp_mcp_server as erp_mcp  # noqa: E402
+from . import loopwatch  # noqa: E402
 from . import github_mcp_server as gh_mcp  # noqa: E402
 from . import market_mcp_server as market_mcp  # noqa: E402
 from . import obs_mcp_server as obs_mcp  # noqa: E402
@@ -109,6 +110,7 @@ async def incident_agents() -> dict:
 
 
 async def lifespan():
+    loopwatch.start()  # event-loop lag watchdog (DESK_LOOP_DEBUG=1: asyncio slow-callback warnings too)
     print(f"demo graph nodes: {demo_graph.seed()}")
     # draw the MCP server + its backends before any call happens
     agentglow.register_mcp(SERVER, RESOURCES, url=config.AGENTGLOW_URL)

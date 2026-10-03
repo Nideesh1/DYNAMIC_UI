@@ -14,6 +14,7 @@ Every call is one OTel span with the AgentGlow decision contract (docs/SPEC.md "
   agentglow.decision = choice|score|noul, .question, .result, .p (of the result), .options (JSON [{name, p}], top 5),
   .provider (jev|llm), .purpose (route|guard|check), .target. Latency = the span's duration.
 """
+import functools
 import json
 import os
 from dataclasses import dataclass, field
@@ -47,7 +48,9 @@ def _jev():
     return _classifier
 
 
+@functools.cache
 def _judge_model(schema: type[BaseModel]):
+    """Built once per schema: a chat model object (and its HTTP clients) is not free to construct on the event loop."""
     from .workflow import structured_model
 
     return structured_model(schema, os.environ.get("DECIDE_MODEL") or None)

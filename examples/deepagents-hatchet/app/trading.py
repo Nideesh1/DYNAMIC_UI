@@ -51,7 +51,7 @@ from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from pydantic import BaseModel, Field
 
-from . import decide
+from . import decide, loopwatch
 from . import market_mcp_server as market_mcp
 from .config import MODEL
 from .markets import QUESTIONS, TOPICS, Limits, Market, Position, bucket, feed_ok, guards, sim_p
@@ -73,6 +73,9 @@ tracer = trace.get_tracer("deepagents-hatchet.trading")
 # in-process desk registry: session id -> {"pnl": {market index: $}, "used": Counter(bucket -> contracts)}
 _DESKS: dict[str, dict] = {}
 _analysts_in_flight = 0
+# market_watch step runs re-delivered by the engine (REASSIGNED, e.g. after the engine missed heartbeats): the first
+# invocation, if still alive in this process, stops making durable calls (they would fail) and stops trading
+_SUPERSEDED: set[str] = set()
 
 
 def _desk(sid: str) -> dict:
@@ -219,6 +222,15 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
     m = Market.from_dict(input.market)
     sid, st = input.session_id, Counter()
     desk = _desk(sid)
+    if ctx.invocation_count > 1:
+        # The engine re-delivered this run (REASSIGNED: it missed the worker's heartbeats, e.g. the engine or its
+        # Postgres stalled). Replaying is not possible: the tick loop is driven by wall-clock time and in-memory
+        # state, so the durable calls would differ from the event log (NonDeterminismError). Make NO durable call:
+        # tell a live first invocation in this process to stop, and report the market with what it made so far.
+        _SUPERSEDED.add(ctx.step_run_id)
+        pnl = round(desk["pnl"].get(input.index, 0.0), 2)
+        print(f"market_watch {m.ticker}: re-delivered (invocation {ctx.invocation_count}), closing it at ${pnl:+.2f} without replay")
+        return {"ticker": m.ticker, "pnl": pnl, "reassigned": 1}
     thinking: asyncio.Task | None = None
     last_think = -1e9
     name = TOPICS[input.index % len(TOPICS)] + (f"-{input.index}" if input.index >= len(TOPICS) else "")
@@ -236,24 +248,35 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
         st["decisions"] += 1
         st["denies"] += 0 if ok else 1
 
+    def superseded() -> bool:
+        return ctx.step_run_id in _SUPERSEDED
+
     async def order(side: str, qty: int, price: float, reason: str) -> None:
+        if superseded():  # durable calls of a superseded invocation fail: no more orders
+            return
         await place_order.aio_run(OrderInput(topic=input.topic, ticker=m.ticker, side=side, qty=qty,
                                              price=round(price, 1), reason=reason), additional_metadata=here())
         st["orders"] += 1
 
-    async def close(a, reason: str) -> None:
+    def flatten(reason: str) -> tuple:
+        """Book the exit of the open position; returns the paper order to send."""
         pos = m.position
         pnl = pos.mark(m.mid) - pos.qty * m.spread / 200                 # the exit pays the half spread too
         m.realized += pnl
         m.position = None
-        price = (m.mid if pos.side == "yes" else 100 - m.mid) - m.spread / 2
-        await order("sell", pos.qty, price, f"close {pos.side}: {reason}")
         st["closes"] += 1
+        price = (m.mid if pos.side == "yes" else 100 - m.mid) - m.spread / 2
+        return "sell", pos.qty, price, f"close {pos.side}: {reason}"
+
+    async def close(a, reason: str) -> None:
+        await order(*flatten(reason))
 
     async def think(snap: dict) -> None:
         """form_view child run (deepagents analyst); the market keeps ticking meanwhile."""
         global _analysts_in_flight
         try:
+            if superseded():
+                return
             v = await form_view.aio_run(ViewInput(topic=input.topic, session_id=sid, ticker=m.ticker, snapshot=snap,
                                                   history=m.history[-30:], forecast_p=m.forecast(rng)),
                                     additional_metadata=here())
@@ -304,6 +327,9 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
     await asyncio.sleep(rng.uniform(0, TICK_S))  # de-sync the markets' ticks
     async with agentglow.agent(name, task=f"trade {bucket(m.ticker)} (paper)") as a:
         for tick in range(TICKS):
+            if superseded():
+                a.say("stopped: the engine re-delivered this market (reassigned)")
+                break
             t0 = time.monotonic()
             m.step(rng)
             if m.secs_to_settle <= 0:
@@ -349,16 +375,20 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
             desk["pnl"][input.index] = m.realized + m.upnl()
             await asyncio.sleep(max(0.0, TICK_S - (time.monotonic() - t0)))
 
-        if thinking is not None and not thinking.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(thinking), timeout=90)
-            except asyncio.TimeoutError:
-                pass
-        if m.position:  # flat at the end of the session (paper)
-            await close(a, "session end")
+        # the market agent ends with its tick loop (AgentGlow fades it now); the trailing work below (the closing
+        # paper order, an analyst still running for this market) runs under the step, not under a lingering agent
+        exit_order = flatten("session end") if m.position else None   # flat at the end of the session (paper)
         pnl = m.realized
         desk["pnl"][input.index] = pnl
-        a.say(f"{m.ticker}: P&L ${pnl:+.2f}, {st['orders']} paper orders, {st['decisions']} decisions")
+        a.say(f"{m.ticker}: P&L ${pnl:+.2f}, {st['orders'] + bool(exit_order)} paper orders, {st['decisions']} decisions")
+    if exit_order:
+        await order(*exit_order)
+    if thinking is not None and not thinking.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(thinking), timeout=90)
+        except asyncio.TimeoutError:
+            pass
+    _SUPERSEDED.discard(ctx.step_run_id)
     return {"ticker": m.ticker, "pnl": round(pnl, 2), **dict(st)}
 
 
@@ -530,4 +560,7 @@ async def close_session(input: DeskInput, ctx: Context) -> dict:
         + (f" Best: {best['ticker']} ${best['pnl']:+.2f}." if best else "")
     )
     span.set_attribute("agentglow.final", summary)
-    return {"summary": summary, "pnl": round(pnl, 2), "totals": dict(tot)}
+    lag = loopwatch.stats(since=s["started_at"])  # worker event-loop lag during this session (app/loopwatch.py)
+    print(f"desk session {s['session_id']}: event loop lag max {lag['max_s']}s, p99 {lag['p99_s']}s, "
+          f"{lag['over_1s']} samples > 1s of {lag['samples']}", flush=True)
+    return {"summary": summary, "pnl": round(pnl, 2), "totals": dict(tot), "loop_lag": lag}

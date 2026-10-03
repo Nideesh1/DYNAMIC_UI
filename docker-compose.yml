@@ -125,6 +125,7 @@ services:
       DESK_HUMAN_TIMEOUT_S: ${DESK_HUMAN_TIMEOUT_S:-8}
       DESK_OUTAGE_EVERY_S: ${DESK_OUTAGE_EVERY_S:-0}     # feed outage -> kill switch: 0 = once per session, N = every N s, -1 = never
       JEV_MAX_RPS: ${JEV_MAX_RPS:-5}                    # hard cap on real Jev requests/s; overflow -> local jev-sim
+      DESK_LOOP_DEBUG: ${DESK_LOOP_DEBUG:-0}            # 1: asyncio debug (slow callbacks > 0.25s logged); the loop-lag watchdog is always on
       FALKOR_HOST: falkordb
       AGENT_MODEL: ${AGENT_MODEL:-google_genai:gemini-3.8-flash}   # provider:model (google_genai / openai / anthropic)
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

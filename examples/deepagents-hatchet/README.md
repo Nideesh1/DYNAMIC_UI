@@ -144,6 +144,7 @@ Or click a market agent waiting on "human approval" in the UI: Approve / Reject 
 | `DESK_HUMAN_TIMEOUT_S` | 8 | human gate auto-approves after this |
 | `DESK_OUTAGE_EVERY_S` | 0 | simulated feed outage (6 s) that trips the kill switch: 0 = once per session at a random point, N = every N s, -1 = never |
 | `JEV_MAX_RPS` | 5 | hard cap on real Jev requests per second per worker |
+| `DESK_LOOP_DEBUG` | 0 | 1: asyncio debug mode (callbacks slower than 0.25 s are logged). The loop-lag watchdog (`app/loopwatch.py`) is always on: lag over 2 s logs the blocking stack, and close_session prints the session's max lag |
 
 **Jev cost guard.** Every market asks its tick's questions in one Jev request (`decide.batch`), and a token bucket
 caps real Jev requests at `JEV_MAX_RPS` per worker process: anything over it (and everything when `TYPESAFE_API_KEY`
