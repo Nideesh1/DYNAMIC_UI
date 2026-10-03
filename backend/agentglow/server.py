@@ -52,6 +52,7 @@ def otlp_proto_spans(body: bytes) -> list[dict]:
     out = []
     for rs in req.resource_spans:
         service = next((_any_value(kv.value) for kv in rs.resource.attributes if kv.key == "service.name"), None)
+        instance = next((_any_value(kv.value) for kv in rs.resource.attributes if kv.key == "service.instance.id"), None)
         for ss in rs.scope_spans:
             for sp in ss.spans:
                 out.append(_extra({
@@ -63,21 +64,24 @@ def otlp_proto_spans(body: bytes) -> list[dict]:
                     "end_time_ms": sp.end_time_unix_nano // 1_000_000 or None,
                     "status": {1: "ok", 2: "error"}.get(sp.status.code, "unset"),
                     "attributes": {kv.key: _any_value(kv.value) for kv in sp.attributes},
-                }, sp.kind, service, [(lk.trace_id.hex(), lk.span_id.hex()) for lk in sp.links]))
+                }, sp.kind, service, [(lk.trace_id.hex(), lk.span_id.hex()) for lk in sp.links], instance))
     return out
 
 
 SPAN_KINDS = {1: "internal", 2: "server", 3: "client", 4: "producer", 5: "consumer"}
 
 
-def _extra(span: dict, kind, service, links: list[tuple]) -> dict:
-    """Backend services fields (docs/SPEC.md "Backend services"): kind, resource service.name, links; only when set."""
+def _extra(span: dict, kind, service, links: list[tuple], instance=None) -> dict:
+    """Backend services fields (docs/SPEC.md "Backend services"): kind, resource service.name / service.instance.id,
+    links; only when set."""
     if isinstance(kind, str):
         kind = {f"SPAN_KIND_{v.upper()}": k for k, v in SPAN_KINDS.items()}.get(kind, 0)
     if SPAN_KINDS.get(int(kind or 0)):
         span["kind"] = SPAN_KINDS[int(kind)]
     if service:
         span["service"] = str(service)
+    if instance:
+        span["instance"] = str(instance)
     links = [{"trace_id": t, "span_id": s} for t, s in links if s]
     if links:
         span["links"] = links
@@ -114,6 +118,7 @@ def otlp_json_spans(data: dict) -> list[dict]:
     for rs in data.get("resourceSpans", []):
         res = (rs.get("resource") or {}).get("attributes", [])
         service = next((_json_value(a.get("value", {})) for a in res if a.get("key") == "service.name"), None)
+        instance = next((_json_value(a.get("value", {})) for a in res if a.get("key") == "service.instance.id"), None)
         for ss in rs.get("scopeSpans", []):
             for sp in ss.get("spans", []):
                 code = (sp.get("status") or {}).get("code", 0)
@@ -127,7 +132,7 @@ def otlp_json_spans(data: dict) -> list[dict]:
                     "end_time_ms": int(sp.get("endTimeUnixNano", 0)) // 1_000_000 or None,
                     "status": {1: "ok", 2: "error"}.get(int(code or 0), "unset"),
                     "attributes": {a["key"]: _json_value(a.get("value", {})) for a in sp.get("attributes", [])},
-                }, sp.get("kind", 0), service, [(_id(lk.get("traceId")), _id(lk.get("spanId"))) for lk in sp.get("links", [])]))
+                }, sp.get("kind", 0), service, [(_id(lk.get("traceId")), _id(lk.get("spanId"))) for lk in sp.get("links", [])], instance))
     return out
 
 

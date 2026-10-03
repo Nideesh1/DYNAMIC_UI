@@ -8,13 +8,15 @@ import queue
 import threading
 import time
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 
 from .otel import LiveSpanProcessor, ingest_headers
+from .plumbing import (Policy, _install_registry, _watch_publish, instance_id, mark_error, mark_outcome,  # noqa: F401
+                       mounted_apps, propagate_context)
 
 log = logging.getLogger("agentglow")
 _lock = threading.Lock()
@@ -26,7 +28,11 @@ def _default_url(url: str | None) -> str:
 
 
 def watch(url: str | None = None, *, instrument: bool = True, service_name: str | None = None,
-          api_key: str | None = None, app: Any = None, broker: Any = None, mcp: Any = None) -> TracerProvider:
+          api_key: str | None = None, app: Any = None, broker: Any = None, mcp: Any = None,
+          privacy: str | None = None, ignore: list | tuple | None = None, ignore_defaults: bool | None = None,
+          allow: list | tuple = (),
+          allow_message_keys: list | tuple = (), error_messages: bool = False, scrub: Callable[[dict], dict] | None = None,
+          pii_patterns: list | None = None, propagate: bool | None = None) -> TracerProvider:
     """Stream spans to agentglow. `api_key` (or env AGENTGLOW_API_KEY) is sent as `x-api-key` (server
     `--ingest-key`). Reuses the global SDK TracerProvider (keeps Langfuse/OTLP exporters), else
     creates and installs one. Instruments LangChain/LangGraph/deepagents, the OpenAI Agents SDK (OpenInference), Hatchet
@@ -37,14 +43,30 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
     per tool call; its DB / HTTP calls become its backends). With any of them, Redis / asyncpg / pymongo clients are
     instrumented too when their OTel instrumentations are installed (`pip install "agentglow[fastapi,faststream,redis]"`).
     `service_name` names this process's service (default: OTEL_SERVICE_NAME, the FastMCP / FastAPI name, else
-    `api` / `worker`)."""
+    `api` / `worker`). `app` may be a list of apps; FastAPI / Starlette apps mounted inside (`app.mount("/api", api)`)
+    are covered by the outer app (one server span per request, full route templates `/api/patients/{id}`).
+
+    Backend mode only (any of app / broker / mcp; docs/SPEC.md "Privacy" and "Backend services"):
+    `privacy`: "strict" (default) keeps only an allow-list of structural attributes (route templates, methods, status
+    codes, hosts, DB system / operation / collection, message destination / id / size, model names, token counts) and
+    replaces emails / phone numbers / long digit ids in what is left; "standard" exports spans as they are (the server
+    still applies its backstop). `allow`: extra attribute key patterns to keep (fnmatch). `allow_message_keys`: message
+    fields to keep (e.g. ["attempt"]). `error_messages`: keep exception messages, scrubbed, max 120 chars.
+    `scrub(attrs) -> attrs`: your own hook, run last on every exported span's attributes. `pii_patterns`: replace the
+    [(regex, replacement)] PII list. `ignore`: route / span name / client call patterns never exported, with their
+    children (e.g. ["GET /v1/models", "/internal/*"]), added to the defaults (health / readiness routes, blocking
+    Redis polls like XREADGROUP; `ignore_defaults=False` drops them).
+    `propagate` (default on): thread pools (`run_in_executor`, `ThreadPoolExecutor.submit`) carry the OTel context,
+    so work handed to threads stays under the request that started it. Each process reports `service.instance.id`
+    (hostname-pid): replicas of one service collapse into one node with an instance count."""
     url = _default_url(url)
     backend = app is not None or broker is not None or mcp is not None
     name = service_name or os.environ.get("OTEL_SERVICE_NAME") or _default_service(app, broker, mcp)
     with _lock:
         provider = trace.get_tracer_provider()
         if not isinstance(provider, TracerProvider):
-            provider = TracerProvider(resource=Resource.create({"service.name": name}))
+            res = {"service.name": name, **({"service.instance.id": instance_id()} if backend else {})}
+            provider = TracerProvider(resource=Resource.create(res))
             trace.set_tracer_provider(provider)
             if trace.get_tracer_provider() is not provider:  # a non-SDK provider was already pinned globally
                 log.warning("agentglow: global tracer provider is not an SDK provider; instrumenting a private one")
@@ -54,22 +76,66 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
             provider.add_span_processor(_processors[key])
         elif api_key:
             _processors[key].api_key = api_key
+        proc = _processors[key]
         if backend and (service_name or str(provider.resource.attributes.get("service.name", "unknown_service")).startswith("unknown_service")):
-            _processors[key].service = name  # explicit, or the provider's resource has no real service.name
+            proc.service = name  # explicit, or the provider's resource has no real service.name
+        _install_registry(provider)
+        apps = [a for a in (app if isinstance(app, (list, tuple)) else [app]) if a is not None]
+        if backend:
+            if not provider.resource.attributes.get("service.instance.id"):
+                proc.instance = instance_id()
+            pol = proc.policy if isinstance(proc.policy, Policy) else Policy()
+            pol.configure(privacy=privacy, ignore=ignore, ignore_defaults=ignore_defaults, allow=allow, allow_message_keys=allow_message_keys,
+                          error_messages=error_messages, scrub=scrub, pii_patterns=pii_patterns, apps=apps)
+            proc.policy = pol
+            if propagate is not False:
+                propagate_context()
+        elif propagate:
+            propagate_context()
         if instrument:
             _instrument(provider)
         if backend:
-            _instrument_backend(provider, app, broker, mcp)
+            _instrument_backend(provider, apps, broker, mcp)
         return provider
 
 
 def _default_service(app: Any, broker: Any, mcp: Any) -> str:
     if mcp is not None and getattr(mcp, "name", None):
         return str(mcp.name)
+    if isinstance(app, (list, tuple)):
+        app = app[0] if app else None
     if app is not None:
         title = str(getattr(app, "title", "") or "")
         return title if title and title != "FastAPI" else "api"
     return "worker" if broker is not None else "agentglow-app"
+
+
+def _instrument_app(app: Any, provider: TracerProvider) -> None:
+    native = getattr(app, "_telemetry", None)
+    if isinstance(native, dict) and native.get("tracing", True):
+        # FastAPI's native OTel spans (server span + fastapi.endpoint / fastapi.background_task ...): use them; it
+        # already skips mounted FastAPI apps for a request it traces
+        if native.get("tracer_provider") is None and trace.get_tracer_provider() is not provider:
+            native["tracer_provider"] = provider
+        return
+    for sub in mounted_apps(app):  # the outer middleware traces these requests: no second server span inside
+        tel = getattr(sub, "_telemetry", None)
+        if isinstance(tel, dict):
+            tel["tracing"] = False
+    if getattr(app, "_is_instrumented_by_opentelemetry", False):
+        return
+    try:
+        from fastapi import FastAPI
+    except ImportError:  # pragma: no cover
+        FastAPI = None
+    if FastAPI is not None and isinstance(app, FastAPI):
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        FastAPIInstrumentor.instrument_app(app, tracer_provider=provider, exclude_spans=["receive", "send"])  # no ASGI send/receive noise
+    else:
+        from opentelemetry.instrumentation.starlette import StarletteInstrumentor
+
+        StarletteInstrumentor.instrument_app(app, tracer_provider=provider)
 
 
 def _try(what: str, fn) -> None:
@@ -81,22 +147,13 @@ def _try(what: str, fn) -> None:
         log.info("agentglow: %s instrumentation skipped: %s", what, e)
 
 
-def _instrument_backend(provider: TracerProvider, app: Any, broker: Any, mcp: Any) -> None:
-    if app is not None:
-        def fastapi():
-            native = getattr(app, "_telemetry", None)
-            if isinstance(native, dict) and native.get("tracing", True):
-                # FastAPI's native OTel spans (server span + fastapi.endpoint / fastapi.background_task ...): use them
-                if native.get("tracer_provider") is None and trace.get_tracer_provider() is not provider:
-                    native["tracer_provider"] = provider
-                return
-            from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
-            if not getattr(app, "_is_instrumented_by_opentelemetry", False):  # no ASGI send/receive spans: noise
-                FastAPIInstrumentor.instrument_app(app, tracer_provider=provider, exclude_spans=["receive", "send"])
-        _try("FastAPI", fastapi)
+def _instrument_backend(provider: TracerProvider, apps: list, broker: Any, mcp: Any) -> None:
+    mounted = {id(sub) for a in apps for sub in mounted_apps(a)}
+    for app in [a for a in apps if id(a) not in mounted]:  # a mounted sub-app is served by its parent's middleware
+        _try("FastAPI", lambda app=app: _instrument_app(app, provider))
     if broker is not None:
         _try("FastStream", lambda: _watch_broker(broker, provider))
+        _try("FastStream publish", lambda: _watch_publish(broker))
     if mcp is not None:
         _try("FastMCP", lambda: _watch_mcp(mcp))
     for mod, cls in (("opentelemetry.instrumentation.httpx", "HTTPXClientInstrumentor"),

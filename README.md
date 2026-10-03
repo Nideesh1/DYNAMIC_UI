@@ -168,6 +168,21 @@ see [docs/SPEC.md "Scopes & auth"](docs/SPEC.md#scopes--auth).
 redacts secret-looking values before anything reaches the stream ([docs/SPEC.md](docs/SPEC.md#privacy)). Keep
 patient/customer data (names, phone numbers, ids) out of agent names, tool args and final text.
 
+**Backend services are strict by default.** `agentglow.watch(app=..., broker=...)` keeps only an allow-list of
+structural attributes (route templates, methods, status codes, hosts, DB system / operation / collection, message
+destination / id / size, model names, token counts) before a span leaves your process: no request / response bodies
+or headers, no URLs or paths with ids, no SQL / Mongo statements, no message payloads, no prompts or tool args, no
+exception messages or stack traces, no credentials in connection strings; emails, phone numbers and long digit ids
+left in names are replaced. The server applies the transport part again as a backstop for every source (OTLP too).
+```python
+agentglow.watch(app=app, broker=broker,
+                ignore=["GET /v1/models"],          # plus health checks + idle Redis polls by default
+                allow_message_keys=["attempt"],     # message fields you want to see
+                scrub=lambda attrs: attrs)          # your own last-pass hook
+agentglow.mark_error("vendor timeout")              # swallowed failure: the request still shows red
+```
+`privacy="standard"` exports spans unchanged. Full allow-list: [docs/SPEC.md "Privacy" > "Backend mode"](docs/SPEC.md#backend-mode-watchapp--broker--mcp).
+
 **Your own prompts (opt-in, local only):** `npx agentglow setup --capture-prompts` (or `AGENTGLOW_CAPTURE_PROMPTS=1
 agentglow serve --host 127.0.0.1`) keeps your Claude Code prompts, secrets redacted and capped at 2000 chars, so the
 agent panel shows each turn as "you: ... / claude: ...". Off by default. It only works when the server listens on

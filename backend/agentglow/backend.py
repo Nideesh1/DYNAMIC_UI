@@ -13,6 +13,8 @@ exactly as before (a service only appears once it has backend spans).
 | CLIENT span with `db.system` or HTTP inside a request | `mcp` call/result on the synthetic `backend` group, resource = the system (`redis`, `postgresql`, `payments:9100`) |
 | CLIENT span inside an MCP tool span (`agentglow.mcp.server`) that names no resource | the same, as a backend of THAT MCP server (auto-discovered; a manual `agentglow.mcp.resource` wins) |
 | error: span status ERROR, HTTP status >= 500 | `request` with `error: true` (always sent individually within the cap) and counted in `service_stats.errors` |
+| PRODUCER span ending with status ERROR (a publish that raised) | `message` with `failed: true` (a comet that fizzles) to the topic's last known consumer, else back to the producer |
+| replicas: spans of one service from several processes (`instance` = resource `service.instance.id`) | one service agent; `service_stats.instances` = distinct instances seen in the last INSTANCE_MS (only when > 1) |
 | GenAI spans inside a request | the usual `llm` / `tool` / ... events, owned by the service agent (or its subagent) |
 
 Flat events (POST /v1/events, `agentglow.pulse()`) go through `flat()` and produce the same world events.
@@ -53,6 +55,7 @@ DB_KIND = {"snowflake": "warehouse", "bigquery": "warehouse", "redshift": "wareh
            "spark": "spark", "s3": "storage", "gcs": "storage", "minio": "storage"}
 SKIP_ENTRY = ("hatchet.", "gen_ai.", "openinference.", "agentglow.mcp.", "llm.")
 # a consumer's idle blocking reads (FastStream polls a Redis stream every 100 ms): not traffic, dropped at the root
+INSTANCE_MS = int(os.environ.get("AGENTGLOW_SERVICE_INSTANCE_MS", "60000"))  # a replica counts while seen this recently
 POLL_OPS = {"XREAD", "XREADGROUP", "BLPOP", "BRPOP", "BLMOVE", "BRPOPLPUSH", "BZPOPMIN", "BZPOPMAX", "BLMPOP", "BZMPOP"}
 
 
@@ -175,6 +178,7 @@ class Svc:
     open: dict = field(default_factory=dict)  # span id -> open request Span (in flight)
     jobs: dict = field(default_factory=dict)  # job agent id -> [spawn event, status event] (live job nodes)
     inflight: int = 0  # in-flight count sent in the last service_stats
+    instances: dict = field(default_factory=dict)  # replica (service.instance.id) -> last seen ts
 
 
 class Services:
@@ -185,6 +189,7 @@ class Services:
         self.producers: dict[str, tuple] = {}  # producer span id -> (service agent id, topic, ts)
         self.waiting: dict[str, tuple] = {}  # producer span id -> (consumer agent id, topic, ts): consumer came first
         self.edge_at: dict[tuple, int] = {}
+        self.consumer_of: dict[str, str] = {}  # topic -> last consumer service agent id (target of a failed publish)
         self.call_at: dict[tuple, int] = {}
         self.known: set[tuple] = set()  # (server, resource) registered
         self.ended: deque = deque()  # (end ts, span id) of service-run spans, pruned after PRUNE_MS
@@ -198,7 +203,7 @@ class Services:
     def run_id(scope: object) -> str:
         return f"{RUN}:{scope}" if scope else RUN
 
-    def ensure(self, name: str, scope: object, ts: int, out: list) -> str:
+    def ensure(self, name: str, scope: object, ts: int, out: list, instance: object = None) -> str:
         """The service's agent id (spawned, with its run, on first sight)."""
         from .mapper import Agent, Run
 
@@ -223,6 +228,10 @@ class Services:
             self.m._thinking(aid, rid, out, ts)  # a service is working while it is up (not "spawning")
             sv.status = out[-1] if len(out) > n else None
         sv.last_ts = max(sv.last_ts, ts)
+        if instance:
+            sv.instances[str(instance)[:80]] = max(ts, sv.instances.get(str(instance)[:80], 0))
+            if len(sv.instances) > 256:
+                sv.instances.pop(min(sv.instances, key=sv.instances.get))
         self.m.runs[rid].last_ts = max(self.m.runs[rid].last_ts, ts)
         return aid
 
@@ -239,7 +248,7 @@ class Services:
     # ------------------------------------------------------------------ spans
     def start_entry(self, s: "Span", kind: str, d: dict, out: list) -> None:
         a = s.attrs
-        aid = self.ensure(self.service_name(d), a.get("agentglow.scope") or a.get("agentglow.run.scope"), s.start, out)
+        aid = self.ensure(self.service_name(d), a.get("agentglow.scope") or a.get("agentglow.run.scope"), s.start, out, d.get("instance"))
         s.alias = s.svc = aid
         s.entry = kind
         if s.end is None:
@@ -280,7 +289,8 @@ class Services:
         op = str(a.get("db.operation.name") or a.get("db.operation") or s.name).split(" ")[0].upper()
         if op in POLL_OPS:
             return
-        s.alias = s.svc = self.ensure(self.service_name(d), a.get("agentglow.scope") or a.get("agentglow.run.scope"), s.start, out)
+        s.alias = s.svc = self.ensure(self.service_name(d), a.get("agentglow.scope") or a.get("agentglow.run.scope"), s.start, out,
+                                      d.get("instance"))
         self.child_start(s, out)
 
     def end_entry(self, s: "Span", out: list) -> None:
@@ -305,6 +315,9 @@ class Services:
         a = s.attrs
         if s.svc and s.kind == "producer" and a.get("messaging.system"):
             topic = topic_of(s.name, a)
+            if s.end is not None and (s.status == "error" or a.get("agentglow.message.failed")):
+                self._fizzle(s.svc, topic, s.end, out)  # the publish raised: the message never left
+                return
             self.producers[s.id] = (s.svc, topic, s.start)
             self._bound(self.producers)
             w = self.waiting.pop(s.id, None)
@@ -387,9 +400,23 @@ class Services:
             cur, hops = self.m.spans.get(cur.parent or ""), hops + 1
         return False
 
+    def _fizzle(self, frm: str, topic: str, ts: int, out: list) -> None:
+        to = self.consumer_of.get(topic)
+        to = to if to in self.svcs else frm
+        key = (frm, to, topic, "failed")
+        if ts - self.edge_at.get(key, -COMET_MIN_MS) < COMET_MIN_MS:
+            return
+        self.edge_at[key] = ts
+        self._bound(self.edge_at, 4096)
+        run = self.svcs[frm].run if frm in self.svcs else RUN
+        out.append({"type": "message", "run_id": run, "from_id": frm, "to_id": to, "text": topic or "message", "failed": True, "ts": ts})
+
     def _comet(self, frm: str, to: str, topic: str, ts: int, out: list) -> None:
         if frm == to:
             return
+        if topic:
+            self.consumer_of[topic] = to
+            self._bound(self.consumer_of, 4096)
         key = (frm, to, topic)
         if ts - self.edge_at.get(key, -COMET_MIN_MS) < COMET_MIN_MS:
             return
@@ -465,6 +492,10 @@ class Services:
                 if inflight or sv.inflight:  # open requests (long handlers); sent until it drops back to 0
                     out[-1]["inflight"] = inflight
                 sv.inflight = inflight
+                for k in [k for k, t in sv.instances.items() if now - t > INSTANCE_MS]:
+                    del sv.instances[k]
+                if len(sv.instances) > 1:
+                    out[-1]["instances"] = len(sv.instances)
             if sv.busy:
                 sv.calm_streak = sv.calm_streak + 1 if w.n * 1000 / window <= HV_RATE else 0
                 if sv.calm_streak >= CALM_WINDOWS:
@@ -506,13 +537,18 @@ class Services:
             return out
         scope = e.get("scope") or scope
         kind = str(e.get("event") or "request").lower()
-        aid = self.ensure(name, scope, now, out)
+        aid = self.ensure(name, scope, now, out, e.get("instance"))
         rid = self.run_id(scope)
         ms = max(0, _int(e.get("duration_ms")) or 0)
         title = decision_text(e.get("name") or kind, 60)
         if kind == "message":
             to = label(e.get("to"))
             topic = decision_text(e.get("topic") or e.get("name") or "message", 60)
+            if e.get("failed") is True or str(e.get("status")).lower() in ("failed", "error"):
+                if to:
+                    self.consumer_of.setdefault(topic, self.ensure(to, scope, now, out))
+                self._fizzle(aid, topic, now, out)
+                return out
             if to:
                 tid = self.ensure(to, scope, now, out)
                 self._comet(aid, tid, topic, now, out)
