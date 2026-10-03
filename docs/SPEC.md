@@ -39,6 +39,18 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
   - `POST /v1/claude-code` - Claude Code `"type": "http"` hook payloads (examples/claude-code/) → synthetic live spans.
   - `GET /live/stream` - SSE world events. On connect: replay MCP topology + events of runs still in progress. Keepalive 15s.
     Filtered per viewer by scope/run (see "Scopes & auth").
+    Replay: the server keeps the last `AGENTGLOW_BUFFER` events (default 5000) plus a bounded snapshot of every open
+    run's state-carrying events: its `run started` (+ latest `renamed`, `final`, step states), per live agent its
+    `spawn` and the latest of each state still open (`agent` status / waiting, a `skill` started and not ended, a
+    running `stage`, `session` start + latest phase, `job`, locked `gate`, `lifecycle`, `progress`, `capacity`,
+    `metric`, open `deferred`), plus live backend services and job nodes. An agent's entries are dropped on its
+    `exit`, a run's on `run completed` / `failed` (an ended run's leftover buffered events are not replayed either).
+    A long run (a Claude Code session open for hours, a long Hatchet run) outlives the buffer: the snapshot entries
+    that already left it go first, in publish order (run start, then spawns parent before child, then states), then
+    the buffered events; each event at most once. Bounds: 1000 open runs (`AGENTGLOW_SNAPSHOT_RUNS`), 2000 live
+    agents in all (`AGENTGLOW_SNAPSHOT_AGENTS`), 32 state entries per agent, 64 steps per run; beyond them the
+    oldest is forgotten. Pulses (llm, tool, mcp, messages, requests) and token totals are not snapshotted: a fresh
+    viewer sees the current agents, then counts from now.
   - `POST /live/topology` - `{server, resources:[{name, kind}]}` → `mcp_register` (also `agentglow.register_mcp(...)`).
   - `GET /live/graph` - optional graph sample `{nodes:[{id,name,kind}],links:[{source,target}]}`; FalkorDB provider when `AGENTGLOW_FALKOR_URL`/`--falkor` set (graph name = the URL path, else `AGENTGLOW_FALKOR_GRAPH`, default `demo`), else an empty graph `{nodes: [], links: []}` → UI uses its built-in sample.
   - `GET /live/run` / `POST /live/run`, `POST /live/approve` - optional run / approve webhooks (see "Scopes & auth").
@@ -101,6 +113,9 @@ buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion 
   Every buffered event carries `seq` (per server instance, increasing) and is sent with `id: <epoch>-<seq>`; a
   reconnect with `Last-Event-ID` (the app client and `EventSource` send it) replays only newer events, so llm tokens and
   calls of in-progress runs are not applied twice. An id from another epoch (server restarted) gets the full replay.
+  A resume whose last id already left the buffer also gets the snapshot entries newer than that id (what it missed
+  that still matters, e.g. a spawn) and the recent endings it missed (`exit`, run completed / failed; last 2000), so it
+  drops agents and runs that ended meanwhile.
 - `POST /live/run` `{topic, scope?, workflow?}` (optional `AGENTGLOW_RUN_WEBHOOK`; 404 without it) forwards
   `{"topic", "scope"?, "workflow"?}` to the webhook (`scope` omitted when unknown, `workflow` max 64 chars) and returns
   its JSON. `GET /live/run` proxies `GET <webhook>` → `{workflows: [{id, label, topic}]}` (max 20; empty when the
