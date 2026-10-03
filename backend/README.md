@@ -7,12 +7,12 @@ when its span ends. Works with LangChain, LangGraph (incl. `langgraph-supervisor
 
 ![AgentGlow - neural theme](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/hero.webp)
 
-5 themes:
+6 themes:
 
 | | | |
 |:-:|:-:|:-:|
 | ![neural](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/neural.jpg) **neural** | ![constellation](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/constellation.jpg) **constellation** | ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/orbit.jpg) **orbit** |
-| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** | |
+| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** | ![bubblechamber](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/bubblechamber.jpg) **bubblechamber** |
 
 ## Quickstart
 
