@@ -8,6 +8,7 @@ const ACCENT: Record<Theme, [string, string]> = {
   flow: ["#a5b4fc", "#f0abfc"],
   constellation: ["#c7d2fe", "#60a5fa"],
   atom: ["#38bdf8", "#f472b6"],
+  bubblechamber: ["#5eead4", "#bff3ff"],
 };
 
 export default function Gallery() {

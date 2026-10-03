@@ -104,12 +104,12 @@ Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT
 
 ▶ [Watch the demo in HD](docs/media/hero.mp4)
 
-## 5 themes
+## 6 themes
 
 | | | |
 |:-:|:-:|:-:|
 | ![neural](docs/media/neural.jpg) **neural** | ![constellation](docs/media/constellation.jpg) **constellation** | ![orbit](docs/media/orbit.jpg) **orbit** |
-| ![atom](docs/media/atom.jpg) **atom** | ![flow](docs/media/flow.jpg) **flow** | |
+| ![atom](docs/media/atom.jpg) **atom** | ![flow](docs/media/flow.jpg) **flow** | ![bubblechamber](docs/media/bubblechamber.jpg) **bubblechamber** |
 
 ## In your React / Next.js app
 
@@ -125,7 +125,7 @@ import { AgentScene } from "agentglow";
 ```
 | Prop | Default | |
 |---|---|---|
-| `theme` | `"neural"` | one of the 5 themes: `neural`, `constellation`, `orbit`, `atom`, `flow` |
+| `theme` | `"neural"` | one of the 6 themes: `neural`, `constellation`, `orbit`, `atom`, `flow` |
 | `source` | `""` (same origin) | your `agentglow serve` URL (default port 8100). In a deployed app, use a URL your users' browsers can reach, e.g. `https://agentglow.yourco.com` |
 | `hud` | `true` | overlay panels (title, agent list, event log, stats); `hud={false}` = just the 3D scene |
 | `sim` | `false` | built-in fake agents, no server needed (also kicks in automatically if `source` is unreachable) |

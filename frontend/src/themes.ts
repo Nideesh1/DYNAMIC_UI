@@ -1,7 +1,7 @@
 /** The AgentGlow themes (scene modules live in src/scenes/<theme>/index.tsx). */
 import type { ComponentType } from "react";
 
-export const THEMES = ["neural", "constellation", "orbit", "atom", "flow"] as const;
+export const THEMES = ["neural", "constellation", "orbit", "atom", "flow", "bubblechamber"] as const;
 export type Theme = (typeof THEMES)[number];
 
 export const THEME_INFO: Record<Theme, { name: string; tagline: string }> = {
@@ -10,6 +10,7 @@ export const THEME_INFO: Record<Theme, { name: string; tagline: string }> = {
   flow: { name: "Flow", tagline: "A murmuration: agents condense as eddies out of the current." },
   constellation: { name: "Constellation", tagline: "A night sky: agents are stars linked into constellations as they delegate." },
   atom: { name: "Atom", tagline: "An atom: agents are electrons in shells, subagents jump orbits, LLM calls flash photons." },
+  bubblechamber: { name: "Bubble chamber", tagline: "A bubble chamber: agents curl as particle tracks, spawns decay into a V, LLM calls burst bubbles." },
 };
 
 /** Lazy loaders, one chunk per theme (static strings so every bundler can split them). */
@@ -19,4 +20,5 @@ export const THEME_LOADERS: Record<Theme, () => Promise<{ default: ComponentType
   flow: () => import("./scenes/flow/index"),
   constellation: () => import("./scenes/constellation/index"),
   atom: () => import("./scenes/atom/index"),
+  bubblechamber: () => import("./scenes/bubblechamber/index"),
 };
