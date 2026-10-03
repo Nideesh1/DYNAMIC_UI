@@ -11,7 +11,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, energy, lingerMs, presence, world, type Comet } from "../shared/world";
+import { TYPE_COLOR, energy, lingerMs, presence, world, type Comet, jobText } from "../shared/world";
 import { isExpanded, lod, showLabel } from "../shared/lod";
 import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
@@ -217,6 +217,7 @@ export function Soma({ agent, onSelect }: AgentSlotProps) {
           <Label3D
             ref={label}
             text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
+            live={inst.job ? () => jobText(inst) : null}
             color={TYPE_COLOR[inst.type]}
             size={inst.subagent ? 0.22 : 0.3}
             opacity={0}

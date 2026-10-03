@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { showLabel } from "../shared/lod";
-import { TYPE_COLOR, energy, isDeny, world } from "../shared/world";
+import { TYPE_COLOR, energy, isDeny, world, jobText } from "../shared/world";
 import { agentLive, fit, kit, type AgentSlotProps } from "../shared/kit";
 import {
   AMBER,
@@ -312,6 +312,7 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
         <Label3D
           ref={label}
           text={`${inst.name}${kx !== undefined ? ` ${Number(kx) + 1}` : ""}`}
+            live={inst.job ? () => jobText(inst) : null}
           color={TYPE_COLOR[inst.type]}
           size={inst.subagent ? 0.22 : 0.28}
           letterSpacing={0.02}

@@ -13,7 +13,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { FADE_MS, TYPE_COLOR, energy, hash01, lingerMs, presence, world } from "../shared/world";
+import { FADE_MS, TYPE_COLOR, energy, hash01, lingerMs, presence, world, jobText } from "../shared/world";
 import { showLabel } from "../shared/lod";
 import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
@@ -341,6 +341,7 @@ export function Electron({ agent, selected, onSelect }: AgentSlotProps) {
             ref={label}
             anchorX={sub ? "left" : "center"}
             text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
+            live={inst.job ? () => jobText(inst) : null}
             color={TYPE_COLOR[inst.type]}
             size={sub ? 0.22 : 0.28}
             opacity={0}

@@ -79,6 +79,7 @@ function mkRun(id: string): KitRun {
     members: 0,
     foot: 0,
     tops: 0,
+    svc: 0,
     u0: 0,
     u1: 0,
     v0: 0,
@@ -140,6 +141,7 @@ function mkAgent(inst: Instance): KitAgent {
     cell: 0,
     ringOff: 0,
     ringAt: -1,
+    svcIdx: -1,
     fresh: true,
     dim: isDone(inst) ? 1 : 0,
   };
@@ -286,8 +288,12 @@ function sidesUsed() {
 function measureRings() {
   const L = config.preset.local;
   for (const a of kit.agents.values()) a.kidFoot = 0;
-  for (const r of kit.runs.values()) (r.foot = FOOT), (r.tops = 0);
-  for (const a of kit.agents.values()) if (a.depth === 0) a.run.tops++;
+  for (const r of kit.runs.values()) (r.foot = FOOT), (r.tops = 0), (r.svc = 0);
+  for (const a of kit.agents.values()) {
+    if (a.depth !== 0) continue;
+    a.run.tops++;
+    a.svcIdx = a.id.startsWith("svc:") ? a.run.svc++ : -1;
+  }
   for (let d = 6; d >= 0; d--)
     for (const a of kit.agents.values()) {
       if (a.depth !== d && !(d === 6 && a.depth > 6)) continue;
@@ -360,6 +366,7 @@ function ringOffset(p: KitAgent, cnt: number) {
   const gp = p.depth > 0 && p.inst.parent ? kit.agents.get(p.inst.parent) : undefined;
   if (gp) FORBID.push(Math.atan2(gp.v - p.v, gp.u - p.u)), FORBID_W.push(1);
   else if (p.run.tops > 1 || p.run.run?.hasSteps) FORBID.push(0, Math.PI), FORBID_W.push(0.8, 0.8);
+  if (p.inst.hv) FORBID.push(FORBID[0] + Math.PI), FORBID_W.push(1); // its halo label above the ring
   const rx = Math.max(1e-3, p.rx);
   const ry = Math.max(1e-3, p.ry);
   let best = 0;
@@ -381,6 +388,24 @@ function placeLocal(a: KitAgent) {
   const L = config.preset.local;
   const sp = fit.spread;
   const inst = a.inst;
+  if (a.depth === 0 && a.svcIdx >= 0 && a.run.svc > 1) {
+    // backend services (2+): apart on a ring (2 = left | right), each with its own ring of tasks / jobs, so their
+    // halo labels never stack and message comets visibly travel between them
+    const n = a.run.svc;
+    const chord = Math.max(L.topGap * 2.4, a.run.foot * 2 + L.topGap);
+    const R = chord / (2 * Math.sin(Math.PI / n));
+    // screen angle (x right, y down): 2 = left | right on a slight diagonal (lines from one to the resources at the
+    // side never run through the other), 3+ = from the top, clockwise; then into the run's frame (a run on a ring
+    // of runs is rotated: screen-down is downAngle there)
+    const th = n === 2 ? (a.svcIdx ? Math.PI + 0.32 : 0.32) : -Math.PI / 2 + (a.svcIdx * TAU) / n;
+    const sx = Math.sqrt(THREE.MathUtils.clamp(fit.aspect, 1, 2));
+    const x = Math.cos(th) * R * sx;
+    const y = Math.sin(th) * R;
+    const phi = downAngle(a.run) - Math.PI / 2;
+    a.u = (x * Math.cos(phi) - y * Math.sin(phi)) * sp;
+    a.v = (x * Math.sin(phi) + y * Math.cos(phi)) * sp;
+    return;
+  }
   if (a.depth === 0) {
     // top-level agents of a run on a line (planner | researcher | writer), clear of the biggest one's rings
     const gap = Math.max(L.topGap, a.run.foot + FOOT + 0.8);

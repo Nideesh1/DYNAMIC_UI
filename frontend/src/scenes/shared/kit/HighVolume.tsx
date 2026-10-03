@@ -17,7 +17,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../Label3D";
-import { HALO_CATS, HALO_COLORS, haloMix, hash01, ORDER_LIFE_MS, orderText, presence, world, type OrderUse } from "../world";
+import { flashMix, HALO_CATS, HALO_COLORS, haloMix, hash01, ORDER_LIFE_MS, orderText, presence, world, type OrderUse } from "../world";
 import { fit } from "./fit";
 import { labels } from "./labels";
 import { kit, reduced, type KitAgent } from "./state";
@@ -115,6 +115,22 @@ export function DecisionHalos({ radius, height }: { radius: number; height: numb
     let n = 0;
     for (const ag of kit.agents.values()) {
       const h = ag.inst.hv;
+      if (!h && ag.inst.flash && n < MAX_HALOS) {
+        // a job (long request) just ended: one full ring flash, green done / red failed
+        const f = flashMix(ag.inst, now);
+        if (f <= 0.003) continue;
+        const R = haloFrame(ag, radius, height, V1);
+        M4.compose(V1, camera.quaternion, S1.setScalar(R * HALO_Q * (1 + 0.35 * (1 - f))));
+        m.setMatrixAt(n, M4);
+        const red = ag.inst.flash.ok ? 0 : 1;
+        for (let k = 0; k < 8; k++) (k < 4 ? a.array : b.array)[n * 4 + (k & 3)] = k === 0 ? 1 - red : 1;
+        p.array[n * 4] = f;
+        p.array[n * 4 + 1] = 0.07 / HALO_Q;
+        p.array[n * 4 + 2] = 1.6;
+        p.array[n * 4 + 3] = 0;
+        n++;
+        continue;
+      }
       if (!h || n >= MAX_HALOS) continue;
       const mix = haloMix(h, now) * presence(ag.inst, now) * (1 - 0.5 * ag.dim);
       if (mix <= 0.003) continue;
@@ -209,7 +225,7 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
       const d = h.deny * 100;
       const dn = d > 0 && d < 1 ? "<1" : `${Math.round(d)}`;
       const p50 = `${Math.round(h.p50)}`;
-      const key = `${h.provider}|${h.unit}|${r}|${dn}|${p50}`;
+      const key = `${h.provider}|${h.unit}|${r}|${dn}|${p50}|${h.inflight ?? 0}`;
       if (key !== st.key) {
         st.key = key;
         // a backend service (world `service_stats`): `42 req/s · 2% 5xx · p50 18ms`
@@ -218,7 +234,7 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
           { text: h.unit ? `${h.unit}/s` : `${r}/s`, color: h.unit ? BADGE : TEXT },
           { text: " · ", color: DIM },
           { text: `${dn}% ${h.unit === "req" ? "5xx" : h.unit ? "err" : "deny"}`, color: d >= 1 ? RED : DIM },
-          { text: ` · p50 ${p50}ms`, color: DIM },
+          h.inflight ? { text: ` · ${h.inflight} in flight`, color: "#fbbf24" } : { text: ` · p50 ${p50}ms`, color: DIM },
         ]);
       }
     }
@@ -227,7 +243,9 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
     const pc = camera as THREE.PerspectiveCamera;
     const dist = V1.distanceTo(camera.position) || 1;
     const wpp = pc.isPerspectiveCamera ? (2 * dist * Math.tan(THREE.MathUtils.degToRad(pc.fov) / 2)) / (pc.zoom * vp.height) : 0.01;
-    o.position.copy(V1).addScaledVector(CAM_UP, R + 5 * wpp);
+    // a service with a ring of tasks / jobs: the label goes above the ring (never across its spokes)
+    const top = h.unit && agent.rings && agent.kidsMax ? agent.ry * (1 + (agent.rings - 1) * 0.9 * agent.cell / Math.max(1e-3, agent.rx, agent.ry)) * fit.spread * (kit.plane === "xz" ? fit.foreshorten : 1) + radius * fit.scale * 0.9 : 0;
+    o.position.copy(V1).addScaledVector(CAM_UP, Math.max(R, top) + 5 * wpp);
   });
   return (
     <group ref={g} visible={false}>
