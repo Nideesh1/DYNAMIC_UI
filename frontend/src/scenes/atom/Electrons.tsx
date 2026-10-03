@@ -13,7 +13,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { FADE_MS, TYPE_COLOR, energy, hash01, lingerMs, presence, world, jobText } from "../shared/world";
+import { FADE_MS, TYPE_COLOR, energy, hash01, lingerMs, presence, world, jobText, cometOn, cometPos } from "../shared/world";
 import { showLabel } from "../shared/lod";
 import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
@@ -439,8 +439,8 @@ export function Messages() {
       const b = agentLive(cm.to);
       const sp = refs.current[n];
       if (!a || !b || !sp) continue;
-      const t = clamp01((now - cm.start) / cm.dur);
-      if (t >= 1) continue;
+      const t = cometPos(cm, now);
+      if (!cometOn(cm, now)) continue;
       bow(a, b, 1.0, s.c);
       bezier(a, s.c, b, easeInOut(t), s.h);
       sp.visible = true;

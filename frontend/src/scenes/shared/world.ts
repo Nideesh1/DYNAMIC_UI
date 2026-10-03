@@ -33,7 +33,8 @@ export type WorldEvent =
   | { type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; reason?: string; until?: number; ts: number }
   // tokens_in = ALL prompt tokens (cached included); tokens_cached / tokens_cache_write are subsets of it, never added
   | { type: "llm"; run_id: string; id: string; tokens_in: number; tokens_out: number; tokens_cached?: number; tokens_cache_write?: number; latency_ms: number; ts: number }
-  | { type: "message"; run_id: string; from_id: string; to_id: string; text: string; ts: number }
+  // `failed`: a publish that raised (backend services): the comet fizzles out instead of arriving
+  | { type: "message"; run_id: string; from_id: string; to_id: string; text: string; ts: number; failed?: boolean }
   | { type: "tool"; run_id: string; id: string; tool: string; args_preview: string; ts: number }
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
   | { type: "final"; run_id: string; text: string; ts: number }
@@ -53,7 +54,7 @@ export type WorldEvent =
   // `hv` = an error sent individually while the service's requests are aggregated in `service_stats`
   | { type: "request"; run_id: string; id: string; service: string; name: string; kind: "http" | "rpc" | "message" | "event"; status?: number; error: boolean; ms: number; ts: number; hv?: boolean }
   // one per service per ~1 s window: requests, errors, status classes ("2xx": n), latency, top routes
-  | { type: "service_stats"; run_id: string; id: string; service: string; window_ms: number; n: number; errors: number; codes: Record<string, number>; p50_ms: number; p95_ms: number; routes: Record<string, number>; inflight?: number; ts: number }
+  | { type: "service_stats"; run_id: string; id: string; service: string; window_ms: number; n: number; errors: number; codes: Record<string, number>; p50_ms: number; p95_ms: number; routes: Record<string, number>; ts: number; instances?: number; inflight?: number }
   // an order action (paper when dry_run) by agent instance `id`
   | { type: "order"; run_id: string; id: string; side: string; qty: number; price?: number; status: OrderStatus; instrument: string; dry_run: boolean; reason?: string; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
@@ -77,7 +78,7 @@ const ORDERS_KEPT = 8;
  * High-volume decisions, per agent (from `decision_stats`): smoothed (EMA) so the halo and its label never flicker.
  * `seg` = smoothed share of each outcome category, in HALO_CATS order.
  */
-export type HvStats = { at: number; bump: number; bumpDeny: boolean; rate: number; deny: number; p50: number; p95: number; seg: number[]; provider: string; n: number; windows: number; unit?: "req" | "msg"; inflight?: number };
+export type HvStats = { at: number; bump: number; bumpDeny: boolean; rate: number; deny: number; p50: number; p95: number; seg: number[]; provider: string; n: number; windows: number; unit?: "req" | "msg"; instances?: number; inflight?: number };
 /** outcome categories of a decision halo arc: allow, deny, check yes, check no, route result slots 0..3, other */
 export const HALO_CATS = ["allow", "deny", "yes", "no", "r0", "r1", "r2", "r3", "other"] as const;
 export const HALO_COLORS = ["#4ade80", "#fb3b5c", "#5eead4", "#fbbf24", "#60a5fa", "#c084fc", "#f472b6", "#facc15", "#94a3b8"];
@@ -385,7 +386,17 @@ export function stepChips(r: Run, max = MAX_STEP_CHIPS): { shown: StepName[]; mo
   const cut = n > max ? max - 1 : n; // the "+N" chip takes the last place
   return { shown: r.stepOrder.slice(0, cut), more: n - cut };
 }
-export type Comet = { id: number; run: string; from: string; to: string; start: number; dur: number; text: string };
+export type Comet = { id: number; run: string; from: string; to: string; start: number; dur: number; text: string; failed?: boolean };
+/** a failed comet (a publish that raised) sputters out half way: it stalls here and is gone at FIZZLE_END of its life */
+export const FIZZLE_STALL = 0.55;
+export const FIZZLE_END = 0.8;
+/** path parameter (0..1, before a theme's easing) of a comet: a failed one decelerates to the midpoint and stops */
+export function cometPos(c: Comet, now = performance.now()): number {
+  const u = Math.max(0, (now - c.start) / c.dur);
+  return c.failed ? 0.5 * Math.min(1, u / FIZZLE_STALL) : Math.min(1, u);
+}
+/** the comet head is still drawn (a failed one never arrives: no arrival flash) */
+export const cometOn = (c: Comet, now = performance.now()) => (now - c.start) / c.dur < (c.failed ? FIZZLE_END : 1);
 /** External MCP servers agents call (persistent "satellites"; registered on first use). */
 export type McpResource = { name: string; kind: ResourceKind; activeAt: number; inflight: number; calls: number };
 export type McpServer = { name: string; color: string; slot: number; activeAt: number; calls: number; inflight: number; resources: Map<string, McpResource> };
@@ -775,7 +786,8 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "message":
-      world.comets.push({ id: ++seq, run: ev.run_id, from: ev.from_id, to: ev.to_id, start: now, dur: 1300, text: ev.text });
+      // a failed publish: a short comet flagged `failed` (it sputters out half way, Fizzle.tsx)
+      world.comets.push({ id: ++seq, run: ev.run_id, from: ev.from_id, to: ev.to_id || ev.from_id, start: now, dur: ev.failed ? 700 : 1300, text: ev.text, ...(ev.failed ? { failed: true } : {}) });
       world.focus = ev.to_id;
       world.focusAt = now;
       break;
@@ -958,6 +970,7 @@ export function apply(ev: WorldEvent) {
         h.unit = unit;
         h.windows++;
       }
+      i.hv!.instances = ev.instances ?? 1; // replicas of this service (`×2` on the halo label)
       i.svcN = (i.svcN ?? 0) + ev.n;
       i.svcErr = (i.svcErr ?? 0) + ev.errors;
       break;

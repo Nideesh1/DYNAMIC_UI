@@ -474,7 +474,7 @@ void main(){
   // petal streak toward the centre: long while fresh (the burst), short once it hangs
   float tail = mix(0.42, 0.8, smoothstep(0.2, 3.0, a)) + uDone * 0.1;
   if (aEnd > 0.5) { p = c0 + (p - c0) * tail; lvl = 0.0; }
-  lvl *= 0.38 * (1.0 - uWait * 0.6);
+  lvl *= 0.5 * (1.0 - uWait * 0.6);
 #endif
   vC = col * lvl * uOpacity;
   vec4 mv = modelViewMatrix * vec4(p, 1.0);

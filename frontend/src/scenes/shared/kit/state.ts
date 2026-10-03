@@ -54,6 +54,9 @@ export type KitAgent = {
   /** where its ring starts (fraction of a step) and the frame that was computed in (layout.ts) */
   ringOff: number;
   ringAt: number;
+  /** a service's ring: highest occupied sibling slot + 1 this frame, and since when it is below kidsMax (layout.ts) */
+  kidsHi: number;
+  kidsLowAt: number;
   /** backend service agent (`svc:` id, top-level): its slot among the run's services (-1 = not a service) */
   svcIdx: number;
   /** set false after the first layout (pos snaps to target instead of easing) */

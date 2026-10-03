@@ -11,7 +11,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, energy, lingerMs, presence, world, type Comet, jobText } from "../shared/world";
+import { TYPE_COLOR, energy, lingerMs, presence, world, type Comet, jobText, cometOn, cometPos } from "../shared/world";
 import { isExpanded, lod, showLabel } from "../shared/lod";
 import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
@@ -257,9 +257,9 @@ function Pulse({ comet }: { comet: Comet }) {
     s.b.copy(pb);
     if (ctrlChild) s.c.copy(ctrlChild);
     else bowControl(s.a, s.b, 1.2, s.c);
-    const t = clamp01((performance.now() - comet.start) / comet.dur);
+    const t = cometPos(comet);
     bezier(s.a, s.c, s.b, easeInOut(t), s.h);
-    head.current.visible = t < 1;
+    head.current.visible = cometOn(comet);
     head.current.position.copy(s.h);
     head.current.scale.setScalar(1.1);
   });

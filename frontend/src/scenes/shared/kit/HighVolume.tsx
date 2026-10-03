@@ -225,11 +225,13 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
       const d = h.deny * 100;
       const dn = d > 0 && d < 1 ? "<1" : `${Math.round(d)}`;
       const p50 = `${Math.round(h.p50)}`;
-      const key = `${h.provider}|${h.unit}|${r}|${dn}|${p50}|${h.inflight ?? 0}`;
+      const reps = h.unit && (h.instances ?? 1) > 1 ? `×${h.instances} · ` : "";
+      const key = `${h.provider}|${h.unit}|${r}|${dn}|${p50}|${reps}|${h.inflight ?? 0}`;
       if (key !== st.key) {
         st.key = key;
         // a backend service (world `service_stats`): `42 req/s · 2% 5xx · p50 18ms`
         l.current?.setText([
+          ...(reps ? [{ text: reps, color: BADGE }] : []),
           { text: h.unit ? `${r} ` : `${h.provider} `, color: h.unit ? TEXT : BADGE },
           { text: h.unit ? `${h.unit}/s` : `${r}/s`, color: h.unit ? BADGE : TEXT },
           { text: " · ", color: DIM },

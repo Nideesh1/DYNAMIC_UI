@@ -36,7 +36,7 @@ export default function Scene() {
       bg="#03040d"
       gl={{ antialias: true }}
       fit={{ nRef: 4, min: 0.62, max: 1.6, minRadius: 5.5 }}
-      agentRadius={1.35}
+      agentRadius={1.7}
       graph={{ natural: EMBER_RX * 1.1, radius: 3.4 }}
       Background={<Backdrop />}
       Agent={Shell}

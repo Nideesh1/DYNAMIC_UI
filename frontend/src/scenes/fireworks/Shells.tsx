@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { showLabel } from "../shared/lod";
-import { TYPE_COLOR, energy, haloMix, isDeny, lingerMs, world, jobText } from "../shared/world";
+import { TYPE_COLOR, energy, haloMix, isDeny, lingerMs, world, jobText, cometOn, cometPos } from "../shared/world";
 import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
   BUDGET,
@@ -60,7 +60,7 @@ import {
 const CLIMB_S = 1.0;
 const THROW_S = 0.5;
 /** shell radius per unit of agent.scale */
-export const SHELL_R = 1.2;
+export const SHELL_R = 1.5;
 const hitMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, transparent: true, opacity: 0 });
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
@@ -155,7 +155,7 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
     const t = reduced ? 0 : clock.elapsedTime;
     const P = pyro();
     const sc = agent.scale;
-    const R = SHELL_R * sc * (agent.depth > 0 ? 1.25 : 1);
+    const R = SHELL_R * sc * (agent.depth > 0 ? 1.4 : 1);
     // kit home + a slow hanging drift (branches, trails and beams read it via agentLive)
     const drift = reduced ? 0 : 0.06 * fit.spread;
     agent.live.set(agent.pos.x + Math.sin(t * 0.23 + seed * 20) * drift, agent.pos.y + Math.cos(t * 0.19 + seed * 13) * drift * 0.7, agent.pos.z);
@@ -215,9 +215,10 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
     // ---- the burst itself (once)
     if (s.burstAt >= 0 && !s.burst) {
       s.burst = true;
-      const n = Math.round((isSub ? 70 : 150) * BUDGET);
+      // the money shot: a big, bright chrysanthemum (more stars, wider, longer, glittering)
+      const n = Math.round((isSub ? 100 : 230) * BUDGET);
       const drag = 2.4;
-      P.burst(c.x, c.y, c.z, n, R * 2.3 * drag, col, 1.15, { drag, grav: 1.1, life: isSub ? 1.4 : 2.0, size: isSub ? 0.075 : 0.1, glitter: 0.22, c2: tip });
+      P.burst(c.x, c.y, c.z, n, R * 2.6 * drag, col, 1.55, { drag, grav: 1.1, life: isSub ? 1.7 : 2.5, size: isSub ? 0.095 : 0.13, glitter: 0.3, c2: tip });
       for (let k = 0; k < 5 * BUDGET; k++) {
         dir(_v);
         P.emit(c.x + _v.x * R * 0.4, c.y + _v.y * R * 0.4, c.z, _v.x * 0.35, _v.y * 0.35 + 0.1, 0, 0.8, -0.05, 3.2 + rnd(), R * 1.5, col, 0.9, KIND_SMOKE);
@@ -311,13 +312,13 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
     u.uR.value = R;
     u.uAge.value = age;
     u.uTime.value = t;
-    u.uLvl.value = (thinking ? 0.95 : 0.7) + e * 0.25;
+    u.uLvl.value = (thinking ? 1.3 : 1.0) + e * 0.3;
     u.uCrackle.value = Math.min(1, e * 0.45 + hv * (0.45 + rate * 0.4)) * (alive ? 1 : 0) * (reduced ? 0.3 : 1);
     u.uDone.value = s.doneK;
     u.uWait.value = s.waitK;
     u.uScale.value = pointScale(size.height, gl.getPixelRatio(), (camera as THREE.PerspectiveCamera).fov);
     u.uOpacity.value = vis;
-    u.uSize.value = (isSub ? 0.085 : 0.105) * Math.max(0.7, Math.min(1.5, sc));
+    u.uSize.value = (isSub ? 0.1 : 0.13) * Math.max(0.75, Math.min(1.5, sc));
     u.uCol2.value.copy(failed && !alive ? RED : tip);
 
     const shown = age >= 0;
@@ -336,7 +337,7 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
       halo.current.position.copy(c);
       halo.current.position.z -= 0.05;
       halo.current.scale.setScalar(Math.max(1e-4, R * 3.4 * ex * (1 - s.waitK * 0.35)));
-      m.halo.color.copy(col).lerp(EMBER, s.waitK * 0.7).multiplyScalar((0.13 + e * 0.06 + (shown ? Math.exp(-age * 2.5) * 0.22 : 0)) * (1 - s.doneK * 0.7) * vis);
+      m.halo.color.copy(col).lerp(EMBER, s.waitK * 0.7).multiplyScalar((0.19 + e * 0.07 + (shown ? Math.exp(-age * 2.5) * 0.3 : 0)) * (1 - s.doneK * 0.7) * vis);
     }
     if (flash.current) {
       const on = s.launch && shown && age < 1;
@@ -345,7 +346,7 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
         const k = 1 - Math.pow(1 - age, 3);
         flash.current.position.copy(c);
         flash.current.scale.setScalar(R * (0.5 + k * 2.6));
-        m.flash.color.copy(col).lerp(WHITE, 0.5).multiplyScalar((1 - age) * (1 - age) * (1 - age) * 0.45);
+        m.flash.color.copy(col).lerp(WHITE, 0.5).multiplyScalar((1 - age) * (1 - age) * (1 - age) * 0.7);
       }
     }
     if (salute.current) {
@@ -460,8 +461,8 @@ export function Branches() {
       const pa = agentLive(c.from);
       const pb = agentLive(c.to);
       if (!pa || !pb) continue;
-      const u = clamp01((now - c.start) / c.dur);
-      if (u >= 1) continue;
+      const u = cometPos(c, now);
+      if (!cometOn(c, now)) continue;
       const from = world.instances.get(c.from);
       const to = world.instances.get(c.to);
       const lineage = to?.parent === c.from || from?.parent === c.to;

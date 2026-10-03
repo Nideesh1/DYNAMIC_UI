@@ -19,6 +19,7 @@ import { config, kitExtents, kitTick } from "./layout";
 import { SkillSigil } from "./SkillSigil";
 import { DecisionGlyph } from "./DecisionGlyph";
 import { DecisionHalos, HaloLabel, OrderChip } from "./HighVolume";
+import { Fizzles } from "./Fizzle";
 import { HaltMark, haltMix } from "./Halt";
 import { PRESETS, type LayoutPreset, type PresetName } from "./presets";
 import { kit, type KitAgent, type KitBackend, type KitMcp, type KitRun, type Plane } from "./state";
@@ -186,6 +187,7 @@ function Agents({ Agent, Edge, selected, onSelect, radius, height }: { Agent: Co
         </AgentScope>
       ))}
       <DecisionHalos radius={radius} height={height} />
+      <Fizzles scale={radius} />
     </>
   );
 }

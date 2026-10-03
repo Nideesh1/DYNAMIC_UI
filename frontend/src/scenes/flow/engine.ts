@@ -27,7 +27,7 @@ import { mcpGlow,
   world,
   type AgentType,
   type Instance,
-  type Run,
+  type Run, cometOn, cometPos
 } from "../shared/world";
 import { isSubRole } from "../shared/spread";
 import { fit, graphToStage, kit, kitRoleU, runLocal, serverPos, type KitAgent, type KitRun } from "../shared/kit";
@@ -1080,13 +1080,14 @@ export class FlowEngine {
       const A = this.slotOf(cm.from),
         B = this.slotOf(cm.to);
       if (!A || !B) continue;
-      const u0 = Math.min(1, (now - cm.start) / cm.dur);
+      if (cm.failed && !cometOn(cm, now)) continue; // fizzled out half way (never arrives)
+      const u0 = cometPos(cm, now);
       const e = u0 < 0.5 ? 2 * u0 * u0 : 1 - Math.pow(-2 * u0 + 2, 2) / 2;
       _v.set(A.x, A.y, A.z);
       _w.set(B.x, B.y, B.z);
       const d = _v.distanceTo(_w);
       const col = A.inst ? TYPE_RGB[A.inst.type] : WHITE;
-      const fade = u0 >= 1 ? Math.max(0, 1 - (now - cm.start - cm.dur) / 250) : 1;
+      const fade = cm.failed ? 1 : u0 >= 1 ? Math.max(0, 1 - (now - cm.start - cm.dur) / 250) : 1;
       for (let j = 0; j < 90; j++) {
         const u = e - j * 0.0055;
         if (u < 0) break;
