@@ -212,6 +212,9 @@ backend spans.
 | task | an agent span inside a request (`agentglow.agent(...)`, GenAI `invoke_agent`, ...) or FastAPI's native `fastapi.background_task` span (name = the task function) | a subagent of the service (`subagent: true`, delegation `message`, `exit`); at most `AGENTGLOW_SERVICE_MAX_TASKS` (6) live per service, more run as the service itself |
 | resource | CLIENT span (kind client, or no kind) with `db.system` / `db.system.name` (name = the system, `system:db.name` when set; kind `db`, `warehouse` for snowflake / bigquery / redshift / clickhouse, `storage` for s3 / gcs / minio) or an HTTP client (`server.address` / `net.peer.name` / the `url.full` host, `:port` unless 80 / 443; kind `api`) inside a request, or a root CLIENT span of a service (a poll, a cron); not under an LLM span (the SDK's own HTTP call); blocking stream / list reads at the root (`XREAD`, `BLPOP`, ...) are idle polls and dropped. Attributes set after start (redis, httpx) are read at the end | `mcp_register` of the synthetic server `backend` + resource, `mcp` call / result (`server: "backend"`, `tool` = the operation) on the owning agent; max one per (agent, resource) per 250 ms; never a `graph` event |
 | errors | request `error` | `request` with `error: true`; counted in `service_stats.errors` |
+| outcome | `agentglow.mark_outcome(...)` / `mark_error(...)` set status ERROR (+ `agentglow.outcome`, `agentglow.outcome.reason`) on the current span and its request / message / job span, even when nothing raised | the request is red (`error: true`) |
+| failed publish | PRODUCER span with `messaging.system` inside a request that ends with status ERROR, or `agentglow.message.failed` (a publish that raised, even if the app caught it) | `message` with `"failed": true` from the service to the topic's last known consumer (else to itself): a comet that fizzles; max one per edge per 250 ms. Flat events: `{"event": "message", "failed": true}` |
+| replicas | span JSON `instance` = resource `service.instance.id` (OTLP resource attribute, or `watch()`: hostname-pid) | one service agent for all processes of a `service.name`; `service_stats.instances` = distinct instances seen in the last `AGENTGLOW_SERVICE_INSTANCE_MS` (60 s), only when > 1; the halo label shows `×2 · 42 req/s ...` |
 | GenAI inside a request | any span the agent rules recognize | the usual `llm` / `tool` / `mcp` / ... events, owned by the service agent or its task subagent |
 
 **Python.** `agentglow.watch(app=fastapi_app)`: FastAPI's native OTel telemetry when the app has it (FastAPI >= 0.13x;
@@ -222,6 +225,31 @@ Kafka, Confluent, RabbitMQ, NATS), once per broker. `watch(mcp=fastmcp_server)`:
 OTel instrumentations are installed. Extras: `agentglow[fastapi]`, `[faststream]`, `[redis]`, `[postgres]`, `[mongodb]`,
 `[mcp]`. `service_name` (else OTEL_SERVICE_NAME, the FastMCP name, the FastAPI title, `api` / `worker`) names the
 process's service, also when an existing provider's resource has none. Example: `examples/fastapi-faststream/`.
+
+**Plumbing (backend mode: `watch(app=` / `broker=` / `mcp=`).** All in-process (`backend/agentglow/plumbing.py`, a
+policy the LiveSpanProcessor applies to every start / end it exports; other exporters on the same provider are not
+touched):
+- Privacy: `privacy="strict"` (default) / `"standard"`, `allow=`, `allow_message_keys=`, `error_messages=`, `scrub=`,
+  `pii_patterns=` (see "Privacy" > "Backend mode").
+- Noise: `ignore=[...]` fnmatch patterns matched against the span name, `http.route`, the URL path (server or client),
+  `METHOD route|path` and the DB operation: `"GET /v1/models"`, `"/internal/*"`, `"XREAD*"`. A matching span and every
+  local span under it are never exported. Added to the defaults: health / readiness / liveness routes (`/health*`,
+  `/healthz`, `/ready*`, `/readyz`, `/livez`, `/liveness`, `/ping`, and `*/healthz` ...) and blocking Redis reads
+  (`XREAD`, `XREADGROUP`, `BLPOP`, ...); `ignore_defaults=False` drops the defaults.
+- Context propagation (`propagate=True` by default in backend mode, process-wide, once):
+  `concurrent.futures.ThreadPoolExecutor.submit` runs the callable in a copy of the caller's context, so
+  `loop.run_in_executor`, `asyncio.to_thread` and pool work stays under the request span; `asyncio.create_task`
+  already copies the context (detached tasks stay linked to the request that started them).
+- Mounted sub-apps: `app=` takes one app or a list. Apps mounted inside a given app (`app.mount("/api", api)`, any
+  depth, FastAPI or Starlette) are served by the outer app's instrumentation: one server span per request (a nested
+  server span of the same request is folded into the outer one, its children re-parented), and `http.route` / the
+  span name are the full template resolved through the mounts (`GET /api/patients/{pid}`, not `/api` or `/s/{path}`).
+- Replicas: the processor stamps `instance` (resource `service.instance.id`, else `OTEL_RESOURCE_ATTRIBUTES`, else
+  `<hostname>-<pid>`) on every span; a provider created by `watch()` sets it as a resource attribute.
+- Outcomes: `agentglow.mark_outcome("failed" | "ok" | <label>, reason=None)`, `agentglow.mark_error(reason=None)`;
+  ok / success / done set status OK, anything else ERROR. Return False when no span is recording.
+- Failed publishes: `watch(broker=)` wraps `broker.publish`; when it raises and FastStream's own publish span did not
+  record the error, a PRODUCER span `<destination> publish` with status ERROR and `agentglow.message.failed` is made.
 
 ### Flat events
 `POST /v1/events`: one JSON object or an array (max 5000), for anything without OTel. Same ingest key, scope (`?scope=`,
@@ -386,12 +414,53 @@ JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload b
   `gen_ai.prompt*` stay dropped either way; other agents have no prompt capture. `create_app()` never reads the env:
   only `agentglow serve` turns it on. `/live/health` reports `"prompts": true|false`.
 
+### Backend mode (`watch(app=` / `broker=` / `mcp=`)
+Allow-list first, enforced twice:
+
+**In-process, `privacy="strict"` (default in backend mode; `"standard"` = spans as they are).** Before a span leaves
+the process only these attributes are kept (`scrub.strict_attrs`): HTTP method, `http.route`, status code, scheme,
+protocol, body sizes, `server.address` / `server.port` (credentials stripped); `error.type`, `exception.type`; RPC system
+/ service / method / status; `db.system`, `db.name` / `db.namespace`, `db.operation(.name)`, collection / table, Redis
+db index, `db.connection_string` reduced to `scheme://host:port/db`; `messaging.system`, operation, destination (name,
+template, kind, partition), consumer group, message id, conversation id, body / payload size, batch count, client id;
+GenAI / OpenInference model, provider, operation, tool / agent names, token counts, `openinference.span.kind`;
+`hatchet.*` ids and names (no payload / input / output / metadata / error); `agentglow.*` labels (not
+`agentglow.output_text` / `agentglow.final`); `service.*`, `deployment.*`, `code.function*`, `thread.*`; LangGraph
+`metadata` reduced to its structural keys (`langgraph_node`, `lc_agent_name`, `langgraph_step`, `thread_id`, ...).
+Everything else is dropped, notably: HTTP request / response bodies and headers (`authorization`, `cookie`,
+`x-api-key`, `*signature*`, `x-*-email`, ...), `url.full` / `http.url` / `url.path` / `url.query` / `http.target`,
+`messaging.message.body` / payloads, `db.statement` / `db.query.text` (the operation and read / write are derived first),
+websocket message payloads, GenAI prompts, completions, messages, tool args and results (`input.value`,
+`output.value`, `gen_ai.*.messages`, `gen_ai.tool.call.*`), `exception.message`, stack traces, client IPs, user
+agents, and any custom attribute. Derived before dropping: `server.address` / `port` from a full URL; for a server
+request without a route template, `http.route` = the path with id-like segments (numbers, UUIDs, hex / token ids,
+emails, phones) replaced by `{id}` and the query dropped (`/users/42?x=1` -> `/users/{id}`). Span names get the same
+path normalization. Every kept string value and the span name then pass a regex backstop: emails -> `[email]`, E.164
+phone numbers -> `[phone]`, digit runs of 9+ -> `{id}` (not in `*.id` / `*_id` / offset / port keys), secrets ->
+`[redacted]`; the list is `scrub.PII_PATTERNS`, replace it with `watch(pii_patterns=[(regex, replacement), ...])`.
+Options: `allow=["app.*"]` keeps extra keys (fnmatch); `allow_message_keys=["attempt"]` keeps `messaging.*.<key>`
+attributes and top-level keys of a JSON message body (as `messaging.message.<key>`, scalar values only);
+`error_messages=True` keeps `exception.message` (scrubbed, max 120 chars); `scrub=fn(attrs) -> attrs` runs last on
+every exported span (an exception in it keeps the built-in result). Strict mode also drops agent text of agents
+running inside the service (final answers, tool args): use `privacy="standard"` when you need them.
+
+**Server backstop (`scrub.backstop_span`, every span from every source: live, OTLP JSON / protobuf).** Dropped:
+`url.full`, `http.url`, `url.path`, `url.query`, `url.fragment`, `http.target`, `db.statement`, `db.query.text`,
+`db.query.parameter.*`, `exception.stacktrace`, `http.request.header.*`, `http.response.header.*`, RPC metadata,
+HTTP / messaging bodies and payloads, `websocket.*`, user agents, client addresses, and any HTTP / DB / messaging key
+naming a signature, authorization, cookie or API key. Derived first (same as strict): server address, route template,
+DB operation. On spans with HTTP / URL / DB / messaging / RPC / network attributes: URL credentials are stripped from
+every value (`redis://user:pass@host` -> `redis://host`), `exception.message` is capped at 120 chars, and names and
+values pass the PII regex. Agent-only spans carry none of these keys and are unchanged (regression goldens).
+
 ## World events (backend → frontend)
 Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
 `run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill, chat, decision,
 decision_stats, order, request, service_stats`. `ts` = epoch ms.
 `request` = `{"type": "request", "run_id", "id": <service agent id>, "service", "name", "kind": "http"|"rpc"|"message"|"event",
-"status"?, "error", "ms", "ts", "hv"?}` and `service_stats`: see "Backend services". Frontend: a request pulses its service,
+"status"?, "error", "ms", "ts", "hv"?}` and `service_stats` (`"instances"?` when > 1): see "Backend services".
+`message` may carry `"failed": true` (a publish that raised: the comet is short and flagged `failed` in the world so
+themes can fizzle it; the HUD logs `api ✕ orders: publish failed`). Frontend: a request pulses its service,
 an error flashes the service halo red; `service_stats` drives the same halo as `decision_stats` (arc: ok green, 5xx /
 errors red, 4xx amber) with the label `42 req/s · 2% 5xx · p50 18ms` (`msg/s · err` for a consumer); the HUD counts
 `N req · M err`.

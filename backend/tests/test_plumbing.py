@@ -223,7 +223,7 @@ def test_scrub_hook_runs_last_and_never_breaks(monkeypatch):
 
 # ---------------------------------------------------------------------- ignore
 def test_ignore_patterns_drop_spans_and_their_children(monkeypatch):
-    provider, proc, sent = watched(monkeypatch, ignore=["GET /v1/models", "XREAD*"])
+    provider, proc, sent = watched(monkeypatch, ignore=["GET /v1/models", "XREAD*"], ignore_defaults=False)
     tr = provider.get_tracer("t")
     with tr.start_as_current_span("GET", kind=SpanKind.CLIENT, attributes={"http.request.method": "GET", "url.full": "https://api.openai.com/v1/models"}):
         with tr.start_as_current_span("inner"):
@@ -233,12 +233,16 @@ def test_ignore_patterns_drop_spans_and_their_children(monkeypatch):
     with tr.start_as_current_span("POST", kind=SpanKind.CLIENT, attributes={"http.request.method": "POST", "url.full": "https://api.openai.com/v1/chat"}):
         pass
     with tr.start_as_current_span("GET /healthz", kind=SpanKind.SERVER, attributes={"http.request.method": "GET", "http.route": "/healthz"}):
-        pass  # explicit ignore list replaces the defaults
+        pass  # ignore_defaults=False: health routes are kept
     assert [s["name"] for s in exported(proc, sent)] == ["POST", "GET /healthz"]
     p2, proc2, sent2 = watched(monkeypatch)
     with p2.get_tracer("t").start_as_current_span("GET", kind=SpanKind.SERVER, attributes={"http.request.method": "GET", "url.path": "/readyz"}):
         pass
-    assert exported(proc2, sent2) == []  # health / readiness ignored by default
+    with p2.get_tracer("t").start_as_current_span("XREADGROUP", kind=SpanKind.CLIENT, attributes={"db.system": "redis"}):
+        pass
+    assert exported(proc2, sent2) == []  # health / readiness and idle blocking polls ignored by default
+    w.watch(proc2.url, broker=_Broker(), ignore=["/internal/*"], instrument=False)  # added to the defaults
+    assert "/healthz" in proc2.policy.ignore and "/internal/*" in proc2.policy.ignore
 
 
 # ---------------------------------------------------------------------- context propagation

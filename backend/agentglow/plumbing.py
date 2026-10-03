@@ -27,9 +27,11 @@ from .scrub import decision_text, pii, strict_attrs, strict_name
 
 log = logging.getLogger("agentglow")
 
-# health / readiness / liveness probes: never traffic worth drawing
+# never traffic worth drawing: health / readiness / liveness probes, and a consumer's idle blocking reads (FastStream
+# polls a Redis stream every 100 ms)
 DEFAULT_IGNORE = ("/health", "/health/*", "/healthz", "/healthcheck", "/ready", "/readyz", "/readiness", "/livez",
-                  "/liveness", "/ping", "*/health", "*/healthz", "*/readyz", "*/livez")
+                  "/liveness", "/ping", "*/health", "*/healthz", "*/readyz", "*/livez",
+                  "XREAD", "XREADGROUP", "BLPOP", "BRPOP", "BLMOVE", "BRPOPLPUSH", "BZPOPMIN", "BZPOPMAX", "BLMPOP", "BZMPOP")
 _BOUND = 20_000
 
 
@@ -111,6 +113,8 @@ class Policy:
     def __init__(self) -> None:
         self.privacy = "strict"
         self.ignore: tuple = DEFAULT_IGNORE
+        self.extra_ignore: tuple = ()
+        self.defaults = True
         self.allow: tuple = ()
         self.msg_keys: tuple = ()
         self.error_messages = False
@@ -124,13 +128,16 @@ class Policy:
         self._warned = False
 
     def configure(self, *, privacy: str | None, ignore: Any, allow: Any, allow_message_keys: Any, error_messages: bool,
-                  scrub: Callable | None, pii_patterns: list | None, apps: list) -> None:
+                  scrub: Callable | None, pii_patterns: list | None, apps: list, ignore_defaults: bool | None = None) -> None:
         if privacy is not None:
             if privacy not in ("strict", "standard"):
                 raise ValueError('privacy must be "strict" or "standard"')
             self.privacy = privacy
-        if ignore is not None:
-            self.ignore = tuple(str(p) for p in ignore)
+        if ignore:
+            self.extra_ignore = tuple(dict.fromkeys(self.extra_ignore + tuple(str(p) for p in ignore)))
+        if ignore_defaults is not None:
+            self.defaults = bool(ignore_defaults)
+        self.ignore = (DEFAULT_IGNORE if self.defaults else ()) + self.extra_ignore
         if allow:
             self.allow = tuple(dict.fromkeys(self.allow + tuple(str(p) for p in allow)))
         if allow_message_keys:

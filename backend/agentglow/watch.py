@@ -29,7 +29,8 @@ def _default_url(url: str | None) -> str:
 
 def watch(url: str | None = None, *, instrument: bool = True, service_name: str | None = None,
           api_key: str | None = None, app: Any = None, broker: Any = None, mcp: Any = None,
-          privacy: str | None = None, ignore: list | tuple | None = None, allow: list | tuple = (),
+          privacy: str | None = None, ignore: list | tuple | None = None, ignore_defaults: bool | None = None,
+          allow: list | tuple = (),
           allow_message_keys: list | tuple = (), error_messages: bool = False, scrub: Callable[[dict], dict] | None = None,
           pii_patterns: list | None = None, propagate: bool | None = None) -> TracerProvider:
     """Stream spans to agentglow. `api_key` (or env AGENTGLOW_API_KEY) is sent as `x-api-key` (server
@@ -53,7 +54,8 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
     fields to keep (e.g. ["attempt"]). `error_messages`: keep exception messages, scrubbed, max 120 chars.
     `scrub(attrs) -> attrs`: your own hook, run last on every exported span's attributes. `pii_patterns`: replace the
     [(regex, replacement)] PII list. `ignore`: route / span name / client call patterns never exported, with their
-    children (e.g. ["GET /v1/models", "XREAD*"]); health / readiness routes are ignored by default (pass [] to keep).
+    children (e.g. ["GET /v1/models", "/internal/*"]), added to the defaults (health / readiness routes, blocking
+    Redis polls like XREADGROUP; `ignore_defaults=False` drops them).
     `propagate` (default on): thread pools (`run_in_executor`, `ThreadPoolExecutor.submit`) carry the OTel context,
     so work handed to threads stays under the request that started it. Each process reports `service.instance.id`
     (hostname-pid): replicas of one service collapse into one node with an instance count."""
@@ -83,7 +85,7 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
             if not provider.resource.attributes.get("service.instance.id"):
                 proc.instance = instance_id()
             pol = proc.policy if isinstance(proc.policy, Policy) else Policy()
-            pol.configure(privacy=privacy, ignore=ignore, allow=allow, allow_message_keys=allow_message_keys,
+            pol.configure(privacy=privacy, ignore=ignore, ignore_defaults=ignore_defaults, allow=allow, allow_message_keys=allow_message_keys,
                           error_messages=error_messages, scrub=scrub, pii_patterns=pii_patterns, apps=apps)
             proc.policy = pol
             if propagate is not False:
