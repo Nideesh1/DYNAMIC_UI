@@ -322,11 +322,39 @@ SDK provider = no-op. Context in contextvars (asyncio tasks created inside inher
 | `decision(kind, question, result=None, p=None, options=None, provider="llm", purpose=None, target=None)` / `Agent.decision(...)` | `decision <kind>` | the "Decisions" attributes; `.record(result, p, options, target)` sets the outcome before the block ends; a bool `result` → `yes`/`no`; `options` = `{name: p}` or `[(name, p)]` |
 | `decided(kind, question, result, p, ..., latency_ms=0, important=False, scope=None)` / `Agent.decided(...)` | `decision <kind>` (backdated) | one finished decision in one call; `important=True` sets `agentglow.decision.important`, `scope="global"` sets `agentglow.decision.scope` (both also on `decision(...)`) |
 | `order(side, qty, price=None, status="would_place", instrument=None, dry_run=True, reason=None)` / `Agent.order(...)` | `order <side>` (finished at once) | the "Orders" attributes |
-| `@traced_agent(name)`, `@traced_tool(name, capture_args=False)` | per call | as `agent` / `tool`; args recorded only with `capture_args=True` |
+| `@traced_agent(name)`, `@traced_tool(name, capture_args=False)` | per call | as `agent` / `tool`; args recorded only with `capture_args=True`. Every call above is also a decorator: see "Decorators" |
 | `current_agent()` | - | the manual agent (or primitive session) of the current context, or None |
 
 A span that raises ends with status error (run → failed). Text in `say`/`final`/`task`/`args` passes the Privacy
 scrub (secrets only): callers must keep PHI/PII out of it. Example: `examples/custom-loop/`.
+
+## Decorators (backend `dual.py`)
+Every context manager above and in "Generic primitives" is also a decorator, with the same call signature (all
+existing `with` / `async with` uses are unchanged). A decorated function gets a FRESH span per call (one decorator
+object can run many times, concurrently); sync functions, coroutine functions, sync / async generators (the span covers
+the whole iteration; its context is active only while the generator body runs, never in the caller between yields),
+methods, `staticmethod` / `classmethod` (put the agentglow decorator above them). `functools.wraps` keeps the name and
+signature, so FastAPI / FastStream still see the original parameters: put agentglow decorators BELOW the framework's
+(`@app.post(...)` / `@broker.subscriber(...)` first, then `@agentglow.job(...)`).
+
+| Decorator | Each call is | Notes |
+|---|---|---|
+| `@stage(name=None)` / `@stage` | a `stage <name>` span | name defaults to the function name |
+| `@traced(name=None, kind="step")` / `@traced` | a `<kind> <name>` span with `agentglow.stage`=name, `agentglow.stage.kind`=kind | a step of the caller's agent / request / job / session (drawn like a stage, no new agent); also `with traced("x"):` |
+| `@session(name=None, kind="session", id=None, ...)` / `@session` | a session | `id` may be a callable |
+| `@job(id, kind="job", attempt=1, max_attempts=None)` | one attempt | `id` / `attempt` may be callables; return -> `done`, exception -> `retrying` / `dead` with `max_attempts`, else `failed` |
+| `@inference(model, device=None, units=None, unit="audio_s")` | an inference span | `units` / `device` may be callables |
+| `@pool.lease()` / `@pool.lease` | one lease | really limits concurrency to the pool size |
+| `@decision(kind, question, ..., purpose=, target=, provider=)` | a decision | the return value is the outcome: bool -> `yes`/`no`; `(result, p)`; `{"result", "p", "options"}`; None -> no result; else `str(value)` cut to 80 chars; the value is returned unchanged |
+| `@agent(name=None)` / `@agent`, `@tool(name=None)` / `@tool` | an agent / tool span | `@traced_agent` / `@traced_tool` remain (aliases; `traced_tool(capture_args=True)` still records arguments) |
+| `@run(topic)`, `@llm(model)`, `@mcp(server, tool)`, `@graph(op)`, `@skill(name)` | as the context manager | |
+
+Privacy: arguments and return values are NEVER recorded (except a decision's return value, which is its purpose).
+Values only enter through explicit callables, called with the call's bound arguments as keyword arguments (defaults
+applied, `**kwargs` merged): `@job(id=lambda order_id, **_: order_id)`, `@inference("whisper", units=lambda audio,
+**_: len(audio) / 16000)`. A callable that raises is logged once per function and field (exception type only) and its
+field skipped (a job id falls back to the function name); instrumentation never breaks the call. An exception marks the
+span failed and propagates unchanged.
 
 ## Decisions
 Fast structured decisions ("System One" models: TypeSafe Jev, its open alternative Laya, or an LLM-as-judge fallback)

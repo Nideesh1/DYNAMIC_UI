@@ -86,25 +86,33 @@ async def step(name: str, n: int, dt: float) -> None:
             await asyncio.sleep(dt * random.uniform(0.6, 1.4))
 
 
+# Decorators: the framework decorator stays on top, agentglow decorators below it. Each call of fulfil() is one job
+# attempt (id and attempt computed from the message; return -> done, raise -> retrying / dead) holding one packer.
+@agentglow.job(id=lambda order, **_: order["order_id"], kind="order",
+               attempt=lambda order, **_: int(order.get("attempt") or 1), max_attempts=MAX_ATTEMPTS)
+@packers.lease()
+async def fulfil(order: dict) -> None:
+    oid = order["order_id"]
+    await step("reserve", 1, 0.05)
+    agentglow.progress(1, 4)
+    await asyncio.gather(step("pick", 3, 0.04), step("pack", 2, 0.06))  # parallel stages
+    agentglow.progress(3, 4)
+    if int(order.get("qty", 1)) >= 6 and await fraud_check(order) == "high":
+        raise RuntimeError("held for review")
+    if random.random() < FLAKY:
+        raise RuntimeError("label printer jammed")
+    await db.hset(f"order:{oid}", "status", "shipped")
+    agentglow.progress(4, 4)
+    shipped.append(time.monotonic())
+
+
 @broker.subscriber(stream=StreamSub(STREAM, group=GROUP, consumer="worker-1"), max_workers=16 if SLOW_RATE > 0 else 1)
 async def handle(order: dict) -> None:
     oid, attempt = order["order_id"], int(order.get("attempt") or 1)
     if SLOW_RATE and attempt == 1 and random.random() < SLOW_RATE:
         await slow_reconcile(order)  # before the job starts: a long request (a `req:` job node with a timer)
     try:
-        with agentglow.job(oid, kind="order", attempt=attempt, max_attempts=MAX_ATTEMPTS):
-            async with packers.lease():
-                await step("reserve", 1, 0.05)
-                agentglow.progress(1, 4)
-                await asyncio.gather(step("pick", 3, 0.04), step("pack", 2, 0.06))  # parallel stages
-                agentglow.progress(3, 4)
-                if int(order.get("qty", 1)) >= 6 and await fraud_check(order) == "high":
-                    raise RuntimeError("held for review")
-                if random.random() < FLAKY:
-                    raise RuntimeError("label printer jammed")
-                await db.hset(f"order:{oid}", "status", "shipped")
-                agentglow.progress(4, 4)
-                shipped.append(time.monotonic())
+        await fulfil(order)
     except RuntimeError:
         if attempt < MAX_ATTEMPTS:  # back on the stream for another attempt
             await asyncio.sleep(0.2 * attempt)
@@ -112,7 +120,6 @@ async def handle(order: dict) -> None:
         else:
             await broker.publish(order, stream=DLQ)
             await db.hset(f"order:{oid}", "status", "dead-lettered")
-
 
 if __name__ == "__main__":
     asyncio.run(app.run())

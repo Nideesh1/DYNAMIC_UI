@@ -34,6 +34,7 @@ db = aioredis.from_url(REDIS_URL, decode_responses=True)
 INLINE_TIMEOUT_S = 0.08
 
 
+@agentglow.stage("ship inline")  # a decorator: each call is one stage on the job node it runs in
 async def ship_inline(order_id: str) -> None:
     await asyncio.sleep(random.uniform(0.02, 0.15))  # sometimes too slow: the inline attempt times out
     await db.hset(f"order:{order_id}", "status", "shipped")

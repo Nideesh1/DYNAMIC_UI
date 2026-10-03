@@ -30,7 +30,8 @@ All optional, a line each (docs/SPEC.md "Generic primitives"); none of them reco
 | `api.py` -> `webhooks.py` -> `worker.py` | `job(order_id, kind="order")` in every process | ONE `order <id>` node per order: `queued` (awaiting payment) -> `running` -> `retrying #2` -> `done` / `dead` |
 | `api.py` / `webhooks.py` | `link(charge_id, label="payment")` / `complete(charge_id, status=...)` | `awaiting payment` on the order, then a green dashed callback edge from `webhooks` |
 | `webhooks.py` | `fallback(from_="inline", to="orders-worker", reason="timeout")` | an amber dashed edge `webhooks -> orders-worker` when the inline attempt times out |
-| `worker.py` | `stage("reserve")`, parallel `stage("pick")` + `stage("pack")`, `progress(i, 4)`, `pool("packers", 3)` | stage chips (`pick + pack`) and a progress ring on the order node; `packers` busy / wait |
+| `worker.py` | `@job(id=lambda order, **_: order["order_id"], attempt=..., max_attempts=3)` + `@packers.lease()` as decorators on `fulfil()` (below `@broker.subscriber`-style framework decorators when used together), `stage("reserve")`, parallel `stage("pick")` + `stage("pack")`, `progress(i, 4)`, `pool("packers", 3)` | stage chips (`pick + pack`) and a progress ring on the order node; `packers` busy / wait |
+| `webhooks.py` | `@stage("ship inline")` on `ship_inline()` | a `ship inline` stage on the order node during the inline attempt |
 | `worker.py` | `watch(..., backlog=True)` | `orders 12 · lag 1.4s` on the webhooks -> orders-worker edge |
 | all | `lifecycle("warming" -> "ready")`, `metric(...)`, `cache("orders", hit=...)`, `event("big order", ...)` | lifecycle ring, metrics in the Selected panel, cache hit rate, event chips |
 

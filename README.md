@@ -166,6 +166,24 @@ numbers, ids and short labels only, and has a `/v1/events` form ([docs/SPEC.md](
 | cache | `agentglow.cache("catalog", hit=True)` | a cache resource with hit rate |
 | outcome | `agentglow.mark_error("vendor timeout")` / `mark_outcome("failed")` | a swallowed failure still shows the request red |
 
+**Decorators.** Every `with` primitive is also a decorator (sync, async, generators, methods), a fresh span per call;
+arguments and return values are never recorded, values only come in through explicit callables:
+
+```python
+@app.post("/orders/{order_id}/fulfil")                     # framework decorator first, agentglow below it
+@agentglow.job(id=lambda order_id, **_: order_id, kind="fulfil")
+async def fulfil(order_id: str): ...
+
+@agentglow.stage("pick")                                   # also @agentglow.traced: a step of the caller
+async def pick(order): ...
+
+@agentglow.decision("noul", "safe without human?", purpose="guard")
+def safe(order) -> tuple[bool, float]: ...                 # the return value is the decision (yes/no, p)
+
+@gpu.lease()                                               # also session, inference(units=callable), agent, tool
+def transcribe(audio): ...
+```
+
 ## 7 themes
 
 New in 0.4.0: **bubblechamber** (agents and services as particle tracks curling in a magnetic field) and **fireworks**

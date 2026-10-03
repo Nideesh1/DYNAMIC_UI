@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 from opentelemetry import context, trace
 
+from .dual import DualUse, is_target, rebuild
 from .manual import _agent, _Span, _tracer
 from .scrub import decision_text
 
@@ -159,16 +160,36 @@ class Session(_CtxSpan):
         super().end(exc)
 
 
-def session(name: str, kind: str = "session", id: str | None = None, parent: Any = None, parent_link: bool = True) -> Session:
+def session(name: Any = None, kind: str = "session", id: Any = None, parent: Any = None, parent_link: bool = True) -> Session:
     """`with agentglow.session("support chat", kind="ws") as s:` (sync or async). `parent`: a `capture()`d context
     (the spawning request) when the session runs in a detached task; `parent_link=False`: no parent at all (the node
-    then hangs off the process's service)."""
-    return Session(name, kind=kind, id=id, parent=parent, parent_link=parent_link)
+    then hangs off the process's service). Decorator: `@agentglow.session(kind="ws", id=lambda conn_id, **_: conn_id)`
+    (name = the function's name; `id` may be a callable over the call's arguments)."""
+    if is_target(name):  # bare @session
+        return session()(name)
+    return rebuild(Session(name or "session", kind=kind, id=None if callable(id) else id, parent=parent, parent_link=parent_link),
+                   lambda c: Session(name or c.name, kind=kind, id=c.value(id, "id"), parent=parent, parent_link=parent_link))
 
 
-def stage(name: str) -> _Span:
-    """`with agentglow.stage("decode"):` inside a job / request / session; several open at once = parallel stages."""
-    return _Span(f"stage {name}", {"agentglow.stage": name})
+def stage(name: Any = None) -> _Span:
+    """`with agentglow.stage("decode"):` inside a job / request / session; several open at once = parallel stages.
+    Decorator: `@agentglow.stage("decode")` / `@agentglow.stage` (name = the function's name)."""
+    if is_target(name):  # bare @stage
+        return stage()(name)
+    return rebuild(_Span(f"stage {name or 'stage'}", {"agentglow.stage": name or "stage"}),
+                   lambda c: _Span(f"stage {name or c.name}", {"agentglow.stage": name or c.name}))
+
+
+def traced(name: Any = None, kind: str = "step") -> _Span:
+    """`@agentglow.traced` / `@agentglow.traced("parse", kind="step")` (or `with agentglow.traced("parse"):`): the
+    function is one step of whoever called it (the current agent / request / job / session), drawn like a stage. No
+    new agent, no arguments or return value recorded."""
+    if is_target(name):  # bare @traced
+        return traced(None, kind)(name)
+
+    def make(n: str) -> _Span:
+        return _Span(f"{kind} {n}", {"agentglow.stage": n, "agentglow.stage.kind": kind})
+    return rebuild(make(name or kind), lambda c: make(name or c.name))
 
 
 def progress(i: float, n: float | None = None, *, eta_s: float | None = None, label: str | None = None) -> None:
@@ -211,8 +232,10 @@ class Pool:
     def waiting(self) -> int:
         return len(self._waiters)
 
-    def lease(self) -> "Lease":
-        return Lease(self)
+    def lease(self, fn: Any = None) -> "Lease":
+        """`with pool.lease():` / `async with pool.lease():`, or as a decorator `@pool.lease()` / `@pool.lease`:
+        each call holds one instance for its duration."""
+        return Lease(self)(fn) if fn is not None else Lease(self)
 
     async def _acquire_async(self) -> int:
         with self._lock:
@@ -261,11 +284,13 @@ class Pool:
             fut.set_result(idx)
 
 
-class Lease:
-    """One lease of a pool instance; its span starts when acquired (backdated to the request: wait vs use time)."""
+class Lease(DualUse):
+    """One lease of a pool instance; its span starts when acquired (backdated to the request: wait vs use time).
+    Also a decorator (`@pool.lease()`): a fresh lease per call."""
 
     def __init__(self, pool: Pool) -> None:
         self.pool = pool
+        self._remake = lambda c: Lease(pool)
         self.index: int | None = None
         self.device: str | None = None
         self._span: _Span | None = None
@@ -335,8 +360,12 @@ class Inference(_Span):
         self.set("agentglow.inference.units", _num(v))
 
 
-def inference(model: str, device: str | None = None, units: float | None = None, unit: str = "audio_s") -> Inference:
-    return Inference(model, device=device, units=units, unit=unit)
+def inference(model: str, device: Any = None, units: Any = None, unit: str = "audio_s") -> Inference:
+    """`with agentglow.inference("whisper-small", units=12.5, unit="audio_s") as inf:` or as a decorator
+    `@agentglow.inference("whisper-small", units=lambda audio, **_: len(audio) / 16000)` (`units` / `device` may be
+    callables over the call's arguments)."""
+    return rebuild(Inference(model, device=None if callable(device) else device, units=None if callable(units) else units, unit=unit),
+                   lambda c: Inference(model, device=c.value(device, "device"), units=c.value(units, "units"), unit=unit))
 
 
 class Job(_CtxSpan):
@@ -369,11 +398,18 @@ def job(id: Any, kind: str = "job", state: str | None = None, attempt: int = 1, 
         parent: Any = None) -> Job:
     """`agentglow.job(order_id, kind="fulfil", state="queued")` records a state now (any process);
     `with agentglow.job(order_id, kind="fulfil", attempt=2, max_attempts=3):` wraps one attempt (running; then done,
-    or on an exception retrying / dead / failed)."""
-    j = Job(id, kind, attempt, max_attempts, parent)
-    if state is not None:
+    or on an exception retrying / dead / failed). Decorator: `@agentglow.job(id=lambda order_id, **_: order_id,
+    kind="fulfil")`: each call is one attempt (`id` / `attempt` may be callables over the call's arguments; return
+    -> done, exception -> retrying / dead with `max_attempts`, else failed)."""
+    lazy = callable(id) or callable(attempt)
+    j = Job("job" if callable(id) else id, kind, 1 if callable(attempt) else attempt, max_attempts, parent)
+    if state is not None and not lazy:
         _signal("job", {"id": j.id, "kind": kind, "state": state, "attempt": j.attempt})
-    return j
+
+    def make(c: Any) -> Job:
+        jid = c.value(id, "id")
+        return Job(c.name if jid is None else jid, kind, c.value(attempt, "attempt", 1) or 1, max_attempts, parent)
+    return rebuild(j, make)
 
 
 def link(external_id: Any, label: str | None = None) -> None:

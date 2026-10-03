@@ -33,6 +33,33 @@ inside the request / handler / job / session they describe, in a process that ra
 Pool kinds: `model`, `gpu`, `worker` (default). `agentglow.pool(name, ...)` returns the same process-wide pool on
 later calls. Lease objects have `.index` and `.device`. Sync `with p.lease():` works too.
 
+## Decorators
+
+Every `with` primitive above (and `agent`, `tool`, `decision`, `run`, `llm`, `mcp`, `skill`, `graph`) is also a
+decorator with the same signature: sync / async functions, sync / async generators, methods. A fresh span per call.
+Arguments and return values are never recorded; values only flow in through explicit callables that receive the call's
+arguments as keywords (a failing callable is logged once and skipped, never breaks the call). Exceptions mark the span
+failed and re-raise.
+
+```python
+@agentglow.job(id=lambda order_id, **_: order_id, kind="fulfil", max_attempts=3,
+               attempt=lambda attempt=1, **_: attempt)       # return -> done, raise -> retrying / dead / failed
+async def fulfil(order_id: str, attempt: int = 1): ...
+
+@agentglow.stage("pick")            # or @agentglow.stage (name = function name)
+@agentglow.traced                   # a step of the caller (agent / request / job), drawn like a stage, no new agent
+@agentglow.session(kind="ws", id=lambda conn_id, **_: conn_id)
+@agentglow.inference("whisper-small", units=lambda audio, **_: len(audio) / 16000, unit="audio_s")
+@gpu.lease()                        # gpu = agentglow.pool("whisper", size=2, kind="gpu")
+@agentglow.agent("planner") / @agentglow.tool("lookup")   # @traced_agent / @traced_tool still work
+
+@agentglow.decision("noul", "safe without human?", purpose="guard", provider="jev")
+def safe(order) -> tuple[bool, float]: ...   # return: bool -> yes/no; (result, p); {"result","p","options"}; else str()
+```
+
+FastAPI / FastStream: put agentglow decorators BELOW the framework decorator (`@app.post(...)` or
+`@broker.subscriber(...)` on top), so the framework registers the instrumented function; the signature is preserved.
+
 ## Details
 
 **session.** `agentglow.session(name, kind="session", id=None, parent=None, parent_link=True)`; `s.turn(role="user",
