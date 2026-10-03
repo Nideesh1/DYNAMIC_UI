@@ -144,11 +144,12 @@ backoff on its own. Changing `scope`, `run` or `token` reconnects and clears the
 | `flow`    | A murmuration. Agents condense as eddies out of the current. |
 | `constellation` | A night sky. Delegation draws constellation lines between agent stars. |
 | `atom`    | An atom. Agents are electrons; subagents orbit their parent. |
+| `fireworks` | A night show over the water. Agents burst as star shells, subagents as secondary bursts. |
 
 | | | |
 |:-:|:-:|:-:|
 | ![neural](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/neural.jpg) **neural** | ![constellation](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/constellation.jpg) **constellation** | ![orbit](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/orbit.jpg) **orbit** |
-| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** | |
+| ![atom](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/atom.jpg) **atom** | ![flow](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/flow.jpg) **flow** | ![fireworks](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/media/fireworks.jpg) **fireworks** |
 
 ## Layout
 

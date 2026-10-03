@@ -49,7 +49,7 @@ export default function Scene() {
       PostFX={
         <EffectComposer multisampling={0}>
           <Bloom mipmapBlur intensity={0.85} luminanceThreshold={0.3} luminanceSmoothing={0.3} radius={0.65} />
-          <Vignette eskil={false} offset={0.25} darkness={0.7} />
+          <Vignette eskil={false} offset={0.35} darkness={0.5} />
         </EffectComposer>
       }
     >

@@ -52,8 +52,10 @@ void main(){
   }
   // shells and rockets lay rippling columns of light on the water (the loop runs for water pixels only)
   if (t < 0.0) {
-    float rp = 0.5 + 0.5 * sin(vW.y * 26.0 + uTime * 1.8 + sin(vW.x * 2.3 + uTime * 0.6) * 1.6);
-    float rip = (0.25 + 0.75 * rp * rp) * smoothstep(0.0, 0.25, -t);
+    // irregular ripples: two swells beating against each other, broken into glints across x
+    float rp = 0.5 + 0.5 * sin(vW.y * 24.0 + uTime * 1.8 + sin(vW.x * 2.3 + uTime * 0.6) * 1.6 + sin(vW.y * 5.1 - uTime * 0.7) * 2.5);
+    float br = 0.5 + 0.5 * sin(vW.x * 7.0 + vW.y * 19.0 + uTime * 1.3 + sin(vW.y * 3.7) * 3.0);
+    float rip = (0.15 + 0.85 * rp * rp) * (0.45 + 0.55 * br) * smoothstep(0.0, 0.25, -t);
     float wob = sin(vW.y * 11.0 + uTime * 2.0) * 0.05 * (1.0 - t * 0.2);
     for (int i = 0; i < ${MAX_L}; i++) {
       if (i >= uN) break;

@@ -463,12 +463,12 @@ void main(){
   p += d * uDone * uR * 0.3;
   p.y -= uDone * uDone * uR * (0.7 + 1.3 * aRnd.z);
   float tw = 0.55 + 0.45 * sin(uTime * (1.2 + aRnd.x * 2.6) + aRnd.z * 40.0);
-  float flash = exp(-a * 2.6) * 1.5;
+  float flash = exp(-a * 3.0) * 0.8;
   float gl = uCrackle * step(1.0 - uCrackle * 0.6, h1(floor(uTime * 22.0) * 0.37 + aRnd.x * 137.0 + uSeed * 11.0));
   float lvl = uLvl * (0.35 + 0.65 * tw) + flash + gl * 2.4;
   lvl *= mix(1.0, 0.42, uWait) * (1.0 - uDone * 0.3);
   vec3 col = mix(uCol, uCol2, step(0.62, aRnd.y));
-  col = mix(col, vec3(1.0), clamp(flash * 0.35 + gl * 0.75, 0.0, 1.0));
+  col = mix(col, vec3(1.0), clamp(flash * 0.25 + gl * 0.7, 0.0, 1.0));
   col = mix(col, vec3(1.0, 0.5, 0.16), uWait * 0.55 + uDone * 0.45);
 #ifdef STREAK
   // petal streak toward the centre: long while fresh (the burst), short once it hangs

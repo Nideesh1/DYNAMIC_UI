@@ -336,7 +336,7 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
       halo.current.position.copy(c);
       halo.current.position.z -= 0.05;
       halo.current.scale.setScalar(Math.max(1e-4, R * 3.4 * ex * (1 - s.waitK * 0.35)));
-      m.halo.color.copy(col).lerp(EMBER, s.waitK * 0.7).multiplyScalar((0.13 + e * 0.06 + (shown ? Math.exp(-age * 2) * 0.5 : 0)) * (1 - s.doneK * 0.7) * vis);
+      m.halo.color.copy(col).lerp(EMBER, s.waitK * 0.7).multiplyScalar((0.13 + e * 0.06 + (shown ? Math.exp(-age * 2.5) * 0.22 : 0)) * (1 - s.doneK * 0.7) * vis);
     }
     if (flash.current) {
       const on = s.launch && shown && age < 1;
@@ -373,7 +373,7 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
     if (shown) {
       s.light.p.copy(c);
       s.light.c.copy(col).lerp(EMBER, s.waitK * 0.6);
-      s.light.k = (0.75 + e * 0.35 + Math.exp(-age * 1.5) * 1.5) * (1 - s.waitK * 0.5) * (1 - s.doneK * 0.75) * vis;
+      s.light.k = (0.75 + e * 0.35 + Math.exp(-age * 1.5) * 1.0) * (1 - s.waitK * 0.5) * (1 - s.doneK * 0.75) * vis;
     } else if (!s.launch) s.light.k = 0;
     labelG.current?.position.set(c.x, c.y - R * (1.05 - s.waitK * 0.35) - 0.28, c.z);
     label.current?.setOpacity(showLabel(inst.id) ? (shown ? clamp01(age * 2) : 0) * (alive ? 0.95 : 0.6) * (1 - vanish) : 0);
