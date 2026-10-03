@@ -449,9 +449,11 @@ running inside the service (final answers, tool args): use `privacy="standard"` 
 `db.query.parameter.*`, `exception.stacktrace`, `http.request.header.*`, `http.response.header.*`, RPC metadata,
 HTTP / messaging bodies and payloads, `websocket.*`, user agents, client addresses, and any HTTP / DB / messaging key
 naming a signature, authorization, cookie or API key. Derived first (same as strict): server address, route template,
-DB operation. On spans with HTTP / URL / DB / messaging / RPC / network attributes: URL credentials are stripped from
-every value (`redis://user:pass@host` -> `redis://host`), `exception.message` is capped at 120 chars, and names and
-values pass the PII regex. Agent-only spans carry none of these keys and are unchanged (regression goldens).
+DB operation. URL credentials are stripped from every URL value (`redis://user:pass@host` -> `redis://host`) and
+`exception.message` is capped at 120 chars (PII replaced). A span with HTTP / URL / DB / messaging / RPC / network
+attributes gets its name path-normalized and PII-replaced; its values too unless it is an LLM / agent span
+(`gen_ai.*`, `llm.*`, `openinference.*`, `input.value` / `output.value`: agent text follows the rules above). Agent-only
+spans carry none of these keys and are unchanged (regression goldens).
 
 ## World events (backend → frontend)
 Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:

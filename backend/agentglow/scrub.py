@@ -293,16 +293,23 @@ def _backstop_drop(k: str) -> bool:
         and kl.startswith(BACKEND_PREFIX)
 
 
+AGENT_PREFIX = ("gen_ai.", "llm.", "openinference.", "agentglow.agent", "input.value", "output.value")
+
+
 def is_backend(span: dict) -> bool:
+    """A transport span (HTTP / DB / messaging / RPC attributes) that is not an LLM / agent span (those keep their text
+    under the agent rules above, e.g. an OpenAI client span also has `server.address`)."""
     a = span.get("attributes") or {}
-    return any(str(k).startswith(BACKEND_PREFIX) for k in a)
+    keys = [str(k) for k in a]
+    return any(k.startswith(BACKEND_PREFIX) for k in keys) and not any(k.startswith(AGENT_PREFIX) for k in keys)
 
 
 def backstop_span(span: dict) -> dict:
     """Server-side backend privacy backstop (any source): see the module comment above. Agent-only spans carry none of
     these keys and pass through unchanged."""
     a = span.get("attributes") or {}
-    if not is_backend(span) and not any(_backstop_drop(str(k)) or k == "exception.message" for k in a):
+    backend = is_backend(span)
+    if not backend and not any(_backstop_drop(str(k)) or k == "exception.message" for k in a):
         return span
     a = _derive(a, span.get("kind"))
     out: dict = {}
@@ -312,11 +319,13 @@ def backstop_span(span: dict) -> dict:
             continue
         if k == "exception.message":
             v = pii(decision_text(v, ERROR_MAX))
-        elif isinstance(v, str):
-            v = _reduce_url(v) if "://" in v else v
+        elif isinstance(v, str) and "://" in v:
+            v = _reduce_url(v)
+        if backend and isinstance(v, str):
             v = pii(v, ids=not k.endswith(ID_KEY_SUFFIX))
         out[k] = v
-    return {**span, "name": strict_name(span.get("name") or "span") if is_backend(span) else span.get("name"), "attributes": out}
+    transport = backend or any(str(k).startswith(BACKEND_PREFIX) for k in a)  # names: paths normalized, PII replaced
+    return {**span, "name": strict_name(span.get("name") or "span") if transport else span.get("name"), "attributes": out}
 
 
 def _keep_strict(k: str, allow: tuple, msg_keys: tuple) -> bool:

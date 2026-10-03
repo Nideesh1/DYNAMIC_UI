@@ -160,6 +160,9 @@ def test_server_backstop_drops_transport_data_for_every_source():
     # agent-only spans are untouched by the backstop
     agent = {**span, "kind": "internal", "name": "triage", "attributes": {"input.value": "call +14155550123", "agentglow.agent": "x"}}
     assert backstop_span(agent) is agent
+    llm = {**span, "kind": "client", "name": "chat", "attributes": {"gen_ai.operation.name": "chat", "server.address": "api.openai.com",
+                                                                   "url.full": "https://api.openai.com/v1/responses", "output.value": "id 1234567890"}}
+    assert backstop_span(llm)["attributes"] == {"gen_ai.operation.name": "chat", "server.address": "api.openai.com", "output.value": "id 1234567890"}
 
 
 # ---------------------------------------------------------------------- in-process: FastAPI end to end
