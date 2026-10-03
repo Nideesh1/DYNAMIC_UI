@@ -397,3 +397,17 @@ def test_noop_without_provider():
         agentglow.progress(0.5)
     with agentglow.pool("noop", 1).lease():
         agentglow.cache("c")
+
+
+def test_native_websocket_server_span_is_an_entry_without_a_request():
+    """FastAPI's native WS span carries no route / method at start: still the service's entry, never a request."""
+    m, t = Mapper(), int(time.time() * 1000)
+    ws = {"trace_id": "a" * 32, "span_id": "w1", "parent_span_id": None, "name": "WS", "start_time_ms": t, "end_time_ms": None,
+          "status": "unset", "kind": "server", "service": "chat-api", "attributes": {"network.protocol.name": "websocket", "url.scheme": "ws"}}
+    ses = {"trace_id": "a" * 32, "span_id": "s1", "parent_span_id": "w1", "name": "session /ws", "start_time_ms": t + 1, "end_time_ms": None,
+           "status": "unset", "kind": "internal", "service": "chat-api",
+           "attributes": {"agentglow.agent": "/ws", "agentglow.session": "/ws", "agentglow.session.kind": "ws"}}
+    evs = m.feed("start", ws) + m.feed("start", ses)
+    evs += m.feed("end", {**ses, "end_time_ms": t + 5000}) + m.feed("end", {**ws, "end_time_ms": t + 5001, "name": "WS /ws"})
+    assert of(evs, "spawn", agent="/ws")[0]["parent_id"] == "svc:chat-api"
+    assert not of(evs, "request") and [r["run_id"] for r in of(evs, "run")] == ["services"]

@@ -91,6 +91,8 @@ def entry_kind(d: dict) -> str | None:
     if a.get("agentglow.agent") or any(k.startswith(SKIP_ENTRY) for k in a):
         return None  # agents, LLM/tool spans, Hatchet steps and MCP spans keep their own meaning
     kind = d.get("kind")
+    if kind == "server" and (a.get("network.protocol.name") == "websocket" or a.get("url.scheme") in ("ws", "wss")):
+        return "ws"  # a WebSocket connection: its session node shows it (primitives.py), never a request
     if kind == "server":
         if a.get("http.request.method") or a.get("http.method") or a.get("http.route"):
             return "http"
@@ -273,6 +275,8 @@ class Services:
         self.child_start(s, out)
 
     def end_entry(self, s: "Span", out: list) -> None:
+        if s.entry == "ws":
+            return
         a, ts = s.attrs, s.end or s.start
         code = http_code(a)
         rejected = bool(a.get("agentglow.rejected"))  # agentglow.rejected(): backpressure, not an error (primitives.py)
