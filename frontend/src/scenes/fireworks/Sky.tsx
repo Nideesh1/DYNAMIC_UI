@@ -5,16 +5,19 @@
  * Plus the GPU spark field (one ring buffer for all sparks).
  */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { fit } from "../shared/kit";
 import { horizonTick, lights, pyro, reduced, stage } from "./fx";
 
 const MAX_L = 24;
 
+// the quad turns with the camera's azimuth (full 360 orbit): x is measured along the camera's horizontal right axis,
+// so the horizon, hills and reflections look the same from any side
 const vert = /* glsl */ `
+uniform vec3 uRight;
 varying vec3 vW;
-void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`;
+void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = vec3(dot(w.xyz, uRight), w.y, w.z); gl_Position = projectionMatrix * viewMatrix * w; }`;
 const frag = /* glsl */ `
 uniform float uH; uniform float uSpan; uniform float uTime; uniform float uPx;
 uniform vec4 uL[${MAX_L}]; uniform vec3 uLC[${MAX_L}]; uniform int uN;
@@ -85,6 +88,7 @@ export function Backdrop() {
           uL: { value: Array.from({ length: MAX_L }, () => new THREE.Vector4()) },
           uLC: { value: Array.from({ length: MAX_L }, () => new THREE.Color()) },
           uN: { value: 0 },
+          uRight: { value: new THREE.Vector3(1, 0, 0) },
         },
         vertexShader: vert,
         fragmentShader: frag,
@@ -93,9 +97,15 @@ export function Backdrop() {
       }),
     [],
   );
+  const quad = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
     horizonTick();
     const u = mat.uniforms;
+    // face the camera round the vertical axis, just behind the stage plane as seen from it
+    const az = Math.atan2(camera.position.x, camera.position.z);
+    const ca = Math.cos(az), sa = Math.sin(az);
+    (u.uRight.value as THREE.Vector3).set(ca, 0, -sa);
+    if (quad.current) quad.current.position.set(-sa * 0.6, 0, -ca * 0.6), (quad.current.rotation.y = az);
     u.uH.value = stage.horizon;
     u.uTime.value = reduced ? 0 : clock.elapsedTime;
     u.uPx.value = gl.getPixelRatio();
@@ -108,7 +118,7 @@ export function Backdrop() {
     for (const l of lights) {
       if (n >= MAX_L) break;
       if (l.k < 0.03) continue;
-      L[n].set(l.p.x, l.p.y, l.k, Math.max(0.5, 1.4 * fit.scale));
+      L[n].set(l.p.x * ca - l.p.z * sa, l.p.y, l.k, Math.max(0.5, 1.4 * fit.scale));
       C[n].copy(l.c);
       n++;
     }
@@ -116,7 +126,7 @@ export function Backdrop() {
     void size;
   });
   return (
-    <mesh material={mat} position={[0, 0, -0.6]} renderOrder={-10} frustumCulled={false}>
+    <mesh ref={quad} material={mat} position={[0, 0, -0.6]} renderOrder={-10} frustumCulled={false}>
       <planeGeometry args={[6000, 6000]} />
     </mesh>
   );

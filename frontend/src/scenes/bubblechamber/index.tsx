@@ -18,11 +18,10 @@ import { vertices } from "./fx";
 import { EventVertex, Finals } from "./Runs";
 import { Lineage, Particle } from "./Tracks";
 
+// full 360 orbit round the vertical axis (the back-lit liquid always faces the camera); tilt limited
 const CONTROLS = {
   minPolarAngle: Math.PI * 0.25,
   maxPolarAngle: Math.PI * 0.75,
-  minAzimuthAngle: -Math.PI * 0.3,
-  maxAzimuthAngle: Math.PI * 0.3,
 };
 
 /** keep every run's primary vertex in view */

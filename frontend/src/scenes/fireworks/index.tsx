@@ -17,11 +17,11 @@ import { Finale, RunSite } from "./Runs";
 import { Branches, Shell } from "./Shells";
 import { Backdrop, SparkField } from "./Sky";
 
+// full 360 orbit round the vertical axis (the backdrop turns with the camera); the polar range keeps the camera
+// above the water and below the zenith
 const CONTROLS = {
   minPolarAngle: Math.PI * 0.36,
   maxPolarAngle: Math.PI * 0.6,
-  minAzimuthAngle: -Math.PI * 0.18,
-  maxAzimuthAngle: Math.PI * 0.18,
 };
 
 export default function Scene() {

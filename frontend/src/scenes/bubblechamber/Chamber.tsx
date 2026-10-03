@@ -9,7 +9,8 @@ import * as THREE from "three";
 import { kit } from "../shared/kit";
 import { FILM, bubbles, deltaRay, lineMat, nowS, reduced } from "./fx";
 
-const backVert = /* glsl */ `varying vec2 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xy; gl_Position = projectionMatrix * viewMatrix * w; }`;
+// the back-lit liquid is a camera-facing quad behind the stage (any orbit angle): its look is in quad-local units
+const backVert = /* glsl */ `varying vec2 vW; void main(){ vW = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 const backFrag = /* glsl */ `
 uniform float uTime; varying vec2 vW;
 float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -65,8 +66,15 @@ export function Chamber() {
     [],
   );
   const next = useRef(0);
-  useFrame(({ clock }) => {
+  const back = useRef<THREE.Mesh>(null);
+  useFrame(({ clock, camera }) => {
     mats.back.uniforms.uTime.value = reduced ? 0 : clock.elapsedTime;
+    if (back.current) {
+      // 14 units behind the stage centre as seen from the camera, facing it
+      camera.getWorldDirection(_d);
+      back.current.position.copy(_d).multiplyScalar(14);
+      back.current.quaternion.copy(camera.quaternion);
+    }
     // cosmic background: a faint stray spiral somewhere in the chamber every couple of seconds
     const t = nowS();
     if (reduced || t < next.current) return;
@@ -78,7 +86,7 @@ export function Chamber() {
   });
   return (
     <>
-      <mesh material={mats.back} position={[0, 0, -14]} renderOrder={-10} frustumCulled={false}>
+      <mesh ref={back} material={mats.back} position={[0, 0, -14]} renderOrder={-10} frustumCulled={false}>
         <planeGeometry args={[700, 500]} />
       </mesh>
       <lineSegments geometry={geo.beams} material={mats.beams} position={[0, 0, -2]} frustumCulled={false} />
@@ -87,6 +95,7 @@ export function Chamber() {
   );
 }
 const _p = new THREE.Vector3();
+const _d = new THREE.Vector3();
 
 /** The single Points draw for every bubble / flash; uploads last frame's writes before anything emits this frame. */
 export function Bubbles() {
