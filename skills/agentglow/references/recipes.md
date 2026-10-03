@@ -98,3 +98,23 @@ agentglow.metric("docs ingested", n, unit="docs/min")
 ```
 The job node shows `ocr + embed`, a progress ring with an ETA, and ends `done` (or `retrying #2` / `dead` on an
 exception). Without Python: send `stage` / `progress` / `job` flat events (events-http.md).
+
+## Human in the loop (approve / reject from the 3D view)
+
+1. Where the work must wait on a person, wrap the wait (sync or async, or as a decorator) and name what triggered it:
+   ```python
+   d = agent.decided("noul", "safe_without_human", False, 0.71, provider="jev", purpose="guard", threshold=0.8)
+   async with agentglow.approval(timeout_s=900, title=f"BUY {qty} YES @ {price}c · {market}",
+                                 details={"side": "yes", "qty": qty, "price_c": price, "market": market},
+                                 url=f"https://desk.example.com/markets/{market}", because=d):
+       decision = await wait_for_my_event(order_id)     # your own event / flag / queue: AgentGlow does not resume it
+   ```
+   `details` are flat scalars (max 12) and `url` an http(s) link: they are shown as given, keep PII out.
+2. Serve AgentGlow with `AGENTGLOW_APPROVE_WEBHOOK=https://your-app/agentglow/approve`. The HUD then lists the wait
+   under "Needs you"; the row opens a drawer (why, details, recent decisions / tools / orders, deadline, note).
+3. Implement the webhook: it receives `{run_id, approve, agent_id, agent, reason, title, note?, step?, workflow?,
+   wait_run_id?, scope?}` and resumes the work (Hatchet: push the user event the wait listens for; else set the flag /
+   publish the message your code awaits). Answer 2xx; the wait ending arrives through the normal span stream.
+4. "Copy link" in the drawer is `?run=<run id>&agent=<agent id>`: paste it in a ticket / chat to land on that agent.
+
+Reference: `examples/deepagents-hatchet/app/trading.py` (`human_gate`) and `app/vendor.py` (`approval`).

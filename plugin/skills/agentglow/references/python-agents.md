@@ -50,16 +50,16 @@ Announce an MCP server and its backends before the first call:
 
 ## Durable waits (Hatchet approvals, sleeps)
 
-Open a span around the wait inside the step; the step and agent show `waiting on approval` / `sleeping until ...` and
-the run stays open:
+Wrap the wait inside the step; the step and agent show `waiting on approval` / `sleeping until ...` and the run stays
+open:
 ```python
-from opentelemetry import trace
-tracer = trace.get_tracer("app")
-with tracer.start_as_current_span("await approval", attributes={"agentglow.wait": "approval",
-                                                                 "agentglow.wait.until": deadline_ms}):
+async with agentglow.approval(timeout_s=1800, title="Negotiate with 4 vendors", details={"vendors": 4}):
     await ctx.aio_wait_for("approval", UserEventCondition(event_key="vendor:approved"))
+async with agentglow.wait("vendor reply", timeout_s=48 * 3600):
+    await ctx.aio_sleep_for(timedelta(hours=48))
 ```
-`agentglow.wait.until` is optional (epoch ms, epoch s or ISO-8601). Without the span, Hatchet's own
+(Any language: a span with `agentglow.wait` = the reason and optional `agentglow.wait.until` = epoch ms / s / ISO-8601,
+`agentglow.wait.kind = "approval"`, `.title`, `.detail.<key>`, `.url`, `.because`.) Without it, Hatchet's own
 `hatchet.durable.wait_for` span is used. The HUD shows Approve / Reject on waiting agents when the server has
 `AGENTGLOW_APPROVE_WEBHOOK` set (it forwards `{run_id, approve, agent_id?, step?, note?, workflow?, wait_run_id?}`).
 

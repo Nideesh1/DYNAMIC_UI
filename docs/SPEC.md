@@ -109,8 +109,8 @@ buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion 
 - `POST /live/approve` `{run_id, agent_id?, step?, approve: bool, note?}` (optional `AGENTGLOW_APPROVE_WEBHOOK`; 404
   without it; health `approve: true` makes the HUD show Approve / Reject on agents waiting on a human / approval):
   the run must pass the viewer's filter (403) and have an open wait owned by `agent_id` / in `step` (409 otherwise,
-  e.g. it already resolved). Forwards `{run_id, approve, agent_id?, agent?, step?, note?, scope?, reason, workflow?,
-  wait_run_id?}`: `workflow` / `wait_run_id` are the Hatchet workflow and workflow run of the waiting step (a child
+  e.g. it already resolved). Forwards `{run_id, approve, agent_id?, agent?, step?, note?, scope?, reason, title?,
+  workflow?, wait_run_id?}` (`note`: the human's optional note, max 500 chars; `title`: the wait's title): `workflow` / `wait_run_id` are the Hatchet workflow and workflow run of the waiting step (a child
   run folded into `run_id` keeps its own id here), so the webhook can push the event that wait listens for. The wait
   clearing shows up through the normal event stream.
 - Without a secret, `agentglow serve` logs a warning when bound to a non-localhost address.
@@ -179,7 +179,25 @@ set at span start; the wait lasts while the span is open:
 |---|---|
 | `agentglow.wait` | required: what it waits on, a short label, e.g. `"approval"`, `"vendor reply"`; `"sleep"` for a timer. Secrets redacted, max 60 chars |
 | `agentglow.wait.until` | optional: deadline / wake-up time: epoch ms (int), epoch seconds (< 1e11), or ISO-8601 string (`2026-10-01T15:00:00Z`) |
+| `agentglow.wait.kind` | optional `approval`: a human approval (listed under "Needs you" with Approve / Reject; without it a reason containing `human` / `approv` counts too) |
+| `agentglow.wait.title` | optional short title for the drawer and the "Needs you" row, e.g. `BUY 26 YES @ 45c · wind-bos` (secrets redacted, max 80 chars) |
+| `agentglow.wait.detail.<key>` | optional app fields shown in the drawer: str / int / float / bool, at most 12 keys (`[A-Za-z0-9_.-]`, max 32 chars), strings secrets-redacted, emails / phones replaced, max 80 chars; kept in strict privacy mode because the app sets them on purpose |
+| `agentglow.wait.url` | optional "Open in app" link: http(s) only, userinfo stripped, secrets redacted, path and query kept as given (do not put PHI / PII in it), max 512 chars |
+| `agentglow.wait.because` | optional span id (hex) of the decision that triggered the wait |
 
+Python helpers (context managers and decorators, sync and async; backend `primitives.py`):
+`agentglow.wait(reason, until=None, timeout_s=None, *, title=None, details=None, url=None, because=None)` and
+`agentglow.approval(reason="human approval", timeout_s=None, until=None, *, title=None, details=None, url=None,
+because=None)` (= `wait(..., kind="approval")`). `until`: epoch ms / s, a datetime (naive = UTC) or ISO-8601; else now +
+`timeout_s`. `because`: the decision object `decided()` / `decision()` returned, or its span id. Used as a decorator,
+`title` / `details` / `url` may be callables over the call's arguments. They only SHOW the wait: resuming the work is
+the app's job (the Approve / Reject webhook below pushes the app's own event / flag).
+```python
+async with agentglow.approval(timeout_s=900, title="Refund $420 to order 1182", details={"amount_usd": 420, "items": 3},
+                              url="https://admin.example.com/refunds/1182", because=guard_decision):
+    await ctx.aio_wait_for("approval", UserEventCondition(event_key="refund:approved"))
+```
+The same with a raw span (any language):
 ```python
 with tracer.start_as_current_span("await approval", attributes={"agentglow.wait": "approval",
                                                                  "agentglow.wait.until": deadline_ms}):
@@ -194,7 +212,20 @@ trigger's traceparent, so the run comes from the step span with that step run id
 
 **Events.** Wait start: `step` `{"status": "waiting", "reason", "until"?}` on its step, and `agent`
 `{"status": "waiting", "reason", "until"?}` on the owning agent (declared wait: nearest ancestor agent; else the newest
-live agent in that step), if any. Wait end: `step running` again (while the step is open), `agent thinking`.
+live agent in that step), if any. Wait end: `step running` again (while the step is open), `agent thinking`. A declared
+wait adds, on both events, `kind`?, `title`?, `details`? `{key: scalar}`, `url`? and `because`? = `{id, kind, question,
+result, p?, provider, purpose?, target?, threshold?, ms, ts}` (the decision named by `agentglow.wait.because`; for an
+approval without it, the owning agent's latest guard / noul decision of the last 30 s). New viewers get them with the
+replay.
+
+**Human approval (HUD).** With `approve: true` in `/live/health`, every live agent waiting on a human is listed under
+"Needs you" (title or reason, countdown). A row (or its Details button, or Details in the Selected panel) opens a side
+drawer while the scene keeps running and the agent is selected in 3D: title, agent + run, why (the `because` decision:
+kind, question, result, p, threshold, provider, latency; else the reason), the details table, the agent's recent
+decisions / tool and MCP calls / orders, the deadline (`deadline in 4m 10s`, then `auto-approve due` / `overdue`),
+Approve / Reject with an optional note (POST `/live/approve` `note`), "Open in app" (new tab, when `url`) and "Copy
+link" (`?run=<run id>&agent=<agent id>`: opens AgentGlow on that run with the agent selected and, while it still waits
+on a human, its drawer open). Keys: Esc closes, A / R approve / reject while the drawer has focus.
 
 **Eviction.** Hatchet evicts a durable task waiting longer than its eviction policy TTL (default 15 min): the task is
 cancelled (wait and step spans end together, status unset) and re-run with the same step run id when the wait is
@@ -320,7 +351,7 @@ SDK provider = no-op. Context in contextvars (asyncio tasks created inside inher
 | `graph(op, nodes, system="graph")` | `db <op>` | `db.system`, `agentglow.db.op`, `agentglow.graph.nodes` |
 | `skill(name)` / `Agent.skill(name)` | tool span `<name>` | as `tool` + `agentglow.skill=name` (skill badge on the current agent while the block runs) |
 | `decision(kind, question, result=None, p=None, options=None, provider="llm", purpose=None, target=None)` / `Agent.decision(...)` | `decision <kind>` | the "Decisions" attributes; `.record(result, p, options, target)` sets the outcome before the block ends; a bool `result` → `yes`/`no`; `options` = `{name: p}` or `[(name, p)]` |
-| `decided(kind, question, result, p, ..., latency_ms=0, important=False, scope=None)` / `Agent.decided(...)` | `decision <kind>` (backdated) | one finished decision in one call; `important=True` sets `agentglow.decision.important`, `scope="global"` sets `agentglow.decision.scope` (both also on `decision(...)`) |
+| `decided(kind, question, result, p, ..., latency_ms=0, important=False, scope=None, threshold=None)` / `Agent.decided(...)` | `decision <kind>` (backdated) | one finished decision in one call, returned (pass it as a wait's `because=`); `important=True` sets `agentglow.decision.important`, `scope="global"` sets `agentglow.decision.scope`, `threshold` sets `agentglow.decision.threshold` (all also on `decision(...)`) |
 | `order(side, qty, price=None, status="would_place", instrument=None, dry_run=True, reason=None)` / `Agent.order(...)` | `order <side>` (finished at once) | the "Orders" attributes |
 | `@traced_agent(name)`, `@traced_tool(name, capture_args=False)` | per call | as `agent` / `tool`; args recorded only with `capture_args=True`. Every call above is also a decorator: see "Decorators" |
 | `current_agent()` | - | the manual agent (or primitive session) of the current context, or None |
@@ -347,6 +378,7 @@ signature, so FastAPI / FastStream still see the original parameters: put agentg
 | `@pool.lease()` / `@pool.lease` | one lease | really limits concurrency to the pool size |
 | `@decision(kind, question, ..., purpose=, target=, provider=)` | a decision | the return value is the outcome: bool -> `yes`/`no`; `(result, p)`; `{"result", "p", "options"}`; None -> no result; else `str(value)` cut to 80 chars; the value is returned unchanged |
 | `@agent(name=None)` / `@agent`, `@tool(name=None)` / `@tool` | an agent / tool span | `@traced_agent` / `@traced_tool` remain (aliases; `traced_tool(capture_args=True)` still records arguments) |
+| `@wait(reason, ...)`, `@approval(...)` | a declared wait ("Waits and long-running runs") | `title` / `details` / `url` may be callables |
 | `@run(topic)`, `@llm(model)`, `@mcp(server, tool)`, `@graph(op)`, `@skill(name)` | as the context manager | |
 
 Privacy: arguments and return values are NEVER recorded (except a decision's return value, which is its purpose).
@@ -372,9 +404,10 @@ duration) with these attributes (all set at start or by end; the event is emitte
 | `agentglow.decision.purpose` | optional `route` \| `guard` \| `check` (or any short label) |
 | `agentglow.decision.target` | optional: the tool being gated, the model routed to, ... |
 | `agentglow.decision.scope` | optional `global`: a desk-wide guard (kill switch, daily loss cap, stale feed) that halts everything below the deciding agent, not just its own action |
+| `agentglow.decision.threshold` | optional number: the cut-off the result was judged against (e.g. `0.8` for "safe without a human"); shown with the decision and in an approval's "why" |
 
 World event: `{"type": "decision", "run_id", "id": <owning agent instance id>, "kind", "question", "result", "p",
-"options"?, "provider", "purpose"?, "target"?, "scope"?, "ms", "ts"}` (`ms` = span duration, `p` rounded to 3 places (if missing: the result's option p, else omitted),
+"options"?, "provider", "purpose"?, "target"?, "scope"?, "threshold"?, "ms", "ts"}` (`ms` = span duration, `p` rounded to 3 places (if missing: the result's option p, else omitted),
 `options` only when given). A decision span is not an agent, LLM or tool itself: an LLM-as-judge call nested inside it
 still pulses as an LLM turn of the same agent. Scrub: `question` secrets redacted, whitespace collapsed, max 80 chars;
 `result`, `provider`, `purpose`, `target` and option names the same, max 40 chars; `p` clamped to 0..1.
@@ -422,7 +455,8 @@ would flood the stream and the glyphs become noise, so the mapper adapts per age
 "yes", "no"}}, "p50_ms", "p95_ms", "providers": {<provider>: count}, "ts"}` (purposes with no decisions omitted; route
 results top 6, the rest summed as `other`; providers top 6).
 Frontend: a per-agent decision halo (ring whose thickness/brightness ~ rate, arc split by outcome: allow green, deny
-red, route results in accent colours, check yes/no) + label `name 42/s · 3% deny · p50 38ms`, smoothed (EMA), fading
+red, route results in accent colours, check yes/no) + label `name 42/s · 3% deny` (rate + deny share, the share only
+when > 0; p50 / p95 in the Selected panel and the label's hover tooltip), smoothed (EMA), fading
 when the agent goes quiet; individual `hv` decisions use the bold glyphs with short holds (~0.8 s), one per agent at a
 time, and at most 3 such glyphs on screen at once (most important, then newest, wins; the others only flash the
 agent's halo; an equally important one replaces a glyph only after ~0.65 s on screen). The halo text shows for the selected agent and the 3 busiest; the others show the ring only. Many
@@ -607,8 +641,8 @@ error, counted as `codes.rejected` in `service_stats`, not as `5xx`) and `servic
 `message` may carry `"failed": true` (a publish that raised: the comet is short and flagged `failed` in the world so
 themes can fizzle it; the HUD logs `api ✕ orders: publish failed`). Frontend: a request pulses its service,
 an error flashes the service halo red; `service_stats` drives the same halo as `decision_stats` (arc: ok green, 5xx /
-errors red, 4xx amber) with the label `api · 42 req/s · 2% 5xx · p50 18ms` (`msg/s · err` for a consumer; with open requests
-`38 msg/s · 1% err · 3 in flight`; the error share only when > 0), always shown on a service (it is never one of the
+errors red, 4xx amber) with the label `api · 42 req/s · 2% errors` (`msg/s` for a consumer; the error share only when
+> 0; latency and open requests in the Selected panel and the label's hover tooltip), always shown on a service (it is never one of the
 top-3 decision halo labels); `message` comets between two services draw a persistent edge labelled with the topic
 (`mkt:tick`, fading 15 s after its last message) with at most one bright comet per ~0.4 s, and a service node is a bit
 bigger than a run's root agent; the HUD counts `N req · M err`. A job (`spawn` with `job: true`) rings its service like

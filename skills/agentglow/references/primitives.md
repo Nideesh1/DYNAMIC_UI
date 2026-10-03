@@ -29,6 +29,8 @@ inside the request / handler / job / session they describe, in a process that ra
 | event | `agentglow.event("signup", label="trial", seats=3)` | a business event worth seeing | a chip next to the node (fields: numbers / bools / short strings, max 8) |
 | cache | `agentglow.cache("catalog", hit=True)` | cache lookups | a cache resource with hit rate |
 | outcome | `agentglow.mark_error("vendor timeout")` / `agentglow.mark_outcome("failed", reason=None)` | a failure you caught and handled | the request still shows red |
+| wait | `async with agentglow.wait("vendor reply", timeout_s=3600):` | the work is parked on something external (an event, a timer, a reply) | the step / agent shows `waiting on vendor reply` with a countdown; the run stays open |
+| approval | `async with agentglow.approval(timeout_s=900, title="Refund $420", details={...}, url=..., because=d):` | a human must approve before the work goes on | "Needs you" row with Approve / Reject and a details drawer (why, details, recent context, note, Open in app, Copy link) |
 
 Pool kinds: `model`, `gpu`, `worker` (default). `agentglow.pool(name, ...)` returns the same process-wide pool on
 later calls. Lease objects have `.index` and `.device`. Sync `with p.lease():` works too.
@@ -56,6 +58,8 @@ async def fulfil(order_id: str, attempt: int = 1): ...
 @agentglow.decision("noul", "safe without human?", purpose="guard", provider="jev")
 def safe(order) -> tuple[bool, float]: ...   # return: bool -> yes/no; (result, p); {"result","p","options"}; else str()
 ```
+
+`@agentglow.wait(...)` / `@agentglow.approval(...)` work the same (`title=` / `details=` / `url=` may be callables).
 
 FastAPI / FastStream: put agentglow decorators BELOW the framework decorator (`@app.post(...)` or
 `@broker.subscriber(...)` on top), so the framework registers the instrumented function; the signature is preserved.
@@ -87,6 +91,14 @@ reporting the same id draws a comet from that service to the job.
 **backlog sampler.** `watch(broker=broker, backlog=True)` (or seconds) starts a daemon thread that runs `XLEN` /
 `XPENDING` on the broker's subscribed Redis streams. Directly: `agentglow.sample_backlog(broker_or_redis_or_url,
 streams=None, every_s=3.0)` (`streams`: names or `(name, group)` pairs). Returns False when redis-py is missing.
+
+**wait / approval.** `wait(reason, until=None, timeout_s=None, *, title=None, details=None, url=None, because=None)`;
+`approval(reason="human approval", timeout_s=None, until=None, *, title=, details=, url=, because=)` is a wait with
+`kind="approval"` (listed under "Needs you"). `until`: epoch ms / s, datetime or ISO-8601 (else now + `timeout_s`).
+`details`: flat `{key: str|int|float|bool}`, max 12, kept in strict privacy mode (you pass them on purpose: no PII).
+`url`: http(s) "Open in app" link (path kept as given). `because`: the object `decided(...)` / `decision(...)`
+returned (an approval without it links its agent's guard decision of the last 30 s). Both only SHOW the wait: resuming
+is the app's job (recipes.md "Human in the loop").
 
 **rate limits.** The server keeps the scene calm: metric and backlog at most one per 500 ms per owner and name,
 capacity one per 250 ms (unless it hits or leaves max), progress one per 200 ms, session gauges one per second.

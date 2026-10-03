@@ -47,7 +47,7 @@
  *               gauge; snaps in ~150ms, gone by ~1.6s; stacked labels below the agent, "+N more".
  *               High volume (`hv` decisions): ~0.8s holds, one glyph per agent at a time + "+N".
  *  HighVolume.tsx  decision halos (one instanced mesh: ring split by outcome, thickness ~ rate, from
- *               `decision_stats`), the halo label `jev 42/s · 3% deny · p50 38ms`, and order chips (`order`).
+ *               `decision_stats`), the halo label `jev 42/s · 3% deny`, and order chips (`order`).
  *  Prims.tsx    generic primitives (prims.ts state): per-agent ring (progress arc, lifecycle tint, rejected flash,
  *               restart pulse) + compact status line, business event chips, dashed fallback / callback edges and
  *               backlog ribbons (<PrimEdges>), resource stats under backend nodes.

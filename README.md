@@ -184,6 +184,16 @@ def safe(order) -> tuple[bool, float]: ...                 # the return value is
 def transcribe(audio): ...
 ```
 
+**Human approval.** `agentglow.approval(...)` shows a wait on a person under "Needs you" with Approve / Reject and a
+details drawer (why, your fields, recent decisions and tools, a note, "Open in app", "Copy link"); the buttons call
+your `AGENTGLOW_APPROVE_WEBHOOK`, which resumes the work. `agentglow.wait(...)` is the same for any other wait:
+
+```python
+async with agentglow.approval(timeout_s=900, title="Refund $420 · order 1182", details={"amount_usd": 420},
+                              url="https://admin.example.com/refunds/1182", because=guard_decision):
+    await refund_approved.wait()                           # your event / flag: AgentGlow only shows the wait
+```
+
 ## 7 themes
 
 New in 0.4.0: **bubblechamber** (agents and services as particle tracks curling in a magnetic field) and **fireworks**
@@ -299,11 +309,11 @@ shared server never receives prompts. `npx agentglow status` shows `prompts: cap
 | Hatchet workflow runs | runs and their steps, whatever they are named, including parallel steps and retries |
 | durable waits (approvals, sleeps) | the run stays open; the step and agent show `waiting on approval` / `sleeping until ...` |
 | fast decisions (Jev, Laya, an LLM judge, code guards; `agentglow.decision`) | route fans with per-option %, guard gates (a red `BLOCKED` on a deny), check rings, with provider and latency |
-| many decisions per second | per-agent halos (`jev 42/s · 3% deny · p50 38 ms`); only denies, flips and unsure guards pop individually |
+| many decisions per second | per-agent halos (`jev 42/s · 3% deny`, latency on hover); only denies, flips and unsure guards pop individually |
 | orders (`agentglow.order`) | BUY / SELL chips, dashed `paper` when dry-run |
-| backend services (FastAPI, FastStream, FastMCP, Node, any OTel HTTP / messaging spans, `POST /v1/events`) | one long-lived node per service with a `42 req/s · 2% 5xx · p50 18ms` halo (`×3` for replicas), background tasks as subagents, DB / cache / HTTP calls as resource nodes, errors flash red; the services stay expanded next to your agent runs |
+| backend services (FastAPI, FastStream, FastMCP, Node, any OTel HTTP / messaging spans, `POST /v1/events`) | one long-lived node per service with a `42 req/s · 2% errors` halo (`×3` for replicas), background tasks as subagents, DB / cache / HTTP calls as resource nodes, errors flash red; the services stay expanded next to your agent runs |
 | messages between services | comets along publish -> consume edges labelled with the topic; a failed publish fizzles out half way |
-| long requests (open past `AGENTGLOW_JOB_MS`, 3 s) | a job node ringing its service with a running timer (`orders · 27s`), owning the calls inside it; `N in flight` on the halo |
+| long requests (open past `AGENTGLOW_JOB_MS`, 3 s) | a job node ringing its service with a running timer (`orders · 27s`), owning the calls inside it; `N in flight` in its panel and halo tooltip |
 | business jobs (`agentglow.job(id)`) | one `job:<id>` node that moves from API to worker, with state, attempts, retries and dead letters |
 | sessions (WebSockets, calls, chats) | a live node with a timer, turns and gauges, ending with its outcome |
 | stages / progress | status line under the node (`pick + pack`, `42% · ETA 8s`) and a progress arc |

@@ -12,7 +12,7 @@ support_agent ──MCP──► shop (FastMCP) ── Redis / payments
 
 | Process | AgentGlow line | In the scene |
 |---|---|---|
-| `app/api.py` | `agentglow.watch(app=app)` | agent `orders-api` with a `40 req/s · 2% 5xx · p50 60ms` halo; `send_receipt` background tasks as short-lived subagents; `redis` and `localhost:8192` (payments) resource nodes under `backend`; every `/ws/support` chat is a session node |
+| `app/api.py` | `agentglow.watch(app=app)` | agent `orders-api` with a `40 req/s · 2% errors` halo; `send_receipt` background tasks as short-lived subagents; `redis` and `localhost:8192` (payments) resource nodes under `backend`; every `/ws/support` chat is a session node |
 | `app/webhooks.py` | `agentglow.watch(app=app, broker=broker, service_name="webhooks")` | agent `webhooks`: payment callbacks complete the API's earlier charges; comets `webhooks -> orders-worker` labelled `orders` |
 | `app/worker.py` | `agentglow.watch(broker=broker, service_name="orders-worker", backlog=True)` | agent `orders-worker`; order attempts with stages; LLM pulses with tokens; the `orders` backlog on the webhooks -> worker edge |
 | `app/mcp_server.py` | `agentglow.watch(mcp=mcp)` | MCP server `shop` with `redis` and the payments host as its backends, discovered from its own client calls |
@@ -49,7 +49,7 @@ Ports (env): `API_PORT` 8191, `PAYMENTS_PORT` 8192, `MCP_PORT` 8193, `WEBHOOKS_P
 `FLAKY_RATE` (default 0.12) = share of worker attempts that fail (retried up to 3 times, then dead-lettered to `orders-dlq`).
 `FAIL_RATE` (default 0.02) = share of orders the API fails with a 500. `SLOW_RATE` (default 0; try 0.05) = share of orders the worker
 reconciles slowly (20-40 s) before their job starts: each one open past 3 s (`AGENTGLOW_JOB_MS`) becomes a long-request job node ringing
-`orders-worker` (`orders · 27s`), the halo label counts `N in flight`. With `OPENAI_API_KEY` (and `openai` installed)
+`orders-worker` (`orders · 27s`), its panel counts `N in flight`. With `OPENAI_API_KEY` (and `openai` installed)
 the fraud check calls `OPENAI_MODEL` (default gpt-4.1-mini) instead of the stub.
 
 Each process can also run alone: `uv run python -m app.api`, `-m app.webhooks`, `-m app.worker`, `-m app.payments`, `-m app.mcp_server`,

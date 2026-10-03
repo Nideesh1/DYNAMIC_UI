@@ -1,6 +1,6 @@
 # Backend services (FastAPI, FastStream, FastMCP, anything on OTel)
 
-Each service becomes one long-lived node with a halo (`42 req/s · 2% 5xx · p50 18ms`, `×3` for replicas). Requests
+Each service becomes one long-lived node with a halo (`42 req/s · 2% errors`, `×3` for replicas; latency on hover and in the Selected panel). Requests
 pulse it, background tasks and agents inside a request are its subagents, DB / cache / HTTP calls are resource nodes,
 publish -> consume is a comet labelled with the topic (a failed publish fizzles), WebSocket connections are sessions,
 and a request still open after 3 s becomes a job node with a running timer. Pure agent traces look exactly as before.
@@ -79,7 +79,7 @@ Each process reports `service.instance.id` (env `OTEL_RESOURCE_ATTRIBUTES=servic
 
 A request (HTTP or a consumed message) still open `AGENTGLOW_JOB_MS` (default 3000) after it started becomes a
 `req:<span id>` job node ringing its service with a running timer (`orders · 27s`); calls inside it are owned by the
-job; the halo label counts `N in flight`. These are server env vars (set on `agentglow serve`):
+job; the Selected panel and the halo tooltip count `N in flight`. These are server env vars (set on `agentglow serve`):
 
 | Env | Default | |
 |---|---|---|

@@ -69,9 +69,10 @@ fans out under a concurrency limit, waits on a human, and sleeps between email r
 | `negotiate` | **durable** task: **negotiator** drafts and sends outreach, then `ctx.aio_sleep_for(DEMO_SLEEP_S)` between 3 rounds (stands in for days) | `email` MCP server (:8204) → Exchange |
 | `report` | **plan_writer** writes the consolidation plan (final answer) | FalkorDB write (`Plan` -`CONSOLIDATES`-> `Vendor`) |
 
-The waits are declared for AgentGlow with a span carrying `agentglow.wait` (`approval`, `vendor reply`) and
-`agentglow.wait.until` (see `docs/SPEC.md`, "Waits"), so the step shows *waiting on approval* / *vendor reply* and the
-run stays one open run instead of timing out. The child category runs fold into the parent run.
+The waits are declared for AgentGlow with `agentglow.approval(...)` (title + details for the drawer) and
+`agentglow.wait("vendor reply", ...)` (see `docs/SPEC.md`, "Waits"), so the step shows *waiting on approval* /
+*vendor reply* and the run stays one open run instead of timing out. The desk's human gate is an
+`agentglow.approval(title="BUY 26 YES @ 45c · wind-bos", details={...}, because=<the Jev safe_without_human decision>)`. The child category runs fold into the parent run.
 
 Run it and approve it:
 
