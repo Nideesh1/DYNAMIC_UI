@@ -32,7 +32,7 @@ Also exported: `THEMES`, `THEME_INFO` (names + one-liners), `type Theme`, `type 
 | `atom` | agents are electrons in shells, subagents jump orbits, LLM calls flash photons |
 | `flow` | a murmuration: agents condense as eddies out of the current |
 | `bubblechamber` | agents curl as particle tracks, spawns decay into a V |
-| `fireworks` | agents burst as star shells over water, subagents as secondary bursts |
+| `fireworks` | agents burst as star shells in a starry sky, subagents as secondary bursts |
 
 Examples:
 ```tsx
