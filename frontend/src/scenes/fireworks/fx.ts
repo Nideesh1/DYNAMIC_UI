@@ -1,10 +1,10 @@
 /**
  * Fireworks scene: palette, easing, textures, the GPU spark field (`pyro`, one ring buffer of ballistic particles
- * simulated in the vertex shader), the shared star-shell geometry/material, pooled curves + spark heads, the
- * horizon state and the layout preset (placement is the scene kit's).
+ * simulated in the vertex shader), the shared star-shell geometry/material, pooled curves + spark heads and
+ * the layout preset (placement is the scene kit's).
  */
 import * as THREE from "three";
-import { kitActiveLanes, kit, fit, radial, type LayoutPreset } from "../shared/kit";
+import { radial, type LayoutPreset } from "../shared/kit";
 import { TYPE_COLOR, type AgentType } from "../shared/world";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -105,43 +105,10 @@ export function pointScale(h: number, dpr: number, fov: number) {
   return (h * dpr) / (2 * Math.tan((fov * Math.PI) / 360));
 }
 
-// ------------------------------------------------------------------ horizon + layout
-/**
- * The ground line (stage y of the horizon): just below everything the kit placed (agents, clusters, MCP wheels,
- * the side graph), eased. Rockets launch from it, set pieces stand on it, the water is below it.
- */
-export const stage = { horizon: -9, target: -9, fresh: true };
-
-export function horizonTick() {
-  let low = -kit.core.hh;
-  for (const lane of kitActiveLanes()) {
-    const p = kit.clusterPos[lane];
-    if (p) low = Math.min(low, p.y - 2.6);
-  }
-  for (const m of kit.mcp.values()) {
-    if (!m.wanted) continue;
-    low = Math.min(low, m.pos.y - 1.6);
-    for (const b of m.backends.values()) low = Math.min(low, b.pos.y - 1.1);
-  }
-  const g = kit.graph;
-  if (g.mix > 0.05) low = Math.min(low, g.pos.y - g.radius * 0.8);
-  const want = low - 1.4 - 1.2 * Math.min(1.4, fit.scale);
-  // hysteresis: the water line only moves on a real change, and eases there
-  if (stage.fresh || Math.abs(want - stage.target) > 0.8) stage.target = want;
-  if (stage.fresh) stage.horizon = stage.target;
-  stage.fresh = false;
-  stage.horizon += (stage.target - stage.horizon) * 0.035;
-}
-
-const _ext = new THREE.Vector3();
-/** keep the horizon (and a sliver of water) in the camera frame */
-export function horizonExtents(visit: (p: THREE.Vector3, r: number) => void) {
-  visit(_ext.set(0, stage.target - 0.9, 0), 0.9);
-}
-
+// ------------------------------------------------------------------ layout
 /**
  * "show" preset: runs side by side across the sky (rows when there are many), every run fanning UP so subagent
- * shells branch above their parent's burst and the rockets rise from the water line below.
+ * shells branch above their parent's burst.
  */
 export const show: LayoutPreset = {
   name: "show",
@@ -533,11 +500,6 @@ export function shellMats(col: THREE.Color, col2: THREE.Color, seed: number) {
   const common = { uniforms: u, vertexShader: shellVert, fragmentShader: shellFrag, transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending };
   return { u, pts: new THREE.ShaderMaterial(common), lines: new THREE.ShaderMaterial({ ...common, defines: { STREAK: 1 } }) };
 }
-
-// ------------------------------------------------------------------ shell registry (sky glow + water reflections)
-/** Live shells (and rockets in flight) for the backdrop: where the light is and how bright. */
-export type Light = { p: THREE.Vector3; c: THREE.Color; k: number };
-export const lights = new Set<Light>();
 
 // ------------------------------------------------------------------ curves + spark heads (pooled)
 export function bezier(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, t: number, out: THREE.Vector3) {
