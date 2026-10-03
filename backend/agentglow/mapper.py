@@ -371,7 +371,9 @@ class Mapper:
             return True
         a = d.get("attributes") or {}
         pid = d.get("parent_span_id")
-        if not (a.get("agentglow.mcp.server") and pid and pid not in self.spans and sid not in self.spans and sid not in self.seen_ended):
+        # (a span inside a held MCP span, e.g. its DB call, waits with it)
+        if not ((a.get("agentglow.mcp.server") or pid in self.orphans) and pid and pid not in self.spans and sid not in self.spans
+                and sid not in self.seen_ended):
             return False
         self.orphans[sid] = {"start": None, "end": None, "parent": pid, "ts": d.get("end_time_ms") or d.get("start_time_ms") or 0, kind: d}
         while len(self.orphans) > MAX_ORPHANS:
@@ -428,6 +430,18 @@ class Mapper:
             self.spans[s.id] = s
             self.svc.start_entry(s, entry, d, out)
             return s
+        if not d.get("parent_span_id") and d.get("kind") == "client":
+            root = self.svc.root_client(d)
+            if root or self.svc.defer_root(d):
+                # a service's own DB / cache / HTTP call outside any request (a poll, a cron): a resource ping, never a
+                # run. Live starts often carry no attributes yet (redis, httpx set them after start): decided at end.
+                s = Span(d["span_id"], d["trace_id"], None, d.get("name") or "span", d.get("start_time_ms") or 0, a,
+                         self.svc.run_id(a.get("agentglow.scope") or a.get("agentglow.run.scope")), kind="client")
+                s.backend = ()
+                self.spans[s.id] = s
+                if root:
+                    self.svc.start_root_client(s, d, out)
+                return s
         up = a.get("hatchet.parent_workflow_run_id")  # child workflow run: shown inside its (still open) parent run
         wf = a.get("hatchet.workflow_run_id")
         if wf and not (up and str(up) in self.runs) and parent is not None and parent.run != str(wf) and \
@@ -509,6 +523,8 @@ class Mapper:
         sid = d["span_id"]
         if sid in self.seen_ended:
             return
+        if self.svc.undefer(sid):  # a root CLIENT span that had no attributes at start: classify it now
+            self.spans.pop(sid, None)
         s = self.spans.get(sid) or self._start(d, out)
         self.seen_ended[sid] = None
         if len(self.seen_ended) > 100_000:
@@ -576,6 +592,8 @@ class Mapper:
             out.append(ev)
         if s.skill:
             out.append({"type": "skill", "run_id": s.run, "id": self._owner(s, out), "name": s.skill, "status": "end", "ts": ts})
+        if s.backend is None and (s.svc or s.mcp_host) and s.kind in ("client", "producer"):
+            self.svc.child_start(s, out)  # attributes set after the span started (redis, httpx): the call shows now
         if s.backend is not None:
             self.svc.child_end(s, out)
         elif a.get("db.system"):
@@ -609,7 +627,7 @@ class Mapper:
         if s.step and not run:
             out.append({"type": "step", "run_id": s.run, "step": s.step, "status": "failed" if failed else "done", "ts": ts})
 
-        if run and run.service:
+        if (run and run.service) or (run is None and s.backend is not None):
             self.svc.span_ended(s)
         elif run:
             run.open = max(0, run.open - 1)

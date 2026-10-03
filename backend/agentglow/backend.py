@@ -47,6 +47,8 @@ LABEL_BAD_RE = re.compile(r"[^A-Za-z0-9:_./@-]+")
 DB_KIND = {"snowflake": "warehouse", "bigquery": "warehouse", "redshift": "warehouse", "clickhouse": "warehouse",
            "spark": "spark", "s3": "storage", "gcs": "storage", "minio": "storage"}
 SKIP_ENTRY = ("hatchet.", "gen_ai.", "openinference.", "agentglow.mcp.", "llm.")
+# a consumer's idle blocking reads (FastStream polls a Redis stream every 100 ms): not traffic, dropped at the root
+POLL_OPS = {"XREAD", "XREADGROUP", "BLPOP", "BRPOP", "BLMOVE", "BRPOPLPUSH", "BZPOPMIN", "BZPOPMAX", "BLMPOP", "BZMPOP"}
 
 
 def label(v: object, n: int = 48) -> str:
@@ -157,6 +159,7 @@ class Svc:
     name: str
     run: str
     spawn: dict  # the spawn event (re-sent to a new viewer once it left the replay buffer)
+    status: dict | None = None  # its `agent thinking` event (same)
     last_ts: int = 0
     recent: deque = field(default_factory=deque)  # request ts of the trailing 1 s
     hi: int = 0  # latest request ts
@@ -177,6 +180,7 @@ class Services:
         self.call_at: dict[tuple, int] = {}
         self.known: set[tuple] = set()  # (server, resource) registered
         self.ended: deque = deque()  # (end ts, span id) of service-run spans, pruned after PRUNE_MS
+        self.deferred: dict[str, None] = {}  # root CLIENT span ids whose start had no attributes yet
         self.bucket, self.bucket_used, self.passed = -1, 0, 0
         self.cands: list[dict] = []
         self.last_flush: int | None = None
@@ -207,6 +211,9 @@ class Services:
             sv = self.svcs[aid] = Svc(aid, name, rid, ev)
             self.m.agents[aid] = Agent(name, rid)
             out.append(ev)
+            n = len(out)
+            self.m._thinking(aid, rid, out, ts)  # a service is working while it is up (not "spawning")
+            sv.status = out[-1] if len(out) > n else None
         sv.last_ts = max(sv.last_ts, ts)
         self.m.runs[rid].last_ts = max(self.m.runs[rid].last_ts, ts)
         return aid
@@ -216,9 +223,9 @@ class Services:
         return label(a.get("agentglow.service") or d.get("service") or a.get("service.name") or "service") or "service"
 
     def snapshot(self) -> list[dict]:
-        """`run started` + `spawn` of every live service (a new viewer gets them even after they left the buffer)."""
+        """`run started` + `spawn` + status of every live service (a new viewer gets them after they left the buffer)."""
         live = {sv.run for sv in self.svcs.values()}
-        return [ev for rid, ev in self.run_started.items() if rid in live] + [sv.spawn for sv in self.svcs.values()]
+        return [ev for rid, ev in self.run_started.items() if rid in live] + [e for sv in self.svcs.values() for e in (sv.spawn, sv.status) if e]
 
     # ------------------------------------------------------------------ spans
     def start_entry(self, s: "Span", kind: str, d: dict, out: list) -> None:
@@ -238,6 +245,32 @@ class Services:
                 if s.parent:
                     self.waiting[s.parent] = (aid, topic, s.start)
                     self._bound(self.waiting)
+
+    @staticmethod
+    def root_client(d: dict) -> bool:
+        """A CLIENT span with no parent naming a DB / cache / HTTP host (and not an LLM call)."""
+        a = d.get("attributes") or {}
+        return not any(k.startswith(SKIP_ENTRY) for k in a) and resource_of(a, "client") is not None
+
+    def defer_root(self, d: dict) -> bool:
+        """A root CLIENT span starting with no attributes yet (live start): wait for its end to classify it."""
+        a = d.get("attributes") or {}
+        if d.get("end_time_ms") is not None or any(k.startswith(SKIP_ENTRY + ("agentglow.",)) for k in a if k != "agentglow.scope"):
+            return False
+        self.deferred[d["span_id"]] = None
+        self._bound(self.deferred)
+        return True
+
+    def undefer(self, sid: str) -> bool:
+        return self.deferred.pop(sid, 0) is None
+
+    def start_root_client(self, s: "Span", d: dict, out: list) -> None:
+        a = s.attrs
+        op = str(a.get("db.operation.name") or a.get("db.operation") or s.name).split(" ")[0].upper()
+        if op in POLL_OPS:
+            return
+        s.alias = s.svc = self.ensure(self.service_name(d), a.get("agentglow.scope") or a.get("agentglow.run.scope"), s.start, out)
+        self.child_start(s, out)
 
     def end_entry(self, s: "Span", out: list) -> None:
         a, ts = s.attrs, s.end or s.start

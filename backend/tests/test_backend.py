@@ -224,7 +224,7 @@ def test_otlp_json_carries_kind_service_links():
     assert s["kind"] == "server" and s["service"] == "orders-api" and s["links"] == [{"trace_id": "c" * 32, "span_id": "d" * 16}]
     c = TestClient(create_app())
     assert c.post("/v1/traces", json=req).status_code == 200
-    assert [e["type"] for e in c.app.state.hub.buffer] == ["run", "spawn", "request"]
+    assert [e["type"] for e in c.app.state.hub.buffer] == ["run", "spawn", "agent", "request"]
 
 
 # ---------------------------------------------------------------------- hub: replay, flat events
@@ -235,7 +235,7 @@ def test_replay_resends_service_spawn_after_buffer_eviction():
         hub.publish(run(m, http(t0=T + i * 300)))
     assert not [e for e in hub.buffer if e["type"] == "spawn"]
     rep = hub.replay()
-    assert [e["type"] for e in rep[:2]] == ["run", "spawn"] and rep[1]["id"] == "svc:orders-api"
+    assert [e["type"] for e in rep[:3]] == ["run", "spawn", "agent"] and rep[1]["id"] == "svc:orders-api" and rep[2]["status"] == "thinking"
     assert hub.replay(after=hub.seq) == []  # a viewer that is up to date gets nothing again
 
 
@@ -343,3 +343,47 @@ def test_watch_app_broker_mcp_and_pulse(monkeypatch):
 
     assert sent[0].full_url.endswith("/v1/events")
     assert json.loads(sent[0].data) == [{"service": "billing", "event": "request", "name": "POST /x", "status": 200, "duration_ms": 3}]
+
+
+def test_root_client_spans_ping_resources_polls_dropped():
+    m = Mapper()
+    poll = span("XREAD", service="orders-worker", kind="client", **{"db.system": "redis", "db.statement": "XREAD BLOCK 100 STREAMS orders $"})
+    evs = run(m, poll)
+    assert evs == []
+    assert not types(evs, "run")
+    cron = span("SET", service="orders-worker", kind="client", t0=T + 500, **{"db.system": "redis", "db.statement": "SET heartbeat 1"})
+    evs = run(m, cron)
+    assert [e["type"] for e in evs] == ["run", "spawn", "agent", "mcp_register", "mcp", "mcp"]
+    assert all(e["id"] == "svc:orders-worker" for e in types(evs, "mcp")) and not types(evs, "graph")
+    m.tick(T + 60_000)
+    assert not m.spans  # ended service spans are forgotten
+
+
+def test_mcp_span_children_wait_with_their_held_parent():
+    m = Mapper()
+    root = span("researcher", service="agent", **{"agentglow.agent": "researcher"})
+    tool = span("lookup", service="agent", parent=root["span_id"], **{"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "lookup"})
+    srv = span("mcp shop.lookup", service="shop", kind="server", parent=tool["span_id"], **{"agentglow.mcp.server": "shop"})
+    db = span("HGETALL", service="shop", kind="client", parent=srv["span_id"], **{"db.system": "redis", "db.statement": "HGETALL k"})
+    evs = run(m, srv, db)  # the MCP server process reports first
+    assert evs == []
+    evs = m.feed("start", {**root, "end_time_ms": None}) + m.feed("start", {**tool, "end_time_ms": None})
+    assert {e.get("resource") for e in types(evs, "mcp")} == {None, "redis"} and len(types(evs, "run")) == 1
+
+
+def test_live_client_spans_with_attributes_only_at_end():
+    """redis / httpx instrumentations set their attributes after the span started: classified at the end."""
+    m = Mapper()
+    req = http(path="/orders")
+    hset = span("HSET", kind="client", parent=req["span_id"], **{"db.system": "redis", "db.statement": "HSET ? ? ?"})
+    poll = span("XREAD", service="orders-worker", kind="client", **{"db.system": "redis", "db.statement": "XREAD ? ? ? ? ?"})
+    chat = span("chat", service="bot", kind="client", **{"gen_ai.operation.name": "chat", "gen_ai.usage.input_tokens": 5})
+    evs = []
+    for sp in (req, hset, poll, chat):
+        evs += m.feed("start", {**sp, "end_time_ms": None, "status": "unset", "attributes": {} if sp is not req else sp["attributes"]})
+    for sp in (chat, poll, hset, req):
+        evs += m.feed("end", sp)
+    assert [(e["resource"], e["phase"]) for e in types(evs, "mcp")] == [("redis", "call"), ("redis", "result")]
+    runs = types(evs, "run")
+    assert {r["run_id"] for r in runs} == {"services", chat["trace_id"]}  # the poll made no run; the LLM call still does
+    assert types(evs, "llm")[0]["tokens_in"] == 5
