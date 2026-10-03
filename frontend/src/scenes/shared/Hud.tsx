@@ -7,7 +7,7 @@ import { sendApproval, startLiveRun, useApproveAvailable, useRunAvailable, useRu
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
 import { decisionTint } from "./kit/DecisionGlyph";
-import { decisionText, getInstance, haltedNow, kindBadge, providerBadge, whyBadge, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
+import { STALE_TEXT, decisionText, getInstance, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -219,7 +219,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const unseen = side.tab === "events" && !side.collapsed ? 0 : seenAt >= 0 ? seenAt : w.ticker.length;
 
   const alive = [...w.instances.values()].filter(isLive);
-  const runs = [...w.runs.values()].filter((r) => r.status === "started");
+  const runs = [...w.runs.values()].filter((r) => r.status === "started" && !isStale(r));
   const graph = w.stats.graphReads + w.stats.graphWrites;
   const close = () => {
     selectInstance(null);
@@ -568,8 +568,22 @@ async function decide(i: Instance, approve: boolean) {
     verdictSubs.forEach((f) => f());
   };
   set(approve ? "approving" : "rejecting");
+  // the wait normally clears (the agent resumes) within seconds; if it does not, give the buttons back
+  setTimeout(() => {
+    const v = verdicts.get(k);
+    if (v && v !== "error" && v !== "gone") (verdicts.delete(k), verdictSubs.forEach((f) => f()));
+  }, VERDICT_TIMEOUT_MS);
   const r = await sendApproval(i.run, i.id, approve);
-  set(r === "ok" ? (approve ? "approved" : "rejected") : r);
+  if (verdicts.has(k)) set(r === "ok" ? (approve ? "approved" : "rejected") : r);
+}
+const VERDICT_TIMEOUT_MS = 10_000;
+/** after its deadline a gate auto-approves (the worker resumes it); past AUTO_DUE_MS it is overdue */
+const AUTO_DUE_MS = 10_000;
+function deadlineText(i: Instance, now: number): [string, "due" | "overdue" | ""] {
+  const until = i.wait?.until;
+  if (!until) return ["", ""];
+  if (now < until) return [`${Math.round((until - now) / 1000)}s`, ""];
+  return now - until < AUTO_DUE_MS ? ["auto-approve due", "due"] : ["overdue", "overdue"];
 }
 
 const VERDICT_TEXT: Record<Verdict, string> = {
@@ -609,6 +623,11 @@ const TRAY_MAX = 3;
 /** Bottom-left "needs you" tray: agents waiting on a human, soonest deadline first, each with Approve / Reject. */
 function ApprovalTray({ rail }: { rail: boolean }) {
   const w = useWorld();
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => bump((x) => x + 1), 1000); // countdowns / overdue without new events
+    return () => clearInterval(t);
+  }, []);
   const waiting = [...w.instances.values()].filter(needsHuman).sort((a, b) => (a.wait!.until || Infinity) - (b.wait!.until || Infinity));
   if (!waiting.length) return null;
   const now = Date.now();
@@ -619,7 +638,8 @@ function ApprovalTray({ rail }: { rail: boolean }) {
       </h4>
       <ul>
         {waiting.slice(0, TRAY_MAX).map((i) => {
-          const left = i.wait!.until ? Math.max(0, Math.round((i.wait!.until - now) / 1000)) : null;
+          const stale = isStale(w.runs.get(i.run));
+          const [left, late] = stale ? [STALE_TEXT, "overdue" as const] : deadlineText(i, now);
           return (
             <li key={i.id} style={{ ["--c" as string]: TYPE_COLOR[i.type] }}>
               <button className="ha-who" onClick={() => selectInstance(i.id)} title={`${i.name} · ${shortRun(i.run)}\n${waitLabel(i.wait!)}`}>
@@ -627,10 +647,10 @@ function ApprovalTray({ rail }: { rail: boolean }) {
                 <b>{i.name}</b>
                 <span>
                   {i.wait!.reason}
-                  {left !== null && ` · ${left}s`}
+                  {left && (late ? <em className={`ha-late is-${late}`}> · {left}</em> : ` · ${left}`)}
                 </span>
               </button>
-              <ApproveButtons i={i} compact />
+              {!stale && <ApproveButtons i={i} compact />}
             </li>
           );
         })}
@@ -650,6 +670,11 @@ function matchesStatus(i: Instance, f: StatusFilter) {
   if (f === "alive") return isLive(i);
   if (f === "done") return !isLive(i);
   return isLive(i) && i.status === f;
+}
+
+/** "working" for an agent that is busy without spending tokens (code gates, a classifier): it is not "thinking" */
+function statusText(i: Instance) {
+  return i.status === "thinking" && i.tokens === 0 ? "working" : i.status;
 }
 
 function age(i: Instance) {
@@ -757,7 +782,7 @@ function AgentList() {
                 <small>{w.runs.get(i.run)?.topic ?? "finished run"}</small>
               </span>
               <span className="ap-meta">
-                <b>{i.status}</b>
+                <b>{statusText(i)}</b>
                 {(i.tokens / 1000).toFixed(1)}k · {age(i)}
               </span>
             </button>
@@ -790,7 +815,7 @@ function AgentDetail({ i }: { i: Instance }) {
         <i /> {i.name} <small>{i.subagent ? "subagent" : "agent"} · {shortRun(i.run)}</small>
       </h3>
       <div className="ap-status" data-status={isLive(i) ? i.status : "done"}>
-        {isLive(i) ? (i.status === "waiting" && i.wait ? waitLabel(i.wait) : i.status) : `finished (${i.status})`} · alive {age(i)}
+        {isLive(i) ? (i.status === "waiting" && i.wait ? waitLabel(i.wait) : statusText(i)) : `finished (${i.status})`} · alive {age(i)}
       </div>
       {canApprove && needsHuman(i) && <ApproveButtons i={i} />}
       <dl className="ap-stats">
@@ -816,6 +841,7 @@ function AgentDetail({ i }: { i: Instance }) {
       <section>
         <h4>Run</h4>
         <p>{run ? run.topic : i.run}</p>
+        {run && isStale(run) && <p className="ap-wait">{STALE_TEXT}</p>}
         {run && runWaitText(run) && <p className="ap-wait">{runWaitText(run)}</p>}
         {run && chips && (
           <div className="ap-steps">

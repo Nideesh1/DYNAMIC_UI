@@ -3,7 +3,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine } from "../shared/Label3D";
-import { RUN_LINGER_MS, useWorld, world, type Run } from "../shared/world";
+import { RUN_LINGER_MS, isStale, useWorld, world, type Run } from "../shared/world";
 import type { RunSlotProps } from "../shared/kit";
 import { clamp01, easeOut, glowSpriteMaterial } from "./fx";
 
@@ -38,7 +38,7 @@ export function RunAura({ run: kr }: RunSlotProps) {
 
 function RunLabel({ run }: { run: Run }) {
   useWorld(); // re-render on events (props only - no DOM)
-  const done = run.status !== "started";
+  const done = run.status !== "started" || isStale(run);
   return (
     <Label3D
       text={run.topic}

@@ -7,7 +7,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine, type Label3DHandle } from "../shared/Label3D";
-import { RUN_LINGER_MS, hash01, useWorld, world, type Run } from "../shared/world";
+import { RUN_LINGER_MS, hash01, isStale, useWorld, world, type Run } from "../shared/world";
 import { agentLive, kit, type RunSlotProps } from "../shared/kit";
 import { ICE, SparkPool, WHITE, clamp01, easeOut, glowTexture, lineMat, reduced, spriteMat } from "./fx";
 
@@ -42,7 +42,7 @@ export function RunGlow({ run: kr }: RunSlotProps) {
 
 function RunLabel({ run }: { run: Run }) {
   useWorld();
-  const done = run.status !== "started";
+  const done = run.status !== "started" || isStale(run);
   return (
     <Label3D
       text={run.topic}
