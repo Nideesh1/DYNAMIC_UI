@@ -435,3 +435,21 @@ def test_failed_publish_fizzles_toward_the_known_consumer():
     # flat events: {"event": "message", "failed": true}
     fl = m.svc.flat({"service": "api", "event": "message", "to": "worker", "topic": "orders", "failed": True}, T + 5000)
     assert [e for e in fl if e["type"] == "message"][0]["failed"] is True
+
+
+def test_faststream_failed_publish_keeps_one_failed_span(monkeypatch):
+    from faststream.redis import RedisBroker
+
+    broker = RedisBroker("redis://localhost:1")  # never connected: publish raises inside FastStream's telemetry span
+    provider, proc, sent = watched(monkeypatch, broker=broker)
+
+    async def handler():
+        with provider.get_tracer("t").start_as_current_span("POST /c", kind=SpanKind.SERVER, attributes={"http.request.method": "POST"}):
+            try:
+                await broker.publish({"a": 1}, stream="calls")
+            except Exception:
+                pass
+
+    asyncio.run(handler())
+    pubs = [s for s in exported(proc, sent) if s["name"] == "calls publish"]
+    assert len(pubs) == 1 and pubs[0]["status"] == "error"  # FastStream's own span; no second one from the wrapper

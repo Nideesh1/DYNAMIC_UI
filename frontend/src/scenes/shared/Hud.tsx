@@ -37,7 +37,7 @@ export function describe(e: WorldEvent): string {
     case "llm":
       return e.tokens_in || e.tokens_out ? `${short(e.id)} · LLM ${e.tokens_in}→${e.tokens_out} tok` : `${short(e.id)} · thinking…`; // no usage (e.g. Claude Code hooks): no fake 0→0
     case "message":
-      return `${short(e.from_id)} → ${short(e.to_id)}: ${e.text}`;
+      return e.failed ? `${short(e.from_id)} ✕ ${e.text}: publish failed` : `${short(e.from_id)} → ${short(e.to_id)}: ${e.text}`;
     case "tool":
       return `${short(e.id)} · ${e.tool}(${e.args_preview})`;
     case "graph":
@@ -57,7 +57,7 @@ export function describe(e: WorldEvent): string {
     case "request":
       return `${short(e.id)} · ${e.name}${e.status !== undefined ? ` ${e.status}` : ""}${e.error ? " ERROR" : ""} · ${Math.round(e.ms)}ms`;
     case "service_stats":
-      return `${short(e.id)} · ${e.n} requests in ${Math.round(e.window_ms)}ms`;
+      return `${short(e.id)} · ${e.n} requests in ${Math.round(e.window_ms)}ms${e.instances && e.instances > 1 ? ` · ×${e.instances}` : ""}`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
     case "chat":
