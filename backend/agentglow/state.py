@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -38,10 +39,12 @@ class Sub:
 
 
 class Hub:
-    def __init__(self, buffer: int = 5000, capture_prompts: bool = False) -> None:
+    def __init__(self, buffer: int | None = None, capture_prompts: bool = False) -> None:
         self.mapper = Mapper()
         self.claude_code = ClaudeCodeAdapter(capture_prompts=capture_prompts)
-        self.buffer: deque[dict] = deque(maxlen=buffer)
+        # replay buffer (events); AGENTGLOW_BUFFER overrides the default (small values exercise the snapshot path)
+        self.buffer: deque[dict] = deque(maxlen=buffer or int(os.environ.get("AGENTGLOW_BUFFER") or 5000))
+        self.live = LiveState()  # open runs' state-carrying events, replayed once they left the buffer
         self.topology: dict[str, dict] = {}  # server -> merged mcp_register event
         self.subs: set[Sub] = set()
         # SSE event id = "<epoch>-<seq>": a reconnecting viewer's Last-Event-ID resumes after what it already applied
@@ -116,6 +119,7 @@ class Hub:
                 self.seq += 1
                 ev["seq"] = self.seq
                 self.buffer.append(ev)
+                self.live.note(ev)
             for sub in list(self.subs):
                 if sub.filter.match(ev, self.scope_of):
                     self._put(sub, ev)
@@ -156,14 +160,28 @@ class Hub:
 
     def replay(self, f: Filter = Filter(), after: int = 0) -> list[dict]:
         """What a new viewer needs: MCP topology + events of runs still in progress (finished runs would just flash),
-        restricted to what its filter allows. `after`: a reconnecting viewer's last seq (this epoch), only newer events."""
+        restricted to what its filter allows. `after`: a reconnecting viewer's last seq (this epoch), only newer events.
+
+        Long runs outlive the bounded buffer: the state-carrying events of open runs that already left it (`run
+        started`, spawns, statuses, open skills / waits / gates / sessions / jobs: LiveState, plus live backend
+        services and job nodes) come first, in publish order, then the buffered events. Each event goes out at most
+        once (snapshot entries are only those older than the oldest buffered event) and only if newer than `after`."""
         done = {e["run_id"] for e in self.buffer if e.get("type") == "run" and e.get("status") in ("completed", "failed")}
-        # long-lived services: their run start / spawn may have left the bounded buffer, the viewer still needs them
+        done |= self.live.ended.keys()
         first = self.buffer[0].get("seq", 0) if self.buffer else self.seq + 1
-        svc = [e for e in self.mapper.svc.snapshot() + self.mapper.prims.snapshot()
-               if after < e.get("seq", 0) < first and f.match(e, self.scope_of)]
-        return list(self.topology.values()) + svc + [e for e in self.buffer if e.get("seq", 0) > after and e.get("run_id") not in done
-                                                     and f.match(e, self.scope_of)]
+        snap: dict[int, dict] = {}
+        if after < first - 1:  # something this viewer has not seen already left the buffer
+            for e in self.live.snapshot() + self.mapper.svc.snapshot() + self.mapper.prims.snapshot():
+                s = e.get("seq", 0)
+                if after < s < first and e.get("run_id") not in done and f.match(e, self.scope_of):
+                    snap[s] = e
+            if after:  # a resume across a gap: what ended meanwhile (exits of open runs, run ends; no-ops if unknown)
+                for e in self.live.endings:
+                    s = e.get("seq", 0)
+                    if after < s < first and (e.get("type") == "run" or e.get("run_id") not in done) and f.match(e, self.scope_of):
+                        snap[s] = e
+        return list(self.topology.values()) + [snap[s] for s in sorted(snap)] + \
+            [e for e in self.buffer if e.get("seq", 0) > after and e.get("run_id") not in done and f.match(e, self.scope_of)]
 
     def resume_after(self, last_event_id: str) -> int:
         """Last-Event-ID -> seq to replay after (0 = everything: none sent, or from another server instance / restart)."""
@@ -197,3 +215,141 @@ def _with_scope(span: dict, scope: str | None) -> dict:
     if a.get("agentglow.scope") or a.get("agentglow.run.scope"):
         return span
     return {**span, "attributes": {**a, "agentglow.scope": scope}}
+
+
+# ---------------------------------------------------------------------- replay snapshot of open agent runs
+MAX_RUNS = int(os.environ.get("AGENTGLOW_SNAPSHOT_RUNS", "1000"))  # open runs tracked (oldest forgotten beyond)
+MAX_AGENTS = int(os.environ.get("AGENTGLOW_SNAPSHOT_AGENTS", "2000"))  # live agents tracked, all runs
+MAX_AGENT_STATE = 32  # state-carrying events kept per agent
+MAX_STEPS = 64  # step events kept per run
+ENDED_KEPT = 2000  # recently ended run ids (their leftover buffered events are not replayed)
+
+
+def _state_key(ev: dict) -> tuple | None:
+    """Key of an agent's state-carrying event (the latest per key is what a fresh viewer needs), None = transient
+    (pulses, comets, counters). Mirrors what frontend world.ts / prims.ts keep on an instance."""
+    t = ev.get("type")
+    if t in ("agent", "progress", "job", "lifecycle"):
+        return (t,)
+    if t in ("skill", "stage", "capacity", "gate", "metric"):
+        return (t, ev.get("name"))
+    if t == "session":
+        return (t, "start" if ev.get("phase") == "start" else "last")
+    if t == "deferred":
+        return (t, ev.get("ref"))
+    return None
+
+
+def _closes(ev: dict) -> bool:
+    """A state event that ends its state: nothing to show a fresh viewer, its key is dropped."""
+    t = ev.get("type")
+    return ((t == "skill" and ev.get("status") != "start") or (t == "deferred" and ev.get("phase") == "done")
+            or (t == "stage" and ev.get("status") != "running") or (t == "gate" and ev.get("state") == "unlocked"))
+
+
+@dataclass
+class _Agent:
+    run: str
+    spawn: dict
+    state: dict = field(default_factory=dict)  # _state_key -> latest event
+
+
+@dataclass
+class _Run:
+    started: dict | None = None
+    renamed: dict | None = None
+    final: dict | None = None
+    steps: dict = field(default_factory=dict)  # step -> latest step event
+    agents: set = field(default_factory=set)
+
+
+class LiveState:
+    """Compacted log of the open runs, kept from published events: per open run its `run started` (+ latest `renamed`,
+    `final`, step states), per live agent its `spawn` + the latest of each state-carrying event still open (status,
+    running skills / stages, session, job, gates, lifecycle, progress, metrics, open deferred callbacks). Dropped on
+    `exit` / run completed / failed. Bounded (MAX_RUNS, MAX_AGENTS, per-agent / per-run caps). Hub.replay() sends
+    the entries that already left the bounded buffer so a fresh viewer of an hours-long run still sees the run and
+    its agents (docs/SPEC.md "Replay")."""
+
+    def __init__(self) -> None:
+        self.runs: dict[str, _Run] = {}
+        self.agents: dict[str, _Agent] = {}
+        self.ended: dict[str, None] = {}  # recently ended run ids (insertion ordered, bounded)
+        # recent `exit` / run completed / failed events: a viewer resuming across a gap learns what ended meanwhile
+        self.endings: deque[dict] = deque(maxlen=ENDED_KEPT)
+
+    def note(self, ev: dict) -> None:
+        t, rid = ev.get("type"), ev.get("run_id")
+        if rid is None:
+            return
+        if t == "run":
+            st = ev.get("status")
+            if st == "started":
+                self._drop_run(rid)  # a run id reused: start over
+                self.ended.pop(rid, None)
+                self._run(rid).started = ev
+            elif st == "renamed":
+                self._run(rid).renamed = ev
+            elif st in ("completed", "failed"):
+                self._drop_run(rid)
+                self.endings.append(ev)
+                self.ended[rid] = None
+                while len(self.ended) > ENDED_KEPT:
+                    self.ended.pop(next(iter(self.ended)))
+            return
+        if rid in self.ended:
+            return
+        if t == "step":
+            steps = self._run(rid).steps
+            steps.pop(ev.get("step"), None)  # re-insert: newest last
+            steps[ev.get("step")] = ev
+            while len(steps) > MAX_STEPS:
+                steps.pop(next(iter(steps)))
+        elif t == "final":
+            self._run(rid).final = ev
+        elif t == "spawn":
+            aid = ev.get("id")
+            self._drop_agent(aid)  # a re-spawn resets the instance (world.ts), so does its state here
+            self.agents[aid] = _Agent(rid, ev)
+            self._run(rid).agents.add(aid)
+            while len(self.agents) > MAX_AGENTS:
+                self._drop_agent(next(iter(self.agents)))
+        elif t == "exit":
+            self._drop_agent(ev.get("id"))
+            self.endings.append(ev)
+        else:
+            a = self.agents.get(ev.get("id"))
+            k = _state_key(ev)
+            if a is None or k is None:
+                return
+            a.state.pop(k, None)
+            if not _closes(ev):
+                a.state[k] = ev
+                while len(a.state) > MAX_AGENT_STATE:
+                    a.state.pop(next(iter(a.state)))
+
+    def _run(self, rid: str) -> _Run:
+        r = self.runs.get(rid)
+        if r is None:
+            r = self.runs[rid] = _Run()
+            while len(self.runs) > MAX_RUNS:
+                self._drop_run(next(iter(self.runs)))
+        return r
+
+    def _drop_run(self, rid: str) -> None:
+        r = self.runs.pop(rid, None)
+        for aid in r.agents if r else ():
+            self.agents.pop(aid, None)
+
+    def _drop_agent(self, aid: str | None) -> None:
+        a = self.agents.pop(aid, None)
+        if a and a.run in self.runs:
+            self.runs[a.run].agents.discard(aid)
+
+    def snapshot(self) -> list[dict]:
+        """Every kept entry, in publish (seq) order: the run starts before its agents, a parent's spawn before its
+        child's, a spawn before its state. Replaying them in that order rebuilds the current world."""
+        evs = [e for r in self.runs.values() for e in (r.started, r.renamed, r.final) if e]
+        evs += [e for r in self.runs.values() for e in r.steps.values()]
+        evs += [e for a in self.agents.values() for e in (a.spawn, *a.state.values())]
+        return evs
