@@ -79,6 +79,7 @@ from typing import Any
 
 from .backend import Services, entry_kind
 from .hv import DecisionRate
+from .primitives import SIGNAL, Prims
 from .scrub import SKILL_KEY, decision_text, session_title, skill_name, step_name
 
 LLM_OPS = {"chat", "text_completion", "generate_content"}
@@ -259,6 +260,7 @@ class Span:
     persist: bool = False  # supervisor agent: exits when its team graph ends, not when its first turn ends
     skill: str | None = None  # `agentglow.skill` name once its skill start was emitted
     wait: tuple | None = None  # (reason, until ms | None, declared by the app) while this span is a wait
+    covered: bool = False  # entry span holding a primitive job / session node: never also a long-request job node
     wait_step: str | None = None  # step span the wait belongs to
     kind: str | None = None  # OTel span kind (server, client, producer, consumer, internal) when known
     svc: str | None = None  # service agent id: this span is (inside) a service request (backend.py)
@@ -331,6 +333,7 @@ class Mapper:
         self.orphans: dict[str, dict] = {}  # MCP backend span id -> {"start", "end", "parent", "ts"} until its parent shows
         self.hv = DecisionRate()  # high-volume decisions: per-agent aggregation + global cap (hv.py)
         self.svc = Services(self)  # backend services (backend.py)
+        self.prims = Prims(self)  # generic primitives (primitives.py)
 
     def _note_scope(self, s: "Span") -> None:
         if s.run in self.scopes:
@@ -348,6 +351,11 @@ class Mapper:
         out: list[dict] = []
         try:
             if self._hold_orphan(kind, span):
+                return out
+            a = span.get("attributes") or {}
+            if SIGNAL in a or a.get(EVENT_KEY) not in (None, "order"):  # a primitive signal / business event (primitives.py)
+                if kind == "end":
+                    self.prims.signal(span, out)
                 return out
             if kind == "start":
                 if span["span_id"] not in self.spans and span["span_id"] not in self.seen_ended:
@@ -406,6 +414,7 @@ class Mapper:
     def tick(self, now_ms: int) -> list[dict]:
         out: list[dict] = self.hv.flush(now_ms)
         out += self.svc.tick(now_ms)
+        out += self.prims.tick(now_ms)
         for k in [k for k, o in self.orphans.items() if now_ms - o["ts"] >= ORPHAN_MS]:  # parent never came: drop
             self.orphans.pop(k)
         for r in list(self.runs.values()):
@@ -442,6 +451,10 @@ class Mapper:
                 if root:
                     self.svc.start_root_client(s, d, out)
                 return s
+        if parent is None and self.prims.anchored(a):
+            # a root (or orphan) session / job / stage / lease / inference span: it hangs off its process's service
+            parent = self.prims.anchor(d, out)
+            d = {**d, "parent_span_id": parent.id}
         up = a.get("hatchet.parent_workflow_run_id")  # child workflow run: shown inside its (still open) parent run
         wf = a.get("hatchet.workflow_run_id")
         if wf and not (up and str(up) in self.runs) and parent is not None and parent.run != str(wf) and \
@@ -517,6 +530,7 @@ class Mapper:
         s.wait = self._wait_of(s)
         if s.wait:
             self._wait_start(s, run, out, ts)
+        self.prims.start(s, out)
         return s
 
     def _end(self, d: dict, out: list) -> None:
@@ -559,6 +573,7 @@ class Mapper:
         if "SkillsMiddleware" in s.name:
             self._note_skills_metadata(s)
         self._skill_start(s, out, s.start)
+        self.prims.end(s, out)
 
         if s.llm:
             owner = self._owner(s, out)

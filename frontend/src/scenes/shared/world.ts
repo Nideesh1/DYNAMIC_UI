@@ -15,6 +15,8 @@
  * Scenes read `world` every frame inside useFrame (mutable, no re-render) and use `useWorld()` for HUD/DOM.
  */
 import { useSyncExternalStore } from "react";
+import { applyPrim, noteRejected, PRIM_NO_LOG, PRIM_QUIET, PRIM_TYPES, tickPrims, type Backlog, type PrimEdge, type PrimState, type PrimWorldEvent, type ResStat } from "./prims";
+export type { PrimState, PrimWorldEvent } from "./prims";
 
 export type AgentType = "planner" | "researcher" | "graph_scout" | "records_scout" | "data_scout" | "writer";
 /** Any workflow-defined step name (the backend scrubs and caps it). */
@@ -52,7 +54,8 @@ export type WorldEvent =
   | { type: "decision_stats"; run_id: string; id: string; window_ms: number; n: number; by_purpose: DecisionStatsByPurpose; p50_ms: number; p95_ms: number; providers: Record<string, number>; ts: number }
   // backend services (docs/SPEC.md "Backend services"): a request / handled message on the service agent `id`;
   // `hv` = an error sent individually while the service's requests are aggregated in `service_stats`
-  | { type: "request"; run_id: string; id: string; service: string; name: string; kind: "http" | "rpc" | "message" | "event"; status?: number; error: boolean; ms: number; ts: number; hv?: boolean }
+  // `rejected`: admission / backpressure (429 / 503 with `agentglow.rejected`): amber, not an error
+  | { type: "request"; run_id: string; id: string; service: string; name: string; kind: "http" | "rpc" | "message" | "event"; status?: number; error: boolean; rejected?: boolean; ms: number; ts: number; hv?: boolean }
   // one per service per ~1 s window: requests, errors, status classes ("2xx": n), latency, top routes
   | { type: "service_stats"; run_id: string; id: string; service: string; window_ms: number; n: number; errors: number; codes: Record<string, number>; p50_ms: number; p95_ms: number; routes: Record<string, number>; ts: number; instances?: number; inflight?: number }
   // an order action (paper when dry_run) by agent instance `id`
@@ -60,7 +63,9 @@ export type WorldEvent =
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
   // topology: an MCP server and the backends behind it (sent at worker startup and to every new viewer)
   | { type: "mcp_register"; run_id?: string; server: string; resources: { name: string; kind: ResourceKind }[]; ts: number }
-  | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number; resource?: string; resource_kind?: ResourceKind };
+  | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number; resource?: string; resource_kind?: ResourceKind; units?: number; unit?: string; device?: string }
+  // generic primitives (docs/SPEC.md "Generic primitives", prims.ts)
+  | PrimWorldEvent;
 
 export type DecisionKind = "choice" | "score" | "noul";
 export type DecisionStatsByPurpose = {
@@ -183,7 +188,11 @@ export function orderText(o: { side: string; qty: number; price?: number; status
 }
 
 /** What sits behind an MCP server (the server is a node; its backends are nodes too). */
-export type ResourceKind = "db" | "warehouse" | "spark" | "api" | "storage" | "queue";
+export type ResourceKind = "db" | "warehouse" | "spark" | "api" | "storage" | "queue" | "model" | "gpu" | "worker" | "cache";
+/** the six shapes every theme draws: newer kinds map onto the closest one (model / gpu -> spark, worker -> storage, cache -> db) */
+export type ShapeKind = "db" | "warehouse" | "spark" | "api" | "storage" | "queue";
+export const shapeKind = (k: string | undefined): ShapeKind =>
+  k === "model" || k === "gpu" ? "spark" : k === "worker" ? "storage" : k === "cache" ? "db" : k === "db" || k === "warehouse" || k === "spark" || k === "storage" || k === "queue" ? k : "api";
 
 export const AGENT_TYPES: { type: AgentType; label: string; color: string }[] = [
   { type: "planner", label: "Planner", color: "#a78bfa" },
@@ -274,6 +283,8 @@ export type Instance = {
   job?: { since: number; end: number };
   /** a job just ended: its halo flashes green (ok) / red (performance.now()) */
   flash?: { at: number; ok: boolean };
+  /** generic primitives (prims.ts): created on the instance's first primitive event */
+  prim?: PrimState;
 };
 /** A declared wait: what it waits on ("approval", "sleep", an event key) and its deadline / wake-up (epoch ms, 0 = none). */
 export type Wait = { reason: string; until: number };
@@ -398,7 +409,8 @@ export function cometPos(c: Comet, now = performance.now()): number {
 /** the comet head is still drawn (a failed one never arrives: no arrival flash) */
 export const cometOn = (c: Comet, now = performance.now()) => (now - c.start) / c.dur < (c.failed ? FIZZLE_END : 1);
 /** External MCP servers agents call (persistent "satellites"; registered on first use). */
-export type McpResource = { name: string; kind: ResourceKind; activeAt: number; inflight: number; calls: number };
+/** `kind` = the shape themes draw (shapeKind), `sub` = the reported kind (model, gpu, worker, cache, ...) */
+export type McpResource = { name: string; kind: ShapeKind; sub: ResourceKind; activeAt: number; inflight: number; calls: number };
 export type McpServer = { name: string; color: string; slot: number; activeAt: number; calls: number; inflight: number; resources: Map<string, McpResource> };
 /** One MCP request/response: a packet flying instance → server ("call") or server → instance ("result"). */
 export type McpCall = { id: number; run: string; instance: string; server: string; tool: string; resource?: string; phase: "call" | "result"; start: number; dur: number };
@@ -454,7 +466,7 @@ export const world = {
   /** MCP tool name -> the server it was last called on (a guard deny on that tool flashes the line to it) */
   mcpTools: new Map<string, string>(),
   ticker: [] as WorldEvent[],
-  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0, decisions: 0, decisionMs: 0, requests: 0, errors: 0 },
+  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0, decisions: 0, decisionMs: 0, requests: 0, errors: 0, rejected: 0 },
   /** decisions per provider (jev / laya / llm ...): count + summed latency (HUD chip tooltip) */
   decisionProviders: new Map<string, { n: number; ms: number }>(),
   /** session-wide decision rate (HUD): last full second's rate, deny share, p50/p95, 60 s sparkline (per second) */
@@ -491,6 +503,12 @@ export const world = {
   unauthorized: false,
   /** desk-wide halts (global-scope guard denies, see Halt), keyed by the owning agent */
   halts: new Map<string, Halt>(),
+  /** transient dashed edges: fallbacks and completed deferred callbacks (prims.ts) */
+  primEdges: [] as PrimEdge[],
+  /** broker backlog per topic (prims.ts) */
+  backlogs: new Map<string, Backlog>(),
+  /** resource stats (pools, caches, models) keyed `server|resource` */
+  resStats: new Map<string, ResStat>(),
 };
 
 /**
@@ -617,7 +635,7 @@ function admitHv(d: DecisionUse, now: number): boolean {
   return true;
 }
 /** high-frequency event types: no immediate React notify (the HUD catches up within HUD_NOTIFY_MS) */
-const QUIET = new Set(["decision", "decision_stats", "order", "request", "service_stats"]);
+const QUIET = new Set(["decision", "decision_stats", "order", "request", "service_stats", ...PRIM_QUIET]);
 const HUD_NOTIFY_MS = 250;
 let dirty = false;
 let notifiedAt = 0;
@@ -627,10 +645,11 @@ export function apply(ev: WorldEvent) {
   const evRun = "run_id" in ev ? world.runs.get(ev.run_id as string) : undefined;
   if (evRun) evRun.lastEventAt = now;
   // stats windows are not log lines (the halo shows them); everything else goes to the event log
-  if (ev.type !== "mcp_register" && ev.type !== "decision_stats" && ev.type !== "service_stats") {
+  if (ev.type !== "mcp_register" && ev.type !== "decision_stats" && ev.type !== "service_stats" && !PRIM_NO_LOG.has(ev.type) && !(ev.type === "session" && ev.phase === "progress")) {
     world.ticker.unshift(ev);
     if (world.ticker.length > 60) world.ticker.length = 60;
   }
+  if (PRIM_TYPES.has(ev.type)) applyPrim(world, ev as PrimWorldEvent, now);
   switch (ev.type) {
     case "run": {
       if (ev.status === "renamed") {
@@ -918,10 +937,11 @@ export function apply(ev: WorldEvent) {
     case "request": {
       // an individual request pulses the service, an error flashes its halo red (counted by `service_stats`)
       const i = world.instances.get(ev.id);
+      if (ev.rejected) noteRejected(world, i, ev.status ? `${ev.status}` : "busy", now);
       if (!i) break;
       i.pulse = Math.max(i.pulse * Math.exp(-((now - i.pulseAt) / 1000) * 2.2), ev.error ? 1.2 : 0.7);
       i.pulseAt = now;
-      if (ev.error) {
+      if (ev.error && !ev.rejected) {
         if (!i.hv) i.hv = { at: now, bump: 0, bumpDeny: false, rate: 0, deny: 0, p50: ev.ms, p95: ev.ms, seg: SEG_SCRATCH.map(() => 0), provider: "", n: 0, windows: 0, unit: ev.kind === "http" ? "req" : "msg" };
         i.hv.bump = now;
         i.hv.bumpDeny = true;
@@ -949,7 +969,7 @@ export function apply(ev: WorldEvent) {
       // halo arc: ok green, 5xx / errors red, 4xx amber, anything else grey
       seg[0] = ok;
       seg[1] = http ? c["5xx"] ?? 0 : ev.errors;
-      seg[3] = c["4xx"] ?? 0;
+      seg[3] = (c["4xx"] ?? 0) + (c["rejected"] ?? 0); // rejected (admission / backpressure): amber, never in 5xx
       seg[8] = Math.max(0, ev.n - seg[0] - seg[1] - seg[3]);
       const tot = seg.reduce((x, y) => x + y, 0) || 1;
       const rate = (ev.n * 1000) / Math.max(1, ev.window_ms);
@@ -1015,7 +1035,8 @@ export function apply(ev: WorldEvent) {
       if (ev.resource) {
         res = srv.resources.get(ev.resource);
         if (!res) {
-          res = { name: ev.resource, kind: ev.resource_kind ?? world.mcpRegistry.get(ev.server)?.get(ev.resource) ?? "api", activeAt: now, inflight: 0, calls: 0 };
+          const sub = ev.resource_kind ?? world.mcpRegistry.get(ev.server)?.get(ev.resource) ?? "api";
+          res = { name: ev.resource, kind: shapeKind(sub), sub, activeAt: now, inflight: 0, calls: 0 };
           srv.resources.set(ev.resource, res);
         }
         res.activeAt = now;
@@ -1054,7 +1075,7 @@ export function apply(ev: WorldEvent) {
       break;
     }
   }
-  const id = ev.type === "decision_stats" || ev.type === "service_stats" ? null : "id" in ev ? ev.id : ev.type === "message" ? ev.from_id : null;
+  const id = ev.type === "decision_stats" || ev.type === "service_stats" || PRIM_NO_LOG.has(ev.type) || (ev.type === "session" && ev.phase === "progress") ? null : "id" in ev ? ev.id : ev.type === "message" ? ev.from_id : null;
   if (id) {
     const i = world.instances.get(id);
     if (i) {
@@ -1146,6 +1167,7 @@ export function tick(now = performance.now()) {
       changed = true;
     }
   }
+  tickPrims(world, now);
   const nc = world.comets.length;
   world.comets = world.comets.filter((c) => now - c.start < c.dur + 250);
   world.mcpResolved = world.mcpResolved.filter((r) => now - r.resolvedAt < 700);
@@ -1263,6 +1285,9 @@ export function resetWorld() {
   world.graphAt = 0;
   world.halts.clear();
   globalBy.clear();
+  world.primEdges.length = 0;
+  world.backlogs.clear();
+  world.resStats.clear();
   notify();
 }
 

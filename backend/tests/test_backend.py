@@ -401,7 +401,7 @@ def test_long_request_becomes_job_owning_its_calls():
     assert not types(m.tick(T + backend.JOB_MS - 1), "spawn")  # not yet: still a plain open request
     tick = m.tick(T + backend.JOB_MS)
     (sp,) = types(tick, "spawn")
-    jid = f"job:{req['span_id']}"
+    jid = f"req:{req['span_id']}"
     assert sp == {"type": "spawn", "run_id": "services", "id": jid, "agent": "mkt:tick", "parent_id": "svc:orders-worker",
                   "subagent": True, "job": True, "since": T, "ts": T + backend.JOB_MS}
     assert {"type": "agent", "run_id": "services", "id": jid, "status": "thinking", "ts": T + backend.JOB_MS} in tick
@@ -449,3 +449,43 @@ def test_job_nodes_capped_per_service_and_replayed():
     # one ends: the next waiting long request gets a node
     m.feed("end", {**reqs[0], "end_time_ms": T + 61_000})
     assert len(types(m.tick(T + 62_000), "spawn")) == 1
+
+
+# ---------------------------------------------------------------------- long-request jobs vs primitive job(id) / sessions
+def test_request_holding_a_primitive_job_is_not_also_a_long_request_job():
+    m = Mapper()
+    req = _consume(t1=T + 20_000)
+    m.feed("start", {**req, "end_time_ms": None, "status": "unset"})
+    j = span("job order", service="orders-worker", parent=req["span_id"], t0=T + 5, t1=T + 19_000,
+             **{"agentglow.job.id": "o-1", "agentglow.job.kind": "order", "agentglow.job.state": "running"})
+    evs = m.feed("start", {**j, "end_time_ms": None, "status": "unset"})
+    evs += m.tick(T + backend.JOB_MS) + m.tick(T + 2 * backend.JOB_MS)
+    ids = [e["id"] for e in types(evs, "spawn")]
+    assert "job:o-1" in ids and not [i for i in ids if i.startswith(backend.LONG_PREFIX)]
+    evs = m.feed("end", j) + m.feed("end", req)
+    assert not [e for e in types(evs, "exit") if e["id"].startswith(backend.LONG_PREFIX)]
+
+
+def test_primitive_job_after_promotion_takes_over_the_long_request_node():
+    m = Mapper()
+    req = _consume(t1=T + 30_000)
+    m.feed("start", {**req, "end_time_ms": None, "status": "unset"})
+    (sp,) = types(m.tick(T + backend.JOB_MS), "spawn")
+    assert sp["id"] == f"req:{req['span_id']}"
+    j = span("job order", service="orders-worker", parent=req["span_id"], t0=T + 25_000, t1=T + 29_000,
+             **{"agentglow.job.id": "o-2", "agentglow.job.kind": "order"})
+    evs = m.feed("start", {**j, "end_time_ms": None, "status": "unset"})
+    assert {"type": "exit", "run_id": "services", "id": sp["id"], "status": "done", "ts": T + 25_000} in evs
+    assert "job:o-2" in [e["id"] for e in types(evs, "spawn")]
+    evs = m.feed("end", j) + m.feed("end", req) + m.tick(T + 40_000)
+    assert not [e for e in types(evs, "exit") if e["id"] == sp["id"]]  # no second exit
+    assert not types(evs, "spawn") or all(not e["id"].startswith(backend.LONG_PREFIX) for e in types(evs, "spawn"))
+
+
+def test_websocket_entry_never_becomes_a_long_request_job():
+    m = Mapper()
+    ws = span("/chat", kind="server", t1=T + 60_000, **{"network.protocol.name": "websocket", "http.route": "/chat"})
+    m.feed("start", {**ws, "end_time_ms": None, "status": "unset"})
+    evs = m.tick(T + backend.JOB_MS) + m.tick(T + 10_000)
+    assert not [e for e in types(evs, "spawn") if e["id"].startswith(backend.LONG_PREFIX)]
+    assert not m.svc.svcs["svc:orders-api"].open

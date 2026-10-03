@@ -206,8 +206,8 @@ backend spans.
 | Backend | Rule | World |
 |---|---|---|
 | service | resource `service.name` (span JSON `service`), overridden by attribute `agentglow.service` | one long-lived agent `svc:<name>` (`svc:<scope>:<name>` when scoped) in the run `services` (`services:<scope>`), spawned (+ `agent thinking`) on its first backend span; persistent across requests, never completes with its spans; idle for `AGENTGLOW_SERVICE_IDLE_MS` (1 h) = `exit` (back on the next request). A new viewer gets the service run + spawns even after they left the replay buffer |
-| request | SERVER span with `http.request.method` / `http.method` / `http.route` or `rpc.system`; CONSUMER (or SERVER) span with `messaging.system`, not a `create` span; never a span with `hatchet.*`, `gen_ai.*`, `openinference.*`, `llm.*`, `agentglow.mcp.*` or `agentglow.agent` | `request` on the service agent when it ends: `name` = `METHOD route` (route template only, never the URL / query) or the topic, `status` = HTTP status, `error` = span status ERROR or status >= 500 |
-| job | a request still open `AGENTGLOW_JOB_MS` (3000) after it started (a long FastStream handler, a slow endpoint; seen at the server tick, so only for live spans) | a "job" subagent of the service: `spawn` `{"id": "job:<span id>", "agent": <request name, e.g. "mkt:tick", "POST /orders">, "parent_id": <service>, "subagent": true, "job": true, "since": <request start ms>}` + `agent thinking`; the calls inside the request (DB / HTTP / LLM / MCP / tasks) are owned by the job from then on; at its end `exit` done (failed on error / 5xx), then the usual `request`. At most `AGENTGLOW_SERVICE_MAX_JOBS` (8) live per service (more are only counted in `inflight`); a request open `AGENTGLOW_JOB_STALE_MS` (1 h; e.g. its process was killed) is forgotten (`exit` done). Live jobs are re-sent to a new viewer like the service spawns. Requests ending sooner stay a pulse (no node) |
+| request | SERVER span with `http.request.method` / `http.method` / `http.route` or `rpc.system` (a WebSocket SERVER span, `network.protocol.name` websocket / `url.scheme` ws, is an entry too but never a `request`: its session node shows it); CONSUMER (or SERVER) span with `messaging.system`, not a `create` span; never a span with `hatchet.*`, `gen_ai.*`, `openinference.*`, `llm.*`, `agentglow.mcp.*` or `agentglow.agent` | `request` on the service agent when it ends: `name` = `METHOD route` (route template only, never the URL / query) or the topic, `status` = HTTP status, `error` = span status ERROR or status >= 500 |
+| job | a request still open `AGENTGLOW_JOB_MS` (3000) after it started (a long FastStream handler, a slow endpoint; seen at the server tick, so only for live spans) | a "job" subagent of the service: `spawn` `{"id": "req:<span id>", "agent": <request name, e.g. "mkt:tick", "POST /orders">, "parent_id": <service>, "subagent": true, "job": true, "since": <request start ms>}` + `agent thinking`; the calls inside the request (DB / HTTP / LLM / MCP / tasks) are owned by the job from then on; at its end `exit` done (failed on error / 5xx), then the usual `request`. At most `AGENTGLOW_SERVICE_MAX_JOBS` (8) live per service (more are only counted in `inflight`); a request open `AGENTGLOW_JOB_STALE_MS` (1 h; e.g. its process was killed) is forgotten (`exit` done). Live jobs are re-sent to a new viewer like the service spawns. Requests ending sooner stay a pulse (no node). A request that holds a primitive `job(id)` / `session(...)` (ids `job:<id>`, see "Generic primitives"; WebSocket entries too) is drawn by that node instead: it never also becomes a `req:` node (one already promoted exits done) |
 | rate | per service, hv.py ideas: calm (<= `AGENTGLOW_SERVICE_HV_RATE`, 5 requests in the trailing 1 s) = individual `request` events within a global budget (`AGENTGLOW_SERVICE_CAP`, 20/s); busy = aggregated, only errors still go out individually at the tick (`"hv": true`, max 3 per service per tick, within the budget) | `service_stats` per service per tick (~1 s) with any requests (calm or busy): `{"type": "service_stats", "run_id", "id", "service", "window_ms", "n", "errors", "codes": {"2xx": n, "4xx": n, "5xx": n}, "p50_ms", "p95_ms", "routes": {<name>: n} (top 6 + "other"), "ts", "inflight"?}`; `inflight` = requests open now for 1 s or more (sent while > 0 and once more at 0; a window with only open requests still sends stats, `n: 0`) |
 | message | PRODUCER span with `messaging.system` inside a request of service A; a request (CONSUMER span) of service B whose OTel parent or a link is that producer span (FastStream: the consumer's parent is the producer's `create` span); either side may arrive first (10 s) | `message` comet A -> B, `text` = `messaging.destination.name` / `messaging.destination_publish.name` / the span name's destination; max one per edge per 250 ms |
 | task | an agent span inside a request (`agentglow.agent(...)`, GenAI `invoke_agent`, ...) or FastAPI's native `fastapi.background_task` span (name = the task function) | a subagent of the service (`subagent: true`, delegation `message`, `exit`); at most `AGENTGLOW_SERVICE_MAX_TASKS` (6) live per service, more run as the service itself |
@@ -279,7 +279,7 @@ never blocks) and `pulse(url, event)` from the npm package's `agentglow/pulse` e
 | Field | |
 |---|---|
 | `service` (or `agent`) | required: the service / long-lived agent |
-| `event` | `request` (default) \| `message` \| `call` \| `error` \| `llm` \| `tool`; anything else = a request named after it |
+| `event` | `request` (default) \| `message` \| `call` \| `error` \| `llm` \| `tool` \| a primitive (see "Generic primitives": `session`, `stage`, `progress`, `capacity`, `rejected`, `job`, `link`, `complete`, `fallback`, `gate`, `backlog`, `lifecycle`, `metric`, `event`, `cache`, `lease`, `inference`); anything else = a request named after it |
 | `name` | route / operation / tool name (scrubbed, max 60) |
 | `status` | HTTP status (>= 500 = error) or `error` / `failed` |
 | `duration_ms` | latency |
@@ -405,6 +405,82 @@ World event (when the span ends; owned by the nearest agent): `{"type": "order",
 red SELL/NO, `YES 3 @ 42c`, dashed outline + `paper` when `dry_run`, grey strike-through when rejected/cancelled); the
 HUD shows `orders N (paper)` and the agent panel the agent's recent orders.
 
+## Generic primitives (backend `primitives.py`)
+Small building blocks any system can report: long-lived sessions, stages and progress, admission / backpressure,
+resource pools and non-LLM inference, jobs that cross processes, late callbacks, fallbacks, stateful gates, broker
+backlog, service lifecycle, metrics, business events and caches. Each has a Python call (exported from `agentglow`), an
+OTel attribute contract (any language), a `/v1/events` flat form and world events. None of them carries content: fields
+are numbers, ids and short enums; every string passes the Privacy scrub (secrets redacted) and is capped (labels 40,
+reasons 60 chars). Like the Manual API they are plain OTel spans on the global provider (no SDK provider = no-op).
+
+**Owner.** A primitive belongs to the nearest agent of its span: a session, a job node, a task subagent, the service of
+the request it runs in, or an agent. A signal span with no parent (process start-up, a sampler thread) belongs to the
+process's service (`service.name` / `agentglow.service`). Flat events: `service` (required), or the node named by
+`session_id` / `job_id`.
+
+**Two span shapes.** Long-lived ones are spans with attributes set at start (live view). Point ones are finished-at-once
+spans with `agentglow.signal` = the signal name and `agentglow.<signal>.<field>` attributes (a signal span is never a
+run, LLM turn, tool call or request of its own).
+
+| Primitive | Python | Span attributes | Flat (`/v1/events`, `event` = ...) | World |
+|---|---|---|---|---|
+| session | `with agentglow.session(name, kind="voice", id=None, parent=None, parent_link=True) as s:` ; `s.progress(**gauges)`, `s.turn(role, **numbers)`, `s.end(outcome=, reason=)` | span `session <name>`: `agentglow.session`=name, `agentglow.agent`=name, `.session.kind`, `.session.id`; at end `.session.outcome`, `.session.reason`; gauges: signal `gauge` (`agentglow.gauge.<k>` numbers, max one per second), turns: signal `turn` (`agentglow.turn.role`, `agentglow.turn.<k>` numbers) | `session` with `session_id`, `phase` start\|progress\|turn\|end, `kind`, `name`, `gauges` {}, `role`, `outcome`, `reason` | `spawn` (a subagent of its owner, e.g. the service whose request opened it) + `session` events; `exit` at end |
+| stage | `with agentglow.stage("decode"):` (parallel = several open at once) | span `stage <name>`: `agentglow.stage`=name | `stage` with `name`, `status` running\|done\|failed, `duration_ms` | `stage` running / done / failed on the owner |
+| progress | `agentglow.progress(i, n)` or `progress(0.4, eta_s=None, label=None)` | signal `progress`: `.progress.frac`, `.i`, `.n`, `.eta_ms`, `.label` | `progress` with `frac` or `i`+`n`, `eta_ms`, `label` | `progress` (`frac` 0..1, `eta_ms` given or estimated from the rate since the first progress) |
+| capacity | `agentglow.capacity(name, used, max)` | signal `capacity`: `.capacity.name`, `.used`, `.max` | `capacity` with `name`, `used`, `max` | `capacity` gauge (max one per owner+name per 250 ms unless it hits max / leaves it) |
+| rejected | `agentglow.rejected(reason, retry_after=None, status=None)` | signal `rejected`: `.rejected.reason`, `.retry_after_ms`, `.status`; also sets `agentglow.rejected`=reason on the current span | `rejected` with `reason`, `retry_after_ms`, `status` | `rejected` (amber, NOT an error); the enclosing request's `request` gets `rejected: true`, `error: false` even for a 503 |
+| pool | `p = agentglow.pool(name, size, kind="model"\|"gpu"\|"worker", devices=None)`; `async with p.lease() as inst:` / `with p.lease():` (`inst.device`, `inst.index`; it really limits concurrency to `size`) | span `lease <pool>`, started when acquired, backdated to the request: `agentglow.pool`=name, `.pool.kind`, `.size`, `.device`, `.instance`, `.wait_ms`, `.waiting` | `lease` with `pool`, `kind`, `size`, `device`, `wait_ms`, `duration_ms` | resource `<pool>` (kind = pool kind) under the `backend` group: `mcp` call / result (`tool` `lease`), `resource_stats` |
+| inference | `with agentglow.inference(model, device=None, units=None, unit="audio_s") as inf:` (`inf.units = 12.5` before the end) | span `inference <model>`: `agentglow.inference.model`, `.device`, `.units`, `.unit` | `inference` with `model`, `device`, `units`, `unit`, `duration_ms` | resource `<model>` (kind `model`): `mcp` call / result (`tool` `infer`, + `units`, `unit`), `resource_stats` with speed |
+| job | `agentglow.job(id, kind="job", state="queued")` (a point state) or `with agentglow.job(id, kind=..., attempt=n, max_attempts=None) as j:` (running; end: done, an exception: `retrying` while `attempt < max_attempts`, `dead` at the last attempt, else `failed`; `j.state("retrying")` overrides) | span `job <kind>` or signal `job`: `agentglow.job.id`, `.job.kind`, `.job.state`, `.job.attempt` | `job` with `job_id`, `kind`, `state`, `attempt` | ONE node per job id (scope + id) in the services run (at most `AGENTGLOW_JOB_MAX_NODES`, 12, live nodes; more are tracked, not drawn): `spawn` (subagent of the service that first reports it, `job:<id>`) + `job` events from every process; a different service reporting it = comet from that service to the job; `done` = exit done, `dead` = exit failed, `failed` exits after 15 s without a retry, any job after 5 min without news; spans inside the job span (stages, progress, leases) belong to it |
+| link / complete | `agentglow.link(external_id, label=None)` inside the outbound call; later `agentglow.complete(external_id, status="ok")` in the webhook | signals `link` (`.link.id`, `.link.label`) / `complete` (`.complete.id`, `.complete.status`) | `link` / `complete` with `ref`, `label` / `status` | `deferred` `open` on the caller; on complete `deferred` `done` (`from_id` = completer, `wait_ms`) + a `message` comet completer -> caller (`callback <status>`); open links are forgotten after 1 h |
+| fallback | `agentglow.fallback(from_="inline", to="queue", reason="timeout", job=None)` | signal `fallback`: `.fallback.from`, `.to`, `.reason`, `.job` | `fallback` with `from`, `to`, `reason`, `job_id` | `fallback` (`to_id` = the job node when `job` is given, else a service named `to`, if known): dashed edge |
+| gate | `agentglow.gate(name, state="locked", attempts_left=None)` | signal `gate`: `.gate.name`, `.state`, `.attempts_left` | `gate` with `name`, `state`, `attempts_left` | `gate` on the owner (state persists: lock badge while locked) |
+| backlog | `agentglow.backlog(topic, depth, pending=None, lag_ms=None)`; sampler: `agentglow.sample_backlog(broker_or_redis, streams=None, every_s=3)` or `watch(broker=..., backlog=True)` | signal `backlog`: `.backlog.topic`, `.depth`, `.pending`, `.lag_ms` | `backlog` with `topic`, `depth`, `pending`, `lag_ms` | `backlog` (`from_id` / `to_id` = the producer / consumer services of that topic once a message comet showed them); max one per topic per 500 ms |
+| lifecycle | `agentglow.lifecycle(state)`: loading \| warming \| ready \| degraded \| draining \| restarting \| fatal | signal `lifecycle`: `.lifecycle.state` | `lifecycle` with `state` | `lifecycle` on the service of the span (never a session / job inside it; latest state replayed to new viewers) |
+| metric | `agentglow.metric(name, value, unit=None)` | signal `metric`: `.metric.name`, `.value`, `.unit` | `metric` with `name`, `value`, `unit` | `metric` (max one per owner+name per 500 ms) |
+| event | `agentglow.event(kind, label=None, **fields)` (numbers / bools / short strings; `order(...)` keeps its own shape) | span `event <kind>`: `agentglow.event`=kind, `.event.label`, `.event.<field>` | `event` with `kind`, `label`, other fields | `event` (`fields` max 8) |
+| cache | `agentglow.cache(name, hit=True)` | signal `cache`: `.cache.name`, `.hit` | `cache` with `name`, `hit` | resource `<name>` (kind `cache`): `mcp` pulse (max one per owner+cache per 250 ms), hit rate in `resource_stats` |
+
+World event shapes (`ts` = epoch ms; `id` = owner instance id):
+```
+session        {run_id, id, name, kind, phase: start|progress|turn|end, ref?, gauges?: {k: num}, role?, outcome?, reason?, ms?}
+stage          {run_id, id, name, status: running|done|failed, ms?}
+progress       {run_id, id, frac, i?, n?, eta_ms?, label?}
+capacity       {run_id, id, name, used, max}
+rejected       {run_id, id, reason, retry_after_ms?, status?}
+job            {run_id, id: "job:<id>", job_id, kind, state: queued|running|retrying|done|failed|dead, attempt, at?: <service>}
+deferred       {run_id, id, ref, phase: open|done, label?, status?, from_id?, wait_ms?}
+fallback       {run_id, id, from, to, reason, to_id?}
+gate           {run_id, id, name, state: locked|unlocked, attempts_left?}
+backlog        {run_id, id, topic, depth, pending?, lag_ms?, from_id?, to_id?}
+lifecycle      {run_id, id, state}
+metric         {run_id, id, name, value, unit?}
+event          {run_id, id, kind, label?, fields?: {k: num|bool|str}}
+resource_stats {run_id, server: "backend", resource, kind, window_ms, calls, p50_ms, size?, busy?, waiting?, wait_p50_ms?,
+                devices?: [{device, busy, size}], hits?, misses?, units?, unit?, rtf?}   (one per active resource per tick)
+```
+New resource kinds: `model`, `gpu`, `worker`, `cache` (themes draw them with the closest existing shape).
+
+**FastAPI WebSockets.** `with agentglow.session_ws(websocket, name=None, kind="ws"):` around a WebSocket handler (name =
+the route path) is a session: `client_disconnect` / `server_close` reason from the close code, frames counted as
+`frames_in` / `frames_out` gauges (no content). With `watch(app=...)` every WebSocket route of the app is wrapped
+automatically (`agentglow.primitives.watch_websockets(app)`).
+
+**Redis Streams backlog sampler.** `agentglow.sample_backlog(broker, streams=None, every_s=3.0)`: a daemon thread runs
+`XLEN` and, for each consumer group, `XPENDING` (pending count, lag from the oldest pending id) on the given streams (default:
+the FastStream broker's subscribed streams) and reports `backlog`; its own Redis calls are not traced. Opt in with
+`watch(broker=broker, backlog=True)` (or a float = the interval).
+
+**Frontend.** All themes (kit overlays, `kit/Prims.tsx`): one compact status line under the node (job state `retrying
+#2`, session timer `voice 1:23 · 4 turns`, stages `decode` / `asr + tts` for parallel ones, `42% · ETA 8s`, `locked ·
+2 left`, `cap 3/4`, lifecycle state, `awaiting <label>`), max ~3 segments; a progress arc around the node; lifecycle
+tint ring (blue loading / warming, amber degraded, grey draining, red fatal; an expanding pulse on restart); an amber
+flash ring on `rejected`; dashed edges for `fallback` (amber) and a completed `deferred` (green); a backlog line between
+the producer and consumer services (`orders 42 · lag 1.2s`, thicker with depth); business `event` chips (like orders);
+resource stats under backend nodes (`2/4 busy · wait 12ms`, `hit 82%`, `RTF 0.21`). Selected panel: Session (kind,
+elapsed, turns, gauges, outcome), Stages & progress, Job (state history), Gates / capacity / lifecycle / metrics,
+Events. HUD: `rejected N` (amber).
+
 ## Privacy
 One scrub (`backend/agentglow/scrub.py`) runs at the Hub ingestion boundary for every path (`/v1/live`, `/v1/traces`
 JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload before building spans):
@@ -477,9 +553,11 @@ spans carry none of these keys and are unchanged (regression goldens).
 ## World events (backend → frontend)
 Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
 `run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill, chat, decision,
-decision_stats, order, request, service_stats`. `ts` = epoch ms.
+decision_stats, order, request, service_stats, session, stage, progress, capacity, rejected, job, deferred, fallback, gate,
+backlog, lifecycle, metric, event, resource_stats` (the last 14: see "Generic primitives"). `ts` = epoch ms.
 `request` = `{"type": "request", "run_id", "id": <service agent id>, "service", "name", "kind": "http"|"rpc"|"message"|"event",
-"status"?, "error", "ms", "ts", "hv"?}` and `service_stats` (`"instances"?` when > 1): see "Backend services".
+"status"?, "error", "rejected"?, "ms", "ts", "hv"?}` (`rejected: true` = turned away on purpose, `agentglow.rejected()`: never an
+error, counted as `codes.rejected` in `service_stats`, not as `5xx`) and `service_stats` (`"instances"?` when > 1): see "Backend services".
 `message` may carry `"failed": true` (a publish that raised: the comet is short and flagged `failed` in the world so
 themes can fizzle it; the HUD logs `api ✕ orders: publish failed`). Frontend: a request pulses its service,
 an error flashes the service halo red; `service_stats` drives the same halo as `decision_stats` (arc: ok green, 5xx /

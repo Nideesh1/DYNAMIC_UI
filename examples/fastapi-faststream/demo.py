@@ -1,4 +1,4 @@
-"""Start payments, orders-api, orders-worker, the shop MCP server and the support agent together (Ctrl-C stops all).
+"""Start payments, webhooks, orders-api, orders-worker, the shop MCP server and the support agent together (Ctrl-C stops all).
 Then run the load: `uv run python load.py --rps 50 --seconds 60`. Needs Redis (docker-compose.yml) and an AgentGlow
 server (AGENTGLOW_URL, default http://localhost:8100)."""
 import signal
@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-PROCS = ["app.payments", "app.api", "app.worker", "app.mcp_server", "app.support_agent"]
+PROCS = ["app.payments", "app.webhooks", "app.api", "app.worker", "app.mcp_server", "app.support_agent"]
 
 if __name__ == "__main__":
     procs = []

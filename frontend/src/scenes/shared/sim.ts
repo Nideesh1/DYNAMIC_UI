@@ -6,6 +6,7 @@
  * Fast structured decisions (Jev / Laya / an LLM judge): a model-router choice on each spawn, tool guardrails (now
  * and then a deny), a quality score on the writer's draft.
  */
+import { runPrimSim } from "./simPrims";
 import { apply, setSimulated, type AgentType, type StepName, type WorldEvent } from "./world";
 
 const MAX_CONCURRENT = 3;
@@ -246,7 +247,10 @@ export function runWorldSimulator(): () => void {
   };
   startOne();
   timers.push(window.setTimeout(refill, 2500));
+  // generic primitives (sessions, jobs, pools, backlog, ...) on a small services run
+  const stopPrims = runPrimSim((ev) => !stopped && (Array.isArray(ev) ? ev : [ev]).forEach(apply));
   return () => {
+    stopPrims();
     stopped = true;
     timers.forEach(clearTimeout);
     setSimulated(false);

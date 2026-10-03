@@ -7,7 +7,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { mcpGlow, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { mcpGlow, waitSeconds, world, type McpCall, type ShapeKind } from "../shared/world";
 import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { ARROW_GEO, ArrowPool, SPHERE_GEO, TUBE_GEO, additiveBasic, placeOnCurve, reduced, bezier, bowControl, clamp01, easeInOut, easeOut, glowSpriteMaterial, tubeMaterial } from "./fx";
 
@@ -19,7 +19,7 @@ const OCTA = new THREE.OctahedronGeometry(0.8, 0);
 const OCTA_EDGES = new THREE.EdgesGeometry(OCTA);
 
 type Part = { geo: THREE.BufferGeometry; edges?: THREE.BufferGeometry; pos?: [number, number, number]; rot?: [number, number, number] };
-function kindParts(kind: ResourceKind): Part[] {
+function kindParts(kind: ShapeKind): Part[] {
   const withEdges = (geo: THREE.BufferGeometry, pos?: [number, number, number], rot?: [number, number, number]): Part => ({ geo, edges: new THREE.EdgesGeometry(geo, 25), pos, rot });
   switch (kind) {
     case "db":

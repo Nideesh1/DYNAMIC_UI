@@ -460,3 +460,19 @@ def test_faststream_failed_publish_keeps_one_failed_span(monkeypatch):
     asyncio.run(handler())
     pubs = [s for s in exported(proc, sent) if s["name"] == "calls publish"]
     assert len(pubs) == 1 and pubs[0]["status"] == "error"  # FastStream's own span; no second one from the wrapper
+
+
+def test_strict_privacy_keeps_primitive_attributes():
+    """The generic primitives (session / job / stage / pool / signals) carry ids, numbers and enums: strict keeps them."""
+    from agentglow.scrub import strict_attrs
+
+    a = {"agentglow.job.id": "o-12345678", "agentglow.job.kind": "order", "agentglow.job.state": "retrying",
+         "agentglow.job.attempt": 2, "agentglow.stage": "pack", "agentglow.pool": "packers", "agentglow.pool.size": 3,
+         "agentglow.signal": "progress", "agentglow.progress.done": 3, "agentglow.progress.total": 4,
+         "agentglow.session": "support chat", "agentglow.session.kind": "ws", "agentglow.rejected": "queue full",
+         "http.request.header.authorization": "Bearer x", "user.email": "a@b.co"}
+    out = strict_attrs(a, "internal")
+    for k in a:
+        if k.startswith("agentglow."):
+            assert out[k] == a[k], k
+    assert "http.request.header.authorization" not in out and "user.email" not in out

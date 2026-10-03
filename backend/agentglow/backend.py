@@ -46,6 +46,7 @@ CALL_MIN_MS = 250  # per (agent, server, resource)
 LINK_MS = 10_000  # a consumer waits this long for its producer span (other process, other batch)
 PRUNE_MS = 30_000  # ended spans of a service run are forgotten after this long
 JOB_MS = int(os.environ.get("AGENTGLOW_JOB_MS", "3000"))  # a request open this long becomes a job node
+LONG_PREFIX = "req:"  # long-request job node ids `req:<span id>` (business-id jobs of primitives.py are `job:<id>`)
 MAX_JOBS = int(os.environ.get("AGENTGLOW_SERVICE_MAX_JOBS", "8"))  # live job nodes per service (more are only counted)
 INFLIGHT_MS = 1000  # `inflight` counts requests open at least this long (not every request that spans a tick)
 JOB_STALE_MS = int(os.environ.get("AGENTGLOW_JOB_STALE_MS", str(3600 * 1000)))  # an open request never ended: forgotten
@@ -99,6 +100,8 @@ def entry_kind(d: dict) -> str | None:
     if a.get("agentglow.agent") or any(k.startswith(SKIP_ENTRY) for k in a):
         return None  # agents, LLM/tool spans, Hatchet steps and MCP spans keep their own meaning
     kind = d.get("kind")
+    if kind == "server" and (a.get("network.protocol.name") == "websocket" or a.get("url.scheme") in ("ws", "wss")):
+        return "ws"  # a WebSocket connection: its session node shows it (primitives.py), never a request
     if kind == "server":
         if a.get("http.request.method") or a.get("http.method") or a.get("http.route"):
             return "http"
@@ -251,7 +254,7 @@ class Services:
         aid = self.ensure(self.service_name(d), a.get("agentglow.scope") or a.get("agentglow.run.scope"), s.start, out, d.get("instance"))
         s.alias = s.svc = aid
         s.entry = kind
-        if s.end is None:
+        if s.end is None and kind != "ws":  # a WebSocket is a session (primitives.py), never a long-request job
             self.svcs[aid].open[s.id] = s
         if kind == "message":
             topic = topic_of(s.name, a)
@@ -294,19 +297,24 @@ class Services:
         self.child_start(s, out)
 
     def end_entry(self, s: "Span", out: list) -> None:
+        if s.entry == "ws":
+            return
         a, ts = s.attrs, s.end or s.start
         code = http_code(a)
-        error = s.status == "error" or (code is not None and code >= 500)
+        rejected = bool(a.get("agentglow.rejected"))  # agentglow.rejected(): backpressure, not an error (primitives.py)
+        error = not rejected and (s.status == "error" or (code is not None and code >= 500))
         sv = self.svcs.get(s.svc or "")
         if sv is not None:
             sv.open.pop(s.id, None)
-        if s.alias and s.alias.startswith("job:"):
+        if s.alias and s.alias.startswith(LONG_PREFIX):
             self._end_job(s.alias, sv, "failed" if error else "done", ts, out)
             s.alias = s.svc
         ev = {"type": "request", "run_id": s.run, "id": s.svc, "service": self.svcs[s.svc].name if s.svc in self.svcs else "",
               "name": request_name(s.entry, s.name, a), "kind": s.entry}
         if code is not None:
             ev["status"] = code
+        if rejected:
+            ev["rejected"] = True
         ev.update(error=error, ms=max(0, ts - s.start), ts=ts)
         out += self.offer(ev)
 
@@ -372,7 +380,7 @@ class Services:
         """A request open for JOB_MS: a job subagent of its service, owning the calls inside it from now on."""
         from .mapper import Agent
 
-        jid = f"job:{s.id}"
+        jid = f"{LONG_PREFIX}{s.id}"
         ev = {"type": "spawn", "run_id": sv.run, "id": jid, "agent": request_name(s.entry or "", s.name, s.attrs) or "job",
               "parent_id": sv.id, "subagent": True, "job": True, "since": s.start, "ts": now}
         self.m.agents[jid] = Agent(ev["agent"], sv.run)
@@ -445,7 +453,9 @@ class Services:
         w = sv.win
         w.n += 1
         w.errors += ev["error"]
-        if "status" in ev:
+        if ev.get("rejected"):
+            w.codes["rejected"] = w.codes.get("rejected", 0) + 1
+        elif "status" in ev:
             c = f"{ev['status'] // 100}xx"
             w.codes[c] = w.codes.get(c, 0) + 1
         w.ms.append(ev["ms"])
@@ -474,9 +484,9 @@ class Services:
             for s in list(sv.open.values()):
                 if now - s.start > JOB_STALE_MS:  # its end never came (process gone): forget it
                     del sv.open[s.id]
-                    if s.alias and s.alias.startswith("job:"):
+                    if s.alias and s.alias.startswith(LONG_PREFIX):
                         self._end_job(s.alias, sv, "done", now, out)
-                elif now - s.start >= JOB_MS and s.alias == aid and len(sv.jobs) < MAX_JOBS:
+                elif now - s.start >= JOB_MS and s.alias == aid and not s.covered and len(sv.jobs) < MAX_JOBS:
                     self._promote(sv, s, now, out)
             w = sv.win
             inflight = sum(1 for s in sv.open.values() if now - s.start >= INFLIGHT_MS)
@@ -539,6 +549,8 @@ class Services:
         kind = str(e.get("event") or "request").lower()
         aid = self.ensure(name, scope, now, out, e.get("instance"))
         rid = self.run_id(scope)
+        if kind in self.m.prims.FLAT:  # generic primitives (primitives.py)
+            return out + self.m.prims.flat(e, kind, aid, rid, scope, now)
         ms = max(0, _int(e.get("duration_ms")) or 0)
         title = decision_text(e.get("name") or kind, 60)
         if kind == "message":

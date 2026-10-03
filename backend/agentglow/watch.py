@@ -32,7 +32,8 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
           privacy: str | None = None, ignore: list | tuple | None = None, ignore_defaults: bool | None = None,
           allow: list | tuple = (),
           allow_message_keys: list | tuple = (), error_messages: bool = False, scrub: Callable[[dict], dict] | None = None,
-          pii_patterns: list | None = None, propagate: bool | None = None) -> TracerProvider:
+          pii_patterns: list | None = None, propagate: bool | None = None,
+          backlog: bool | float = False) -> TracerProvider:
     """Stream spans to agentglow. `api_key` (or env AGENTGLOW_API_KEY) is sent as `x-api-key` (server
     `--ingest-key`). Reuses the global SDK TracerProvider (keeps Langfuse/OTLP exporters), else
     creates and installs one. Instruments LangChain/LangGraph/deepagents, the OpenAI Agents SDK (OpenInference), Hatchet
@@ -58,7 +59,8 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
     Redis polls like XREADGROUP; `ignore_defaults=False` drops them).
     `propagate` (default on): thread pools (`run_in_executor`, `ThreadPoolExecutor.submit`) carry the OTel context,
     so work handed to threads stays under the request that started it. Each process reports `service.instance.id`
-    (hostname-pid): replicas of one service collapse into one node with an instance count."""
+    (hostname-pid): replicas of one service collapse into one node with an instance count.
+    `backlog=True` (or seconds): sample the broker's Redis Streams backlog (primitives.py)."""
     url = _default_url(url)
     backend = app is not None or broker is not None or mcp is not None
     name = service_name or os.environ.get("OTEL_SERVICE_NAME") or _default_service(app, broker, mcp)
@@ -96,7 +98,18 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
             _instrument(provider)
         if backend:
             _instrument_backend(provider, apps, broker, mcp)
+        _watch_primitives(apps, broker, backlog)
         return provider
+
+
+def _watch_primitives(apps: list, broker: Any, backlog: bool | float) -> None:
+    """Generic primitives (primitives.py): WebSocket routes = sessions; opt-in Redis Streams backlog sampler."""
+    from . import primitives
+
+    for app in apps:
+        _try("WebSocket sessions", lambda app=app: primitives.watch_websockets(app))
+    if backlog and broker is not None:
+        _try("backlog sampler", lambda: primitives.sample_backlog(broker, every_s=3.0 if backlog is True else float(backlog)))
 
 
 def _default_service(app: Any, broker: Any, mcp: Any) -> str:
