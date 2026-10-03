@@ -103,8 +103,19 @@ export function primOf(i: Instance): PrimState {
   return i.prim;
 }
 
+/** declutter: at most EDGES_PER_KIND live edges of one kind, and one new edge per (kind, source) per EDGE_GAP_MS
+ *  (a busy webhook completing callbacks every 300 ms shows a steady few edges, not a fan of dozens) */
+const EDGES_PER_KIND = 3;
+const EDGE_GAP_MS = 1500;
+const edgeAt = new Map<string, number>();
 let edgeSeq = 0;
 function pushEdge(w: PrimWorld, e: Omit<PrimEdge, "id">) {
+  const key = `${e.kind}|${e.from}`;
+  if (e.start - (edgeAt.get(key) ?? -1e9) < EDGE_GAP_MS) return;
+  edgeAt.set(key, e.start);
+  if (edgeAt.size > 512) edgeAt.delete(edgeAt.keys().next().value!);
+  const same = w.primEdges.filter((x) => x.kind === e.kind && e.start - x.start < EDGE_LIFE_MS);
+  if (same.length >= EDGES_PER_KIND) w.primEdges.splice(w.primEdges.indexOf(same[0]), 1);
   w.primEdges.push({ ...e, id: ++edgeSeq });
   if (w.primEdges.length > EDGES_MAX) w.primEdges.shift();
 }

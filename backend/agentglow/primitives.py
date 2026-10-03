@@ -654,9 +654,9 @@ def sample_backlog(src: Any, streams: list | None = None, every_s: float = 3.0) 
 
 
 # ============================================================================================ server side
-JOB_MAX_NODES = int(os.environ.get("AGENTGLOW_JOB_MAX_NODES", "24"))  # live job nodes (more are tracked, not drawn)
-JOB_FAILED_MS = 60_000  # a failed job with no retry for this long exits
-JOB_IDLE_MS = 600_000  # a job with no news for this long exits (done)
+JOB_MAX_NODES = int(os.environ.get("AGENTGLOW_JOB_MAX_NODES", "12"))  # live job nodes (more are tracked, not drawn)
+JOB_FAILED_MS = 15_000  # a failed job with no retry for this long exits (failed)
+JOB_IDLE_MS = 300_000  # a job with no news for this long exits (done)
 LINK_TTL_MS = 3_600_000  # an open link waits this long for its completion
 RATE_MS = {"metric": 500, "capacity": 250, "progress": 200, "backlog": 500, "gauge": 1000}
 CACHE_PULSE_MS = 250
