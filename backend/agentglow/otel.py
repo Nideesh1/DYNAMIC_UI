@@ -36,7 +36,7 @@ def _attr(v: Any) -> Any:
     return _attr(str(v))
 
 
-def span_to_dict(span: ReadableSpan, service: str | None = None) -> dict:
+def span_to_dict(span: ReadableSpan, service: str | None = None, instance: str | None = None) -> dict:
     """Normalized span JSON (see docs/SPEC.md)."""
     ctx = span.get_span_context()
     status = "unset"
@@ -56,9 +56,13 @@ def span_to_dict(span: ReadableSpan, service: str | None = None) -> dict:
     kind = getattr(getattr(span, "kind", None), "name", None)
     if kind:
         out["kind"] = kind.lower()
-    service = service or getattr(getattr(span, "resource", None), "attributes", {}).get("service.name")
+    res = getattr(getattr(span, "resource", None), "attributes", None) or {}
+    service = service or res.get("service.name")
     if service:
         out["service"] = str(service)
+    instance = res.get("service.instance.id") or instance  # replicas of one service (docs/SPEC.md "Backend services")
+    if instance:
+        out["instance"] = str(instance)
     links = [{"trace_id": _hex(lk.context.trace_id, 32), "span_id": _hex(lk.context.span_id, 16)}
              for lk in (getattr(span, "links", None) or ()) if lk.context and lk.context.span_id]
     if links:
@@ -93,6 +97,8 @@ class LiveSpanProcessor(SpanProcessor):
         self.url = url.rstrip("/")
         self.api_key = api_key or os.environ.get("AGENTGLOW_API_KEY") or None
         self.service: str | None = None  # service name overriding the resource's (watch(app=..., service_name=...))
+        self.instance: str | None = None  # service.instance.id when the resource has none (watch() backend mode)
+        self.policy = None  # watch() backend mode: (kind, span, dict) -> dict | None (privacy, ignore, routes)
         self.endpoint = self.url + "/v1/live"
         self.interval = interval
         self.timeout = timeout
@@ -123,7 +129,12 @@ class LiveSpanProcessor(SpanProcessor):
     # ---- internals
     def _put(self, kind: str, span) -> None:
         try:
-            self._q.put_nowait({"kind": kind, "span": span_to_dict(span, self.service)})
+            d = span_to_dict(span, self.service, self.instance)
+            if self.policy is not None:
+                d = self.policy(kind, span, d)
+                if d is None:
+                    return  # ignored (noise filter) or folded into its parent
+            self._q.put_nowait({"kind": kind, "span": d})
         except Exception:
             pass  # queue full or odd span: drop
 
