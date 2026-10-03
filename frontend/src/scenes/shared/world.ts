@@ -122,6 +122,9 @@ export const SVC_IDLE_MS = 10000;
 export const isSvc = (i: Instance) => !i.parent && i.id.startsWith("svc:");
 /** a backend service with no requests / messages in the last SVC_IDLE_MS (or none since it appeared) */
 export const svcIdle = (i: Instance, now = performance.now()) => isSvc(i) && now - (i.svcAt ?? i.bornAt) > SVC_IDLE_MS;
+/** performance.now() at which an event happened: replayed (old) events are aged by their epoch `ts`, so stale
+ *  stats and traffic on a page refresh read as old instead of "just now" */
+const evAt = (ev: { ts?: number }, now: number) => (ev.ts ? now - Math.max(0, Math.min(Date.now() - ev.ts, 3_600_000)) : now);
 /** record traffic on a service agent (no-op for other agents) */
 const svcTraffic = (i: Instance | undefined, now: number) => {
   if (i && isSvc(i)) i.svcAt = now;
@@ -924,8 +927,8 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "message":
-      svcTraffic(world.instances.get(ev.from_id), now);
-      if (ev.to_id) svcTraffic(world.instances.get(ev.to_id), now);
+      svcTraffic(world.instances.get(ev.from_id), evAt(ev, now));
+      if (ev.to_id) svcTraffic(world.instances.get(ev.to_id), evAt(ev, now));
       if (ev.from_id !== ev.to_id && ev.from_id.startsWith("svc:") && ev.to_id?.startsWith("svc:")) {
         const key = `${ev.from_id}|${ev.to_id}|${ev.text}`;
         const t = world.topics.get(key);
@@ -1049,10 +1052,10 @@ export function apply(ev: WorldEvent) {
       for (const [p, c] of Object.entries(ev.providers)) if (c > topN) (top = p), (topN = c);
       const h = i.hv;
       if (!h || now - h.at > HV_QUIET_MS + HV_FADE_MS) {
-        i.hv = { at: now, bump: h?.bump ?? 0, bumpDeny: h?.bumpDeny ?? false, rate, deny, p50: ev.p50_ms, p95: ev.p95_ms, seg: seg.map((x) => x / tot), provider: top || "llm", n: ev.n, windows: h ? h.windows : 0 };
+        i.hv = { at: evAt(ev, now), bump: h?.bump ?? 0, bumpDeny: h?.bumpDeny ?? false, rate, deny, p50: ev.p50_ms, p95: ev.p95_ms, seg: seg.map((x) => x / tot), provider: top || "llm", n: ev.n, windows: h ? h.windows : 0 };
       } else {
         const k = HV_ALPHA;
-        h.at = now;
+        h.at = evAt(ev, now);
         h.rate += (rate - h.rate) * k;
         h.deny += (deny - h.deny) * k;
         h.p50 += (ev.p50_ms - h.p50) * k;
@@ -1069,7 +1072,7 @@ export function apply(ev: WorldEvent) {
       const i = world.instances.get(ev.id);
       if (ev.rejected) noteRejected(world, i, ev.status ? `${ev.status}` : "busy", now);
       if (!i) break;
-      svcTraffic(i, now);
+      svcTraffic(i, evAt(ev, now));
       i.pulse = Math.max(i.pulse * Math.exp(-((now - i.pulseAt) / 1000) * 2.2), ev.error ? 1.2 : 0.7);
       i.pulseAt = now;
       if (ev.error && !ev.rejected) {
@@ -1085,13 +1088,13 @@ export function apply(ev: WorldEvent) {
       world.stats.errors += ev.errors;
       const i = world.instances.get(ev.id);
       if (!i) break;
-      if (ev.n > 0 || ev.inflight) svcTraffic(i, now);
+      if (ev.n > 0 || ev.inflight) svcTraffic(i, evAt(ev, now));
       if (ev.inflight !== undefined && i.hv) i.hv.inflight = ev.inflight;
       if (ev.n <= 0) {
         // only long requests in flight: keep the halo (and its `N in flight` label) up
         if (!ev.inflight) break;
         if (i.hv) i.hv.at = now;
-        else i.hv = { at: now, bump: 0, bumpDeny: false, rate: 0, deny: 0, p50: 0, p95: 0, seg: SEG_SCRATCH.map((_, k) => (k === 8 ? 1 : 0)), provider: "msg", n: 0, windows: 0, unit: "msg", inflight: ev.inflight };
+        else i.hv = { at: evAt(ev, now), bump: 0, bumpDeny: false, rate: 0, deny: 0, p50: 0, p95: 0, seg: SEG_SCRATCH.map((_, k) => (k === 8 ? 1 : 0)), provider: "msg", n: 0, windows: 0, unit: "msg", inflight: ev.inflight };
         break;
       }
       const c = ev.codes;
@@ -1109,10 +1112,10 @@ export function apply(ev: WorldEvent) {
       const unit = http ? "req" : "msg";
       const h = i.hv;
       if (!h || now - h.at > HV_QUIET_MS + HV_FADE_MS || !h.unit) {
-        i.hv = { at: now, bump: h?.bump ?? 0, bumpDeny: h?.bumpDeny ?? false, rate, deny, p50: ev.p50_ms, p95: ev.p95_ms, seg: seg.map((x) => x / tot), provider: unit, n: ev.n, windows: h ? h.windows : 0, unit, inflight: ev.inflight ?? h?.inflight };
+        i.hv = { at: evAt(ev, now), bump: h?.bump ?? 0, bumpDeny: h?.bumpDeny ?? false, rate, deny, p50: ev.p50_ms, p95: ev.p95_ms, seg: seg.map((x) => x / tot), provider: unit, n: ev.n, windows: h ? h.windows : 0, unit, inflight: ev.inflight ?? h?.inflight };
       } else {
         const k = HV_ALPHA;
-        h.at = now;
+        h.at = evAt(ev, now);
         h.rate += (rate - h.rate) * k;
         h.deny += (deny - h.deny) * k;
         h.p50 += (ev.p50_ms - h.p50) * k;
