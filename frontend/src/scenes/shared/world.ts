@@ -117,7 +117,7 @@ export function haloMix(h: HvStats | null, now = performance.now()): number {
   return Math.max(0, 1 - (t - HV_QUIET_MS) / HV_FADE_MS) * inn;
 }
 /** a backend service with no traffic for this long (ms) reads as idle: dimmed, label `feed · idle` */
-export const SVC_IDLE_MS = 30000;
+export const SVC_IDLE_MS = 10000;
 /** a top-level backend service agent (`svc:` id) */
 export const isSvc = (i: Instance) => !i.parent && i.id.startsWith("svc:");
 /** a backend service with no requests / messages in the last SVC_IDLE_MS (or none since it appeared) */

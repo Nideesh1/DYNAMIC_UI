@@ -6,7 +6,7 @@
  *    outcome (allow green, deny red, check yes teal / no amber, route results in 4 accent colours, other grey), with a
  *    slow spark running round it. Smoothed in world.ts (EMA), fades when the agent goes quiet (haloMix).
  *  - <HaloLabel>: `jev 42/s · 3% deny` above the agent (a backend service from `service_stats`: `feed · 42 req/s`,
- *    `· 2% errors` only with errors; `feed · idle` after 30 s without traffic, world.svcIdle): rate + share only, re-texted at most ~4x/s and only when it changes. Latency
+ *    `· 2% errors` only with errors; `feed · idle` after 10 s without traffic (the rate reads 0 within 3 s), world.svcIdle): rate + share only, re-texted at most ~4x/s and only when it changes. Latency
  *    (p50 / p95, in flight) is in the Selected panel and in the label's hover tooltip (`haloHover`, Hud's HaloTip).
  *  - <OrderChip>: a small ticket popping out of the agent for ORDER_LIFE_MS: green BUY/YES, red SELL/NO,
  *    `YES 3 @ 42c`, dashed outline + `paper` when dry_run, grey with a strike-through when rejected / cancelled.
@@ -194,6 +194,8 @@ const DIM = "#9fc4bf";
 const BADGE = "#c4b5fd";
 const RED = "#fb7185";
 const HL = { size: 0.3, px: [11.5, 14] as [number, number] };
+/** stats older than this (ms) mean no traffic: the label's rate reads 0 */
+const STALE_RATE_MS = 3000;
 const RETEXT_MS = 250;
 
 /** Mounts the halo label on the agent's first decision_stats. */
@@ -247,7 +249,9 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
       }
     } else if (h && now - st.at > RETEXT_MS) {
       st.at = now;
-      const r = h.rate >= 10 ? `${Math.round(h.rate)}` : `${Math.round(h.rate * 10) / 10}`;
+      // the rate is the last stats window's: once stats stop arriving it reads 0 right away (not the stale value)
+      const rate = now - h.at > STALE_RATE_MS ? 0 : h.rate;
+      const r = rate >= 10 ? `${Math.round(rate)}` : `${Math.round(rate * 10) / 10}`;
       const d = h.deny * 100;
       const dn = d > 0 && d < 1 ? "<1" : `${Math.round(d)}`;
       const reps = h.unit && (h.instances ?? 1) > 1 ? `×${h.instances} · ` : "";
