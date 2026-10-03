@@ -1,8 +1,11 @@
 /**
- * Agents are charged particles in the chamber's magnetic field (scene-kit Agent slot). Each agent is a bright head
- * that circles its kit home on a drifting cyclotron orbit, laying a thin track of bubbles behind it (the shared
- * bubble pool; bubbles fade on the GPU in ~4s). The kit decides WHERE the home is and HOW BIG the agent is; the
- * slot writes the head into `agent.live`, so every beam and tether follows the particle.
+ * Agents are charged particles in the chamber's magnetic field (scene-kit Agent slot). The field runs along stage z,
+ * so each agent is a bright head on a HELIX: it circles its home (cyclotron orbit, radius = curvature) while it
+ * drifts along the field axis, bouncing slowly between two mirror points, and lays a thin track of bubbles behind it
+ * (the shared bubble pool; bubbles fade on the GPU in ~6s): from the front the track is the classic curl, from the
+ * side a coil. The kit decides WHERE the home is (xy) and HOW BIG the agent is; fx.agentDepth() gives the home its
+ * depth (runs at different depths, subagents round them). The slot writes the depth into `agent.pos.z` and the head
+ * into `agent.live`, so every beam, glyph and tether follows the particle in 3D.
  *   thinking   -> tight, bright, fast curls
  *   waiting    -> a small slow orbit, dimmer (amber dashed ring + amber track while an MCP call is pending)
  *   LLM call   -> an energy kick: the orbit swells and spirals back in, a bubble burst sized by tokens and a
@@ -33,6 +36,7 @@ import {
   TRACK_C,
   Trail,
   WHITE,
+  agentDepth,
   bezier,
   bubbles,
   burst,
@@ -107,13 +111,16 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
       hx: agent.pos.x,
       hy: agent.pos.y,
       move: 0,
+      // depth: mirror-bounce phase along the field and its amplitude (the home depth is <AgentDepth/>'s)
+      ps: seed * 23,
+      lz: 0.6,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
   useEffect(() => () => void kinks.delete(inst.id), [inst.id]);
 
-  useFrame((_, delta) => {
+  useFrame(({ camera }, delta) => {
     const now = performance.now();
     const t = nowS();
     const dt = Math.min(0.05, delta);
@@ -148,9 +155,9 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
           if (pl && inst.parent) {
             const pk = kit.agents.get(inst.parent);
             _o.copy(agent.pos).sub(s.from);
-            const len = Math.hypot(_o.x, _o.y) || 1;
+            const len = _o.length() || 1;
             const ps = pk ? pk.scale : sc;
-            kick(inst.parent, (-_o.x / len) * 0.32 * ps, (-_o.y / len) * 0.32 * ps, now);
+            kick(inst.parent, (-_o.x / len) * 0.32 * ps, (-_o.y / len) * 0.32 * ps, (-_o.z / len) * 0.32 * ps, now);
           }
         }
       }
@@ -166,7 +173,7 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
         const hp = agent.live;
         burst(hp, Math.round(6 + pk * 7), (0.14 + pk * 0.12) * sc, 0.12 * sc, FILM, 1.0, 2.8, t);
         bubbles().emit(hp.x, hp.y, hp.z, (0.7 + pk * 0.45) * sc, FILM, 0.9, 0.45, t, 1);
-        if (!reduced) deltaRay(hp, motion + s.q * 0.9, (0.14 + pk * 0.07) * sc, 1.7, 22, 0.07 * sc, FILM, 0.85, 3.4, t, -s.q);
+        if (!reduced) deltaRay(hp, motion + s.q * 0.9, (0.14 + pk * 0.07) * sc, 1.7, 22, 0.07 * sc, FILM, 0.85, 3.4, t, -s.q, -s.q * (0.25 + pk * 0.1) * sc);
       }
     }
     // ---- tool call: small kink + spark
@@ -174,7 +181,7 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
       s.tools = inst.toolCalls;
       if (!done) {
         const side = Math.random() < 0.5 ? 1 : -1;
-        kick(inst.id, Math.cos(motion + side * 1.4) * 0.2 * sc, Math.sin(motion + side * 1.4) * 0.2 * sc, now);
+        kick(inst.id, Math.cos(motion + side * 1.4) * 0.2 * sc, Math.sin(motion + side * 1.4) * 0.2 * sc, side * 0.16 * sc, now);
         const hp = agent.live;
         bubbles().emit(hp.x, hp.y, hp.z, 0.55 * sc, WHITE, 1.1, 0.3, t + 0.05, 1);
       }
@@ -187,7 +194,7 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
       s.decAt = d.at;
       if (d.hidden || !isDeny(d) || done) continue;
       const side = Math.random() < 0.5 ? 1 : -1;
-      kick(inst.id, Math.cos(motion + side * 1.9) * 0.42 * sc, Math.sin(motion + side * 1.9) * 0.42 * sc, now);
+      kick(inst.id, Math.cos(motion + side * 1.9) * 0.42 * sc, Math.sin(motion + side * 1.9) * 0.42 * sc, -side * 0.36 * sc, now);
       s.red = 1;
       const hp = agent.live;
       const pool = bubbles();
@@ -199,27 +206,34 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
     // ---- motion: drifting cyclotron orbit around the kit home
     s.boost *= Math.exp(-dt / 2.4);
     s.red *= Math.exp(-dt / 0.6);
-    let rcT: number, rgT: number, wT: number;
-    if (done) (rcT = 0), (rgT = 0), (wT = TAU * 0.95);
-    else if (thinking && !pending) (rcT = 0.34), (rgT = 0.28), (wT = TAU * 0.6);
-    else (rcT = 0.17), (rgT = 0.08), (wT = TAU * 0.24);
+    // rc = cyclotron radius, rg = guiding-centre drift, w = angular speed, lzT = mirror-bounce half length along
+    // the field and psW its rate (helix pitch ~ lz * psW / w): thinking = open fast helix, waiting = a tight slow
+    // coil that barely drifts, done = radius AND drift die away (a conical spiral in to a stop)
+    let rcT: number, rgT: number, wT: number, lzT: number, psW: number;
+    if (done) (rcT = 0), (rgT = 0), (wT = TAU * 0.95), (lzT = 0), (psW = 0.5);
+    else if (thinking && !pending) (rcT = 0.34), (rgT = 0.28), (wT = TAU * 0.6), (lzT = 1.5), (psW = 0.5);
+    else (rcT = 0.15), (rgT = 0.06), (wT = TAU * 0.22), (lzT = 0.32), (psW = 0.2);
     const ease = Math.min(1, dt * (done ? 1.3 : 2.6));
     s.rc += (rcT + (done ? 0 : s.boost * 0.4) - s.rc) * ease;
     s.rg += (rgT - s.rg) * ease;
     s.w += (wT - s.w) * Math.min(1, dt * 2);
+    s.lz += (lzT + (done ? 0 : s.boost * 0.5) - s.lz) * ease;
     s.th += s.q * s.w * dt * mo;
     s.ph += s.q * 0.42 * dt * mo;
+    s.ps += psW * dt * mo;
     const p = agent.live;
     p.copy(agent.pos);
     // orbit + bubbles use a floored scale so curls stay legible when many agents shrink
     const vs = Math.max(sc, 0.72);
     p.x += (Math.cos(s.ph) * s.rg + Math.cos(s.th) * s.rc) * vs;
     p.y += (Math.sin(s.ph) * s.rg * 0.7 + Math.sin(s.th) * s.rc) * vs;
+    p.z += Math.sin(s.ps) * s.lz * vs;
     const k = kinks.get(inst.id);
     if (k) {
       const f = kinkShape(now - k.at);
       p.x += k.x * f;
       p.y += k.y * f;
+      p.z += k.z * f;
     }
     // decay flight: from the vertex to the orbit
     let flying = false;
@@ -271,7 +285,9 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
       m.halo.color.copy(role).lerp(s.col, 0.4).multiplyScalar(0.62 * lvl);
     }
     if (home.current) {
+      // annotation marks (selection / MCP-wait rings) are drawn on the "photo": they face the camera
       home.current.position.copy(agent.pos);
+      home.current.quaternion.copy(camera.quaternion);
       home.current.scale.setScalar(Math.max(1e-4, vs));
     }
     const ringR = 0.34 + 0.28 + 0.3;
@@ -300,7 +316,7 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
   return (
     <>
       <group ref={home} scale={1e-4}>
-        <mesh geometry={HIT_GEO} material={hitMat} scale={0.95} onClick={select} onPointerOver={() => (document.body.style.cursor = "pointer")} onPointerOut={() => (document.body.style.cursor = "")} />
+        <mesh geometry={HIT_GEO} material={hitMat} scale={0.85} onClick={select} onPointerOver={() => (document.body.style.cursor = "pointer")} onPointerOut={() => (document.body.style.cursor = "")} />
         <lineSegments ref={sel} geometry={DASH_RING} material={m.sel} visible={false} />
         <lineSegments ref={wait} geometry={DASH_RING} material={m.wait} visible={false} />
       </group>
@@ -325,6 +341,29 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
   );
 }
 
+// ------------------------------------------------------------------ home depth (before every kit overlay reads it)
+const depthZ = new Map<string, number>();
+/**
+ * Gives every agent's home its depth along the field: runs after the kit ticker (-2) and before the slots and the
+ * kit's own overlays (halos, glyphs, chips: priority 0), so all of them see `pos.z` / `live.z` this frame, even
+ * the overlays that subscribed before a newly mounted Particle. Eased, so a run changing depth glides its agents.
+ */
+export function AgentDepth() {
+  useFrame((_, delta) => {
+    const k = Math.min(1, Math.min(0.05, delta) * 1.6);
+    for (const a of kit.agents.values()) {
+      const zt = agentDepth(a);
+      const z0 = depthZ.get(a.id);
+      const z = z0 === undefined ? zt : z0 + (zt - z0) * k;
+      depthZ.set(a.id, z);
+      a.pos.z = z;
+      a.live.z = z;
+    }
+    if (depthZ.size > kit.agents.size + 64) for (const id of depthZ.keys()) if (!kit.agents.has(id)) depthZ.delete(id);
+  }, -1);
+  return null;
+}
+
 // ------------------------------------------------------------------ lineage (dashed neutral lines) + messages
 const MAX_LINKS = 160;
 const MAX_MSG = 32;
@@ -345,10 +384,8 @@ export function Lineage() {
       const parent = inst.parent ? kit.agents.get(inst.parent) : undefined;
       const from = parent ? parent.pos : !inst.parent ? vertices.get(inst.run) : undefined;
       if (!from) continue;
-      // trim both ends clear of the curls (the vertex end only a little)
-      const dx = ag.pos.x - from.x;
-      const dy = ag.pos.y - from.y;
-      const len = Math.hypot(dx, dy);
+      // trim both ends clear of the curls (the vertex end only a little); both ends carry their depth
+      const len = ag.pos.distanceTo(from);
       if (len < 0.5) continue;
       const ta = Math.min(0.4, ((parent ? 0.85 * parent.scale : 0.25) + 0.05) / len);
       const tb = Math.max(ta + 0.05, 1 - (0.85 * ag.scale + 0.05) / len);

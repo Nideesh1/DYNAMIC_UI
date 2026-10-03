@@ -2,7 +2,8 @@
  * Runs (scene-kit RunMarker slot): every run is an EVENT. A beam particle enters from the left of the chamber and
  * hits a primary vertex just behind the run's top-level agents; when the run starts the vertex flashes and throws
  * a star of short curling prongs, and the top-level agents fly out of it. Several runs = several interaction
- * vertices. The run label (topic + steps) sits above the event. A final answer is a stiff high-energy track that
+ * vertices, each at its own DEPTH in the chamber (fx.runDepthTarget: runs spread along the field axis, so orbiting
+ * shows them one behind another). The run label (topic + steps) sits above the event. A final answer is a stiff high-energy track that
  * leaves the chamber from the run, with a short caption.
  */
 import { useFrame } from "@react-three/fiber";
@@ -11,7 +12,7 @@ import * as THREE from "three";
 import { Label3D, runStepsLine, type Label3DHandle } from "../shared/Label3D";
 import { RUN_LINGER_MS, hash01, useWorld, world, type Run } from "../shared/world";
 import { agentLive, fit, kit, runLocal, type RunSlotProps } from "../shared/kit";
-import { FILM, LinePool, WHITE, bubbles, clamp01, easeOut, lineMat, nowS, reduced, spriteMat, vertices } from "./fx";
+import { FILM, LinePool, WHITE, bubbles, clamp01, easeOut, lineMat, nowS, reduced, runDepth, runDepthTarget, spriteMat, vertices } from "./fx";
 
 /** vertex mark: an open X (spokes leave a gap round the vertex) */
 const MARK_GEO = (() => {
@@ -38,6 +39,8 @@ function eventStar(p: THREE.Vector3, id: string, col: THREE.Color, scale: number
     const R = (1.2 + hash01(id, 60 + j) * 4) * scale; // radius of curvature (momentum)
     const len = (1.1 + hash01(id, 70 + j) * 1.8) * scale;
     const sgn = hash01(id, 80 + j) < 0.5 ? 1 : -1;
+    // momentum along the field: each prong is a short helix leaving the vertex toward the front or the back
+    const vz = (hash01(id, 90 + j) - 0.5) * 1.6;
     const steps = Math.max(6, Math.round(len / (0.075 * scale)));
     // circle tangent to `ang` at p, centre to the side
     const cx = p.x + Math.cos(ang + sgn * Math.PI * 0.5) * R;
@@ -46,7 +49,7 @@ function eventStar(p: THREE.Vector3, id: string, col: THREE.Color, scale: number
     for (let i = 1; i <= steps; i++) {
       const d = (i / steps) * len;
       const a = a0 + (sgn * d) / R;
-      pool.emit(cx + Math.cos(a) * R, cy + Math.sin(a) * R, p.z, 0.085 * scale * (0.7 + Math.random() * 0.6), col, 0.85, 5, t + d / (7 * scale), 0);
+      pool.emit(cx + Math.cos(a) * R, cy + Math.sin(a) * R, p.z + d * vz, 0.085 * scale * (0.7 + Math.random() * 0.6), col, 0.85, 5, t + d / (7 * scale), 0);
     }
   }
 }
@@ -59,13 +62,17 @@ export function EventVertex({ run: kr }: RunSlotProps) {
   const beam = useMemo(() => new LinePool(1, 64), []);
   const vtx = useRef<THREE.Sprite>(null);
   const label = useRef<THREE.Group>(null);
-  const s = useMemo(() => ({ p: new THREE.Vector3(), fired: false, init: false }), []);
+  const s = useMemo(() => ({ p: new THREE.Vector3(), fired: false, init: false, dep: { z: 0, tz: 0 } }), []);
   useEffect(() => {
     vertices.set(kr.id, s.p);
-    return () => void (vertices.get(kr.id) === s.p && vertices.delete(kr.id));
+    runDepth.set(kr.id, s.dep);
+    return () => {
+      if (vertices.get(kr.id) === s.p) vertices.delete(kr.id);
+      if (runDepth.get(kr.id) === s.dep) runDepth.delete(kr.id);
+    };
   }, [kr.id, s]);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock, camera }, delta) => {
     const now = performance.now();
     const run = kr.run ?? world.runs.get(kr.id);
     // vertex: centred over the run's top-level agents, a little behind them (against the fan direction)
@@ -81,6 +88,10 @@ export function EventVertex({ run: kr }: RunSlotProps) {
     const u = n ? su / n : kr.cu;
     const v = (n ? vmin : kr.cv - kr.hv) - 1.55 * fit.spread;
     runLocal(kr, u, v, s.p);
+    // depth along the field (eased: runs ending re-space the others)
+    s.dep.tz = runDepthTarget(kr.index, kr.count);
+    s.dep.z = s.init ? s.dep.z + (s.dep.tz - s.dep.z) * Math.min(1, Math.min(0.05, delta) * 1.2) : s.dep.tz;
+    s.p.z = s.dep.z;
     s.init = true;
 
     const age = run ? (now - run.startedAt) / 1000 : 99;
@@ -98,6 +109,7 @@ export function EventVertex({ run: kr }: RunSlotProps) {
     }
     if (mark.current) {
       mark.current.position.copy(s.p);
+      mark.current.quaternion.copy(camera.quaternion);
       mark.current.scale.setScalar(Math.max(0.7, fit.scale));
     }
     mmat.color.copy(col).lerp(WHITE, 0.3).multiplyScalar((done ? 0.3 : 0.75) * grow * fade);
@@ -114,7 +126,7 @@ export function EventVertex({ run: kr }: RunSlotProps) {
     // label above the event (screen-up), clear of the vertex and the run's agents
     const h = Math.abs(kr.side.y) * kr.hu + Math.abs(kr.axis.y) * kr.hv;
     const top = Math.max(kr.origin.y + h, s.p.y + 0.4);
-    label.current?.position.set(kr.origin.x, top + 0.75, 0);
+    label.current?.position.set(kr.origin.x, top + 0.75, s.p.z);
   });
   return (
     <>
@@ -173,6 +185,8 @@ export function Finals() {
       const sx = Math.abs(f.x) > 0.5 ? (f.x < 0 ? -1 : 1) : hash01(r.id, 23) < 0.5 ? 1 : -1;
       const ang = Math.atan2(-0.35 - hash01(r.id, 22) * 0.4, sx);
       const R = 40 * (hash01(r.id, 24) < 0.5 ? 1 : -1);
+      // a little momentum along the field too: from the side it leaves on a shallow slant
+      const vz = (hash01(r.id, 25) - 0.5) * 0.35;
       const len = kit.core.r + 9;
       const col = new THREE.Color(r.color).lerp(WHITE, 0.6);
       const pool = bubbles();
@@ -187,8 +201,9 @@ export function Finals() {
         const x = cx + Math.cos(a) * R;
         const y = cy + Math.sin(a) * R;
         const bt = t + d / 11;
-        pool.emit(x, y, f.z, 0.09 * (0.75 + Math.random() * 0.5), col, 0.7, 5.5, bt, 0);
-        if (i % 3 === 0) pool.emit(x, y, f.z, 0.6, WHITE, 0.9, 0.16, bt, 1);
+        const z = f.z + d * vz;
+        pool.emit(x, y, z, 0.09 * (0.75 + Math.random() * 0.5), col, 0.7, 5.5, bt, 0);
+        if (i % 3 === 0) pool.emit(x, y, z, 0.6, WHITE, 0.9, 0.16, bt, 1);
       }
       pool.emit(f.x, f.y, f.z, 1.6, WHITE, 1.3, 0.6, t, 1);
       shots.current.push({ run: r.id, at: now, from: f, text: r.final });

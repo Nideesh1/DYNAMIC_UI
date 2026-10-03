@@ -1,10 +1,13 @@
 /**
  * Bubble chamber: colors, easing, the shared BUBBLE POOL (every track in the scene is drawn by one Points ring
- * buffer whose fade runs on the GPU), a pooled dashed/flowing line buffer, curve helpers, per-agent kinks and the
- * primary vertex of each run (placement is the scene kit's).
+ * buffer whose fade runs on the GPU), a pooled dashed/flowing line buffer, curve helpers, per-agent kinks, the
+ * primary vertex of each run (placement is the scene kit's) and the chamber VOLUME: the magnetic field runs along
+ * stage z (the camera's start axis), so charged tracks are helices along z; the kit's xy layout gives every
+ * agent its home and this file gives it a depth (runs at different depths, subagents scattered round their run).
  */
 import * as THREE from "three";
-import { TYPE_COLOR, type AgentType } from "../shared/world";
+import { TYPE_COLOR, hash01, type AgentType } from "../shared/world";
+import { fit, type KitAgent } from "../shared/kit";
 
 export const reduced = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -68,7 +71,8 @@ export const DASH_RING = (() => {
   }
   return new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
 })();
-export const HIT_GEO = new THREE.CircleGeometry(1, 20);
+/** pick volume round an agent's home (a sphere: clickable from any orbit angle) */
+export const HIT_GEO = new THREE.SphereGeometry(1, 12, 8);
 
 // ------------------------------------------------------------------ curves
 export function bezier(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, t: number, out: THREE.Vector3) {
@@ -212,20 +216,24 @@ let _pool: BubblePool | null = null;
 /** the scene's single bubble pool (mounted by <Bubbles/>) */
 export const bubbles = () => (_pool ??= new BubblePool());
 
-/** a burst of bubbles scattered in a disc around p (LLM call, graph shower) */
+/** a burst of bubbles scattered in a ball around p (LLM call, graph shower) */
 export function burst(p: THREE.Vector3, n: number, radius: number, size: number, c: THREE.Color, k: number, life: number, t: number) {
   const pool = bubbles();
   for (let i = 0; i < n; i++) {
+    // uniform direction, radius ~ cbrt(u): an even little cloud, not a disc
+    const zc = Math.random() * 2 - 1;
     const a = Math.random() * Math.PI * 2;
-    const r = radius * Math.sqrt(Math.random());
-    pool.emit(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r, p.z + (Math.random() - 0.5) * 0.1, size * (0.7 + Math.random() * 0.7), c, k * (0.7 + Math.random() * 0.5), life * (0.8 + Math.random() * 0.4), t + Math.random() * 0.08, 0);
+    const rr = Math.sqrt(1 - zc * zc);
+    const r = radius * Math.cbrt(Math.random());
+    pool.emit(p.x + Math.cos(a) * rr * r, p.y + Math.sin(a) * rr * r, p.z + zc * r, size * (0.7 + Math.random() * 0.7), c, k * (0.7 + Math.random() * 0.5), life * (0.8 + Math.random() * 0.4), t + Math.random() * 0.08, 0);
   }
 }
 /**
  * A delta ray: a small low-energy electron knocked out of the track that spirals in to a stop, drawn
- * progressively (staggered births). `dir` sign = charge.
+ * progressively (staggered births). `dir` sign = charge. In the z field the spiral also drifts `dz` along the
+ * axis (a conical helix: it reads as a coil from the side).
  */
-export function deltaRay(p: THREE.Vector3, ang: number, r0: number, turns: number, n: number, size: number, c: THREE.Color, k: number, life: number, t: number, dir: number) {
+export function deltaRay(p: THREE.Vector3, ang: number, r0: number, turns: number, n: number, size: number, c: THREE.Color, k: number, life: number, t: number, dir: number, dz = 0) {
   const pool = bubbles();
   // the spiral starts AT p heading along `ang` and curls (shrinking radius) around a centre to its side
   const cx = p.x + Math.cos(ang + dir * Math.PI * 0.5) * r0;
@@ -235,7 +243,7 @@ export function deltaRay(p: THREE.Vector3, ang: number, r0: number, turns: numbe
     const u = i / (n - 1);
     const a = a0 + dir * u * turns * Math.PI * 2;
     const r = r0 * (1 - 0.82 * u);
-    pool.emit(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.z, size * (1 - 0.35 * u), c, k, life, t + u * 0.35, 0);
+    pool.emit(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.z + dz * Math.sqrt(u), size * (1 - 0.35 * u), c, k, life, t + u * 0.35, 0);
   }
 }
 
@@ -346,13 +354,14 @@ export class Trail {
 
 // ------------------------------------------------------------------ cross-slot state (keyed by id, objects reused)
 /** a kink impulse on an agent's track (tool call, deny, decay recoil): offset that snaps out and relaxes */
-export type Kink = { x: number; y: number; at: number };
+export type Kink = { x: number; y: number; z: number; at: number };
 export const kinks = new Map<string, Kink>();
-export function kick(id: string, x: number, y: number, at = performance.now()) {
+export function kick(id: string, x: number, y: number, z: number, at = performance.now()) {
   let k = kinks.get(id);
-  if (!k) kinks.set(id, (k = { x: 0, y: 0, at: -1e9 }));
+  if (!k) kinks.set(id, (k = { x: 0, y: 0, z: 0, at: -1e9 }));
   k.x = x;
   k.y = y;
+  k.z = z;
   k.at = at;
 }
 /** offset multiplier of a kink `ms` after it: snaps out in 50ms, relaxes in ~0.4s */
@@ -360,3 +369,32 @@ export const kinkShape = (ms: number) => (ms < 0 ? 0 : ms < 50 ? ms / 50 : Math.
 
 /** the primary interaction vertex of each drawn run (stage space; written by the RunMarker slot) */
 export const vertices = new Map<string, THREE.Vector3>();
+
+// ------------------------------------------------------------------ the chamber volume (depth along the field)
+/**
+ * The tank: an elliptic cylinder round the core, axis = stage z = the field. `rx`/`ry` follow the kit core
+ * (eased), `hz` is its half length. Written by <Chamber/> (mounted first), read by every slot.
+ */
+export const tank = { rx: 9, ry: 6, hz: 5 };
+/** eased depth (stage z) of each drawn run, keyed by run id (written by the RunMarker slot) */
+export const runDepth = new Map<string, { z: number; tz: number }>();
+
+/** target depth of a run: several runs spread along the field axis (oldest at the back), one run sits mid-tank */
+export function runDepthTarget(index: number, count: number) {
+  if (count < 2) return 0;
+  const span = Math.min(2 * (tank.hz - 2.6), (count - 1) * 5);
+  // interleave so neighbouring runs (neighbours in the layout too) land at clearly different depths
+  const order = index % 2 === 0 ? index / 2 : count - 1 - (index - 1) / 2;
+  return (order / (count - 1) - 0.5) * span;
+}
+
+/** home depth of an agent: its run's depth plus a stable per-agent offset (subagents scatter more) */
+export function agentDepth(a: KitAgent) {
+  const rz = runDepth.get(a.run.id)?.z ?? 0;
+  const h = hash01(a.id, 77) - 0.5;
+  // scatter scales with the drum: subagents fill a good part of its length round their run, top-level agents less
+  const amp = Math.max(a.inst.parent ? 2 : 1.2, tank.hz * (a.inst.parent ? 0.34 + 0.05 * Math.min(2, a.depth - 1) : 0.14));
+  const z = rz + h * 2 * amp * Math.max(0.85, Math.min(1.2, fit.spread));
+  const lim = Math.max(0.5, tank.hz - 1.1);
+  return z < -lim ? -lim : z > lim ? lim : z;
+}
