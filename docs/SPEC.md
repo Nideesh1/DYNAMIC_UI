@@ -85,7 +85,8 @@ buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion 
   comes only from the token. A scope/run header or `?run=` that contradicts the token is 403; it may only narrow a
   dimension the token leaves open (an admin token plus `X-AgentGlow-Scope` = view as that scope).
   `/live/health` without a token returns liveness only (`ok, version, ui, run, approve, auth`); with a token, counts for
-  that filter (`buffered`, `open_runs`, plus `scope`/`run_id`); a bad token is 401.
+  that filter (`buffered`, `open_runs` (agent runs; the long-lived backend `services` run is not counted), plus
+  `scope`/`run_id`); a bad token is 401.
 - `/live/stream` is plain `text/event-stream` over GET: works with `fetch()` + a stream reader (headers), and with
   `EventSource` in dev. CORS allows the `Authorization`, `X-AgentGlow-Scope` and `X-AgentGlow-Run` headers.
   Every buffered event carries `seq` (per server instance, increasing) and is sent with `id: <epoch>-<seq>`; a
