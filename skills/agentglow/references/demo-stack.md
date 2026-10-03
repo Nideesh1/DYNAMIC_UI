@@ -69,5 +69,5 @@ Host dev without docker for the agents: `examples/deepagents-hatchet/README.md` 
 | `react-embed` | Node | `npm install && npm run dev` (http://localhost:3210, `?sim=1`) |
 | `claude-code` | Claude Code | `npx agentglow setup`, or `claude --settings examples/claude-code/settings.json` |
 
-Python examples take `AGENT_MODEL` (e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`,
+Python examples take `AGENT_MODEL` (e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5-5`,
 `google_genai:gemini-3.8-flash`) and `AGENTGLOW_URL`.

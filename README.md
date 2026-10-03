@@ -320,7 +320,7 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
 | [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts), no code |
 
-Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
+Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5-5`, `google_genai:gemini-3.8-flash`.
 
 ## Production
 

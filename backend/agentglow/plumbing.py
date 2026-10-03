@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
+import re
 import socket
 import threading
 from fnmatch import fnmatchcase
@@ -145,8 +146,8 @@ class Policy:
         self.error_messages = self.error_messages or bool(error_messages)
         if scrub is not None:
             self.scrub = scrub
-        if pii_patterns is not None:
-            self.patterns = list(pii_patterns)
+        if pii_patterns is not None:  # [(regex or pattern string, replacement)]
+            self.patterns = [(re.compile(rx) if isinstance(rx, str) else rx, rep) for rx, rep in pii_patterns]
         for a in apps:
             if all(a is not b for b in self.apps):
                 self.apps.append(a)
