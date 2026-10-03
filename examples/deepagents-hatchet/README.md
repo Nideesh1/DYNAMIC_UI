@@ -103,17 +103,21 @@ with the slow deepagents thinking branching off only when it is worth it. HUD pi
 | Step | Runs as | What it does |
 |---|---|---|
 | `open_session` | task | session state + `DESK_MARKETS` synthetic markets with toy order books |
-| `run_markets` | task, agent **desk** | fans out one child run of `market_watch` per market (`aio_run_many`, all concurrent) and watches desk risk once a second: a simulated feed outage every `DESK_OUTAGE_EVERY_S` trips the **kill switch** |
+| `run_markets` | task, agent **desk** | fans out one child run of `market_watch` per market (`aio_run_many`, all concurrent) and watches desk risk once a second: a simulated feed outage (once per session by default, `DESK_OUTAGE_EVERY_S`) trips the **kill switch** |
 | `market_watch` | **durable** child task, one agent per market (`rain-nyc`, `temp-chi-hi`, ...) | `DESK_TICKS` ticks of `DESK_TICK_S`, plain Python: step the book, then ONE batched Jev call per tick (`quote_sane`, `should_rethink` (route, cooldown), `act\|watch\|skip` or `should_close` (route)), then the code guards, `safe_without_human` (guard, needs >= 0.8) and the paper order. Forced stop-loss in code |
-| `form_view` | child task, deepagents **analyst** + **weather** subagent | when `should_rethink` says so: reads the market's snapshot / price history (tools) and the weather model (subagent), returns a typed `FairView` (fair probability); the market trades on the latest view, its quant signal until then |
+| `form_view` | child task, deepagents **analyst** + **weather** subagent | when `should_rethink` says so: reads the market's snapshot + order book and price history (`market_data` MCP server: Exchange feed, Tick history DB), the correlated markets (FalkorDB graph read) and the weather model (subagent: NWS forecast API via MCP), saves its view to the graph (write) and returns a typed `FairView` (fair probability); the market trades on the latest view, its quant signal until then |
 | (human gate) | durable wait inside `market_watch` | below the safe threshold: `ctx.aio_wait_for` the `desk:approve` event for that market run, auto-approves after `DESK_HUMAN_TIMEOUT_S`. Only that market waits: every market is its own run |
 | `place_order` | child task | `agentglow.order(..., dry_run=True)`: status `would_place` (guard / human rejections are `rejected` orders with the reason) |
 | `close_session` | task | the session summary with paper P&L (final answer) |
 
-Code guards (provider `code`, purpose `guard`; a deny is marked important so it always shows): kill switch, daily
-loss cap, settlement lock, spread, slippage, max contracts, depth %, bucket/day cap, stop-loss, feed fresh. In
-AgentGlow the market agents get **decision halos** (rate, deny %, latency), denies and human gates pop out
-individually, analyst runs branch off as subagents, orders pop as chips, and it all stays ONE run.
+Code guards (provider `code`, shown as `rule`, purpose `guard`; a deny is marked important so it always shows):
+settlement lock, spread, slippage, max contracts, depth %, bucket/day cap, stop-loss. The desk-wide ones (kill switch,
+daily loss cap, feed fresh) are `scope="global"` decisions: in AgentGlow the desk turns red with ONE
+`HALTED · kill switch` banner (and a HUD chip) instead of a red X on every market, whose own kill-switch denies only
+flash their halos. The market agents sit on a ring round the desk with **decision halos** (rate, deny %, latency),
+denies and human gates pop out individually (one big red X at a time), analyst runs sit next to their market, the
+`market_data` MCP server with its three backends and the side graph show up while analysts use them, orders pop as
+chips, and it all stays ONE run.
 
 The tick sleep is a plain `asyncio.sleep`: a durable `ctx.aio_sleep_for` per tick would cost an engine round trip
 and an event-log entry per market per second for nothing (the tick state is in memory). Waits worth making durable
@@ -138,7 +142,7 @@ Or click a market agent waiting on "human approval" in the UI: Approve / Reject 
 | `DESK_THINK_COOLDOWN_S` | 30 | per market: no new analyst run sooner than this |
 | `DESK_MAX_ANALYSTS` | 3 | analyst runs at once per session (Hatchet concurrency + an in-process check, so they never queue) |
 | `DESK_HUMAN_TIMEOUT_S` | 8 | human gate auto-approves after this |
-| `DESK_OUTAGE_EVERY_S` | 45 | simulated feed outage (6 s) that trips the kill switch; 0 = never |
+| `DESK_OUTAGE_EVERY_S` | 0 | simulated feed outage (6 s) that trips the kill switch: 0 = once per session at a random point, N = every N s, -1 = never |
 | `JEV_MAX_RPS` | 5 | hard cap on real Jev requests per second per worker |
 
 **Jev cost guard.** Every market asks its tick's questions in one Jev request (`decide.batch`), and a token bucket
@@ -211,11 +215,12 @@ uv run python -m app.obs_mcp_server              # :8201/mcp (incident demo)
 uv run python -m app.github_mcp_server           # :8202/mcp (incident demo)
 uv run python -m app.erp_mcp_server              # :8203/mcp (vendor demo)
 uv run python -m app.email_mcp_server            # :8204/mcp (vendor demo)
+uv run python -m app.market_mcp_server           # :8205/mcp (trading desk demo)
 uv run python -m app.worker
 uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
 
-Env: `AGENTGLOW_URL` (default `http://localhost:8100`), `MCP_URL` (default `http://localhost:8200/mcp`), `OBS_MCP_URL` / `GITHUB_MCP_URL` / `ERP_MCP_URL` / `EMAIL_MCP_URL` (defaults `:8201/mcp` .. `:8204/mcp`), `DEMO_SLEEP_S`, `APPROVAL_TIMEOUT_S`,
+Env: `AGENTGLOW_URL` (default `http://localhost:8100`), `MCP_URL` (default `http://localhost:8200/mcp`), `OBS_MCP_URL` / `GITHUB_MCP_URL` / `ERP_MCP_URL` / `EMAIL_MCP_URL` / `MARKET_MCP_URL` (defaults `:8201/mcp` .. `:8205/mcp`), `DEMO_SLEEP_S`, `APPROVAL_TIMEOUT_S`,
 `AGENT_MODEL` (see below), `LANGFUSE_EXPORT=0` to skip Langfuse even when keys are set.
 
 ## LLM provider

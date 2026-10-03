@@ -28,6 +28,8 @@ GITHUB_MCP_URL = os.environ.get("GITHUB_MCP_URL", "http://localhost:8202/mcp")
 # vendor consolidation demo MCP servers + timings
 ERP_MCP_URL = os.environ.get("ERP_MCP_URL", "http://localhost:8203/mcp")
 EMAIL_MCP_URL = os.environ.get("EMAIL_MCP_URL", "http://localhost:8204/mcp")
+# trading desk demo MCP server (order book, tick history, forecast; used by the analyst only)
+MARKET_MCP_URL = os.environ.get("MARKET_MCP_URL", "http://localhost:8205/mcp")
 DEMO_SLEEP_S = int(os.environ.get("DEMO_SLEEP_S", "20"))  # durable sleep between negotiation rounds (stands in for days)
 APPROVAL_TIMEOUT_S = int(os.environ.get("APPROVAL_TIMEOUT_S", "1800"))  # auto-approve after this long (30 min)
 # LLM: any LangChain `init_chat_model` spec "<provider>:<model>" - google_genai:, openai:, anthropic:,
