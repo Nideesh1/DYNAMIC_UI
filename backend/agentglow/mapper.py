@@ -80,7 +80,7 @@ from typing import Any
 from .backend import Services, entry_kind
 from .hv import DecisionRate
 from .primitives import SIGNAL, Prims
-from .scrub import SKILL_KEY, decision_text, session_title, skill_name, step_name
+from .scrub import SKILL_KEY, decision_text, session_title, skill_name, step_name, wait_details, wait_url
 
 LLM_OPS = {"chat", "text_completion", "generate_content"}
 LG_NODES = {"model", "tools", "agent", "call_model", "__start__", "__end__"}
@@ -109,6 +109,8 @@ HATCHET_GRACE_MS = int(os.environ.get("AGENTGLOW_HATCHET_IDLE_MS", "60000"))
 HATCHET_FINAL_GRACE_MS = 3000
 # hard upper bound: a run with no span activity for this long completes even with open spans / waits
 RUN_MAX_IDLE_MS = int(os.environ.get("AGENTGLOW_RUN_MAX_IDLE_MS", str(24 * 3600 * 1000)))
+BECAUSE_MS = 30_000  # an approval wait starting this soon after its agent's guard decision links it
+DECISIONS_KEPT = 2000
 PARK_SLACK_MS = 1000  # a step ending this soon after its wait ended was (likely) evicted mid-wait
 PARK_SHOW_MS = 3000  # ...shown as waiting only if no step starts meanwhile (a satisfied wait moves on at once)
 HATCHET_WAIT_SPAN = "hatchet.durable.wait_for"
@@ -262,6 +264,7 @@ class Span:
     wait: tuple | None = None  # (reason, until ms | None, declared by the app) while this span is a wait
     covered: bool = False  # entry span holding a primitive job / session node: never also a long-request job node
     wait_step: str | None = None  # step span the wait belongs to
+    wait_extra: dict | None = None  # kind / title / details / url / because shown with the wait (declared waits)
     kind: str | None = None  # OTel span kind (server, client, producer, consumer, internal) when known
     svc: str | None = None  # service agent id: this span is (inside) a service request (backend.py)
     entry: str | None = None  # the request / handled-message span itself: http | rpc | message | event
@@ -332,6 +335,8 @@ class Mapper:
         self.step_runs: dict[str, str] = {}  # hatchet.step_run_id -> run id (Hatchet wait spans carry only that)
         self.orphans: dict[str, dict] = {}  # MCP backend span id -> {"start", "end", "parent", "ts"} until its parent shows
         self.hv = DecisionRate()  # high-volume decisions: per-agent aggregation + global cap (hv.py)
+        self.decisions_by_id: dict[str, dict] = {}  # decision span id -> summary (a wait's `because`), FIFO bounded
+        self.last_guard: dict[str, tuple] = {}  # agent id -> (ts, summary) of its latest guard / noul decision
         self.svc = Services(self)  # backend services (backend.py)
         self.prims = Prims(self)  # generic primitives (primitives.py)
 
@@ -912,10 +917,12 @@ class Mapper:
         return next((k for k, ag in reversed(self.agents.items()) if ag.step_span == st.id and not ag.done), None)
 
     @staticmethod
-    def _step_wait_ev(run_id: str, step: str, reason: str, until: int | None, ts: int) -> dict:
+    def _step_wait_ev(run_id: str, step: str, reason: str, until: int | None, ts: int, extra: dict | None = None) -> dict:
         ev = {"type": "step", "run_id": run_id, "step": step, "status": "waiting", "reason": reason, "ts": ts}
         if until:
             ev["until"] = until
+        if extra:
+            ev.update(extra)
         return ev
 
     @staticmethod
@@ -931,7 +938,7 @@ class Mapper:
         if w is not None and w is shown:
             return
         if w is not None:
-            out.append(self._step_wait_ev(run.id, st.step, w.wait[0], w.wait[1], ts))
+            out.append(self._step_wait_ev(run.id, st.step, w.wait[0], w.wait[1], ts, w.wait_extra))
         elif st.end is None:
             out.append({"type": "step", "run_id": run.id, "step": st.step, "status": "running", "ts": ts})
 
@@ -942,11 +949,12 @@ class Mapper:
         st = self.spans.get(run.step_runs.get(srid) or "") if srid and not s.step else None
         st = st or self._step_span(s)
         s.wait_step = st.id if st else None
+        owner = self._wait_agent(s, st)
+        s.wait_extra = self._wait_extra(s, owner, ts) if s.wait[2] else None
         shown = self._shown_wait(run, st)
         run.waits[s.id] = s
         if st:
             self._step_wait_state(run, st, out, ts, shown)
-        owner = self._wait_agent(s, st)
         ag = self.agents.get(owner or "")
         others = [w for w in run.waits.values() if w is not s and self._wait_agent(w, self.spans.get(w.wait_step or "")) == owner]
         if ag and not any(w.wait[2] or not s.wait[2] for w in others):  # already waiting on a wait that wins
@@ -954,7 +962,37 @@ class Mapper:
             ev = {"type": "agent", "run_id": s.run, "id": owner, "status": "waiting", "reason": s.wait[0], "ts": ts}
             if s.wait[1]:
                 ev["until"] = s.wait[1]
+            if s.wait_extra:
+                ev.update(s.wait_extra)
             out.append(ev)
+
+    def _wait_extra(self, s: Span, owner: str | None, ts: int) -> dict | None:
+        """A declared wait's drawer fields: `kind` (approval), `title`, `details` {k: scalar}, `url`, and `because` =
+        the decision that triggered it (`agentglow.wait.because` = its span id; or, for an approval, the owner's
+        guard / noul decision of the last BECAUSE_MS)."""
+        a, x = s.attrs, {}
+        kind = decision_text(a.get("agentglow.wait.kind"), 16).lower()
+        if kind:
+            x["kind"] = kind
+        title = decision_text(a.get("agentglow.wait.title"), 80)
+        if title:
+            x["title"] = title
+        pre = "agentglow.wait.detail."
+        det = wait_details({k[len(pre):]: v for k, v in a.items() if k.startswith(pre)})
+        if det:
+            x["details"] = det
+        url = wait_url(a.get("agentglow.wait.url"))
+        if url:
+            x["url"] = url
+        bid = a.get("agentglow.wait.because")
+        because = self.decisions_by_id.get(str(bid)) if bid else None
+        if because is None and not bid and kind == "approval" and owner:
+            lg = self.last_guard.get(owner)
+            if lg and 0 <= ts - lg[0] <= BECAUSE_MS:
+                because = lg[1]
+        if because:
+            x["because"] = because
+        return x or None
 
     def _wait_end(self, s: Span, run: Run, out: list, ts: int) -> None:
         st = self.spans.get(s.wait_step or "")
@@ -984,7 +1022,8 @@ class Mapper:
                 continue
             a = st.attrs if st else w.attrs
             out = {"reason": w.wait[0], "step": st.step if st else None, "workflow": _hatchet_workflow(a) or None,
-                   "wait_run_id": str(a.get("hatchet.workflow_run_id") or "") or None}
+                   "wait_run_id": str(a.get("hatchet.workflow_run_id") or "") or None,
+                   "title": (w.wait_extra or {}).get("title")}
             return {k: v for k, v in out.items() if v}
         if step and not agent_id and step in run.parked:
             return {"reason": run.parked[step][0], "step": step}
@@ -1241,9 +1280,26 @@ class Mapper:
             v = decision_text(a.get(f"{DECISION_KEY}.{k}"), 40)
             if v:
                 ev[k] = v
+        th = _num(a.get(DECISION_KEY + ".threshold"))
+        if th is not None:
+            ev["threshold"] = th
         ev.update(ms=max(0, (s.end or s.start) - s.start), ts=ts)
+        self._remember_decision(s.id, ev)
         important = a.get(DECISION_KEY + ".important")
         out += self.hv.offer(ev, important is True or str(important).lower() in ("true", "1"))
+
+    def _remember_decision(self, sid: str, ev: dict) -> None:
+        """Keep a short summary per decision span (a later wait's `because`) and each agent's latest guard."""
+        keep = ("kind", "question", "result", "p", "provider", "purpose", "target", "threshold", "ms", "ts")
+        summary = {"id": sid, **{k: ev[k] for k in keep if k in ev}}
+        self.decisions_by_id[sid] = summary
+        if len(self.decisions_by_id) > DECISIONS_KEPT:
+            self.decisions_by_id.pop(next(iter(self.decisions_by_id)))
+        if ev.get("purpose") == "guard" or ev.get("kind") == "noul":
+            self.last_guard.pop(ev["id"], None)
+            self.last_guard[ev["id"]] = (ev["ts"], summary)
+            if len(self.last_guard) > DECISIONS_KEPT:
+                self.last_guard.pop(next(iter(self.last_guard)))
 
     def _order(self, s: Span, out: list, ts: int) -> None:
         a, k = s.attrs, ORDER_KEY + "."

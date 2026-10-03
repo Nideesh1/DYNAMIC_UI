@@ -208,8 +208,8 @@ class Agent(_Span):
     def decision(self, kind: str, question: str, **kw: Any) -> "Decision":
         return decision(kind, question, parent=self, **kw)
 
-    def decided(self, kind: str, question: str, result: Any, p: float | None = None, **kw: Any) -> None:
-        decided(kind, question, result, p, parent=self, **kw)
+    def decided(self, kind: str, question: str, result: Any, p: float | None = None, **kw: Any) -> "Decision":
+        return decided(kind, question, result, p, parent=self, **kw)
 
     def order(self, side: str, qty: float, price: float | None = None, **kw: Any) -> None:
         order(side, qty, price, parent=self, **kw)
@@ -240,6 +240,14 @@ class Tool(_Span):
 
 
 DECISION_KINDS = ("choice", "score", "noul")
+
+
+def _float(v: Any) -> float | None:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and abs(f) != float("inf") else None
 MAX_OPTIONS = 5
 
 
@@ -266,14 +274,15 @@ class Decision(_Span):
     def __init__(self, kind: str, question: str, result: Any = None, p: float | None = None, options: Any = None,
                  provider: str = "llm", purpose: str | None = None, target: str | None = None,
                  parent: _Span | None = None, start_ns: int | None = None, important: bool = False,
-                 scope: str | None = None) -> None:
+                 scope: str | None = None, threshold: float | None = None) -> None:
         kind = str(kind).lower()
         super().__init__(f"decision {kind}", {"agentglow.decision": kind, "agentglow.decision.question": question,
                                               "agentglow.decision.provider": provider,
                                               "agentglow.decision.purpose": purpose,
                                               "agentglow.decision.target": target,
                                               "agentglow.decision.important": True if important else None,
-                                              "agentglow.decision.scope": scope},
+                                              "agentglow.decision.scope": scope,
+                                              "agentglow.decision.threshold": _float(threshold)},
                          parent=parent, start_ns=start_ns)
         self.kind = kind
         self._attrs.update(self._outcome(result, p, options))
@@ -368,7 +377,8 @@ def skill(name: str, parent: _Span | None = None) -> Tool:
 
 def decision(kind: str, question: str, result: Any = None, p: float | None = None, options: Any = None,
              provider: str = "llm", purpose: str | None = None, target: str | None = None,
-             parent: _Span | None = None, important: bool = False, scope: str | None = None) -> Decision:
+             parent: _Span | None = None, important: bool = False, scope: str | None = None,
+             threshold: float | None = None) -> Decision:
     """`with agentglow.decision("choice", "route", provider="jev", purpose="route") as d: ...; d.record("haiku", 0.92,
     {"haiku": 0.92, "sonnet": 0.07})` - a fast structured decision by the current agent (kind: choice | score | noul;
     purpose: route | guard | check; target: e.g. the tool being gated). Latency = the block's duration.
@@ -379,20 +389,25 @@ def decision(kind: str, question: str, result: Any = None, p: float | None = Non
     the outcome (bool -> yes/no; (result, p); {"result", "p", "options"}; else str(value)) and returns it unchanged."""
     def make(c: Any = None) -> Decision:
         return Decision(kind, question, result, p, options, provider, purpose, target, parent=parent,
-                        important=important, scope=scope)
+                        important=important, scope=scope, threshold=threshold)
     return rebuild(make(), make)
 
 
 def decided(kind: str, question: str, result: Any, p: float | None = None, options: Any = None, provider: str = "llm",
             purpose: str | None = None, target: str | None = None, latency_ms: float = 0,
-            parent: _Span | None = None, important: bool = False, scope: str | None = None) -> None:
-    """Record one finished decision (backdated by `latency_ms`), e.g. after `jev.noul(...)` returned."""
+            parent: _Span | None = None, important: bool = False, scope: str | None = None,
+            threshold: float | None = None) -> Decision:
+    """Record one finished decision (backdated by `latency_ms`), e.g. after `jev.noul(...)` returned. `threshold`: the
+    cut-off the result was judged against (shown with the decision, e.g. why a wait was needed). Returns the ended
+    decision (pass it as `wait(..., because=d)` / `approval(..., because=d)`)."""
     start = None
     if latency_ms:  # backdate, but never before the enclosing span started (keeps ended-span replay ordered)
         around = parent.span if parent is not None else trace.get_current_span()
         start = max(time.time_ns() - int(latency_ms * 1e6), getattr(around, "start_time", None) or 0)
-    Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, start_ns=start,
-             important=important, scope=scope).start().end()
+    d = Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, start_ns=start,
+                 important=important, scope=scope, threshold=threshold)
+    d.start().end()
+    return d
 
 
 ORDER_STATUSES = ("would_place", "placed", "filled", "rejected", "cancelled")

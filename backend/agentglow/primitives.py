@@ -36,6 +36,7 @@ import re
 import threading
 import time
 from collections import deque
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -43,7 +44,7 @@ from opentelemetry import context, trace
 
 from .dual import DualUse, is_target, rebuild
 from .manual import _agent, _Span, _tracer
-from .scrub import decision_text
+from .scrub import decision_text, wait_details, wait_url
 
 if TYPE_CHECKING:
     from .mapper import Mapper, Span
@@ -459,6 +460,70 @@ def event(kind: str, label: str | None = None, **fields: Any) -> None:
 def cache(name: str, hit: bool = True) -> None:
     """One cache lookup (hit rate on the cache's resource node)."""
     _signal("cache", {"name": name, "hit": bool(hit)})
+
+
+# ---------------------------------------------------------------------------------------- waits / human approval
+def _until_ms(until: Any, timeout_s: Any) -> Any:
+    """Deadline -> epoch ms: `until` as epoch ms / seconds (< 1e11), a datetime (naive = UTC) or an ISO-8601 string
+    (passed through, the server parses it); else now + `timeout_s`; else None."""
+    if until is None:
+        n = _num(timeout_s)
+        return int((time.time() + n) * 1000) if n is not None else None
+    if isinstance(until, datetime):
+        return int((until if until.tzinfo else until.replace(tzinfo=timezone.utc)).timestamp() * 1000)
+    if isinstance(until, str):
+        return until or None
+    n = _num(until)
+    return None if n is None else int(n * 1000 if n < 1e11 else n)
+
+
+def _span_id(v: Any) -> str | None:
+    """`because=`: a decision (or any agentglow span object) -> its span id (hex); a string id as given."""
+    sp = getattr(v, "span", None)
+    if sp is not None:
+        ctx = sp.get_span_context()
+        return format(ctx.span_id, "016x") if ctx.is_valid else None
+    return str(v)[:32] if isinstance(v, (str, int)) and str(v) else None
+
+
+def wait(reason: Any = "wait", until: Any = None, timeout_s: float | None = None, *, title: Any = None,
+         details: Any = None, url: Any = None, because: Any = None, kind: str | None = None) -> _Span:
+    """`with agentglow.wait("vendor reply", timeout_s=3600):` (or `async with`, or `@agentglow.wait(...)`): the
+    enclosing step / agent shows `waiting` with `reason` and a countdown to `until` (epoch ms / s, datetime, ISO-8601;
+    or now + `timeout_s`) while the block runs. `title` (short), `details` (flat {key: str|int|float|bool}, max 12) and
+    `url` (http(s), "open in app") are shown in the wait's details drawer; `because` = the decision that triggered the
+    wait (the object `decision()` / `decided()` returned, or its span id). `kind="approval"`: see `approval()`.
+    Decorator use: `title` / `details` / `url` may be callables over the call's arguments. Resuming is the app's job."""
+    if is_target(reason):  # bare @wait
+        return wait()(reason)
+
+    def make(c: Any = None) -> _Span:
+        def val(v: Any, f: str) -> Any:
+            return c.value(v, f) if c is not None else (None if callable(v) else v)
+        r = str(reason or "wait")
+        attrs = {"agentglow.wait": r, "agentglow.wait.until": _until_ms(until, timeout_s), "agentglow.wait.kind": kind,
+                 "agentglow.wait.title": val(title, "title"), "agentglow.wait.url": wait_url(val(url, "url")),
+                 "agentglow.wait.because": _span_id(because)}
+        if isinstance(attrs["agentglow.wait.title"], str):
+            attrs["agentglow.wait.title"] = decision_text(attrs["agentglow.wait.title"], 80) or None
+        else:
+            attrs["agentglow.wait.title"] = None
+        for k, v in wait_details(val(details, "details")).items():
+            attrs[f"agentglow.wait.detail.{k}"] = v
+        return _Span(f"wait {r}", attrs)
+    return rebuild(make(), make)
+
+
+def approval(reason: Any = "human approval", timeout_s: float | None = None, until: Any = None, *, title: Any = None,
+             details: Any = None, url: Any = None, because: Any = None) -> _Span:
+    """`async with agentglow.approval("approve refund", timeout_s=900, title="Refund $420", details={...}):` a wait
+    on a human: listed under "Needs you" with Approve / Reject and a details drawer (the same wait contract plus
+    `agentglow.wait.kind = "approval"`). The buttons POST /live/approve, which forwards to the app's
+    AGENTGLOW_APPROVE_WEBHOOK; resuming the work (an event, a flag) is the app's job, this block only shows the wait."""
+    if is_target(reason):  # bare @approval
+        return approval()(reason)
+    return wait(reason or "human approval", until, timeout_s, title=title, details=details, url=url, because=because,
+                kind="approval")
 
 
 # ---------------------------------------------------------------------------------------- FastAPI WebSockets

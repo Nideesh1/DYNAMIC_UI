@@ -72,7 +72,6 @@ FEED_URL = os.environ.get("FEED_URL", "http://localhost:8400")
 MAX_ANALYSTS = int(os.environ.get("DESK_MAX_ANALYSTS", "3"))
 SAFE_THRESHOLD = 0.8
 LIMITS = Limits()
-tracer = trace.get_tracer("deepagents-hatchet.trading")
 
 # in-process desk registry: session id -> {"pnl": {market index: $}, "used": Counter(bucket -> contracts)}
 _DESKS: dict[str, dict] = {}
@@ -251,11 +250,12 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
     last_think = -1e9
     name = TOPICS[input.index % len(TOPICS)] + (f"-{input.index}" if input.index >= len(TOPICS) else "")
 
-    def gate(a, q: str, ans: decide.Answer, purpose: str, target: str | None = None, **kw) -> None:
-        a.decided("choice" if ans.options else "noul", q, ans.result, ans.p, options=ans.options or None,
+    def gate(a, q: str, ans: decide.Answer, purpose: str, target: str | None = None, **kw):
+        d = a.decided("choice" if ans.options else "noul", q, ans.result, ans.p, options=ans.options or None,
                   provider=ans.provider, purpose=purpose, target=target, latency_ms=ans.latency_ms, **kw)
         st["decisions"] += 1
         st[ans.provider] += 1
+        return d
 
     def code(a, q: str, ok: bool, target: str = "order") -> None:
         desk_wide = q in DESK_GUARDS  # shown once on the desk (halted), not as a red X on this market
@@ -321,10 +321,16 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
         ans = (await decide.batch(_ask(["safe_without_human"]), {**s, "order_qty": qty}, sim=sim_p, rng=rng))["safe_without_human"]
         p_yes = ans.p if ans.result is True else 1 - ans.p
         safe = p_yes >= SAFE_THRESHOLD
-        gate(a, "safe_without_human", decide.Answer(safe, p_yes if safe else 1 - p_yes, {}, ans.provider, ans.latency_ms),
-             "guard", "order")
+        why = gate(a, "safe_without_human", decide.Answer(safe, p_yes if safe else 1 - p_yes, {}, ans.provider, ans.latency_ms),
+                   "guard", "order", threshold=SAFE_THRESHOLD)
         if not safe:
-            ok, by = await human_gate(ctx, input, m.ticker, side, qty, st)
+            price_c = round(m.mid if side == "yes" else 100 - m.mid)
+            used = desk["used"][bucket(m.ticker)]
+            gate_info = {"title": f"BUY {qty} {side.upper()} @ {price_c}c · {bucket(m.ticker)}",
+                         "details": {"side": side, "qty": qty, "price_c": price_c, "market": m.ticker,
+                                     "edge_c": round(edge, 1), "cap_used_pct": round(100 * used / LIMITS.bucket_day_cap)},
+                         "because": why}
+            ok, by = await human_gate(ctx, input, m.ticker, side, qty, st, gate_info)
             a.decided("noul", "human approved", ok, 1.0, provider="human" if by != "timeout" else "auto (timeout)",
                       purpose="guard", target="order", important=True)
             st["decisions"] += 1
@@ -413,14 +419,15 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
 
 
 # ---- human gate: a durable wait per order below the safe threshold ---------------------------------
-async def human_gate(ctx: DurableContext, input: MarketInput, ticker: str, side: str, qty: int, st: Counter) -> tuple[bool, str]:
+async def human_gate(ctx: DurableContext, input: MarketInput, ticker: str, side: str, qty: int, st: Counter,
+                     info: dict | None = None) -> tuple[bool, str]:
     """Wait for `desk:approve` for this market run (or its session, or "*"); auto-approve after DESK_HUMAN_TIMEOUT_S.
     Event payload: {"run_id": "<market run id>" | "<session id>" | "*", "approve": true|false, "approver": "..."}."""
     st["waits"] += 1
     run_id = ctx.workflow_run_id
-    until = int((time.time() + HUMAN_TIMEOUT_S) * 1000)
-    with tracer.start_as_current_span("await human", attributes={"agentglow.wait": f"human approval {side} {qty}",
-                                                                 "agentglow.wait.until": until}):
+    # a human approval for AgentGlow: "Needs you" row + details drawer (title, order fields, the Jev decision that
+    # asked for it); the Approve / Reject buttons reach the trigger's webhook, which sends the `desk:approve` event below
+    async with agentglow.approval(f"human approval {side} {qty}", timeout_s=HUMAN_TIMEOUT_S, **(info or {})):
         res = await ctx.aio_wait_for(
             f"human-{st['waits']}",
             or_(

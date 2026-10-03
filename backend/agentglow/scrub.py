@@ -252,6 +252,46 @@ def _origin(url: str) -> tuple[str | None, int | None]:
         return None, None
 
 
+WAIT_DETAILS_MAX = 12  # a wait's app-provided detail fields (agentglow.wait.detail.<key>)
+WAIT_DETAIL_KEY_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+WAIT_URL_MAX = 512
+
+
+def wait_details(d: object) -> dict:
+    """A wait's `details` (flat dict the app passes on purpose) -> at most WAIT_DETAILS_MAX {key: str|int|float|bool}:
+    keys [A-Za-z0-9_.-] max 32 chars; strings: secrets redacted, PII (emails / phones) replaced, max 80 chars; other
+    values (lists, dicts, None, NaN) dropped."""
+    out: dict = {}
+    if not isinstance(d, dict):
+        return out
+    for k, v in d.items():
+        if len(out) >= WAIT_DETAILS_MAX:
+            break
+        key = WAIT_DETAIL_KEY_RE.sub("_", str(k)).strip("_")[:32]
+        if not key:
+            continue
+        if isinstance(v, bool) or (isinstance(v, int) and abs(v) < 2**53):
+            out[key] = v
+        elif isinstance(v, float):
+            if v == v and v not in (float("inf"), float("-inf")):
+                out[key] = v
+        elif isinstance(v, str):
+            out[key] = pii(decision_text(v, 80), ids=False)
+    return out
+
+
+def wait_url(v: object) -> str | None:
+    """A wait's "open in app" URL: http(s) only, userinfo stripped, secrets redacted, max WAIT_URL_MAX chars. The path
+    and query are kept as given (the app chose them): never put PHI / PII in it."""
+    if not isinstance(v, str):
+        return None
+    u = v.strip()
+    if not re.match(r"(?i)^https?://[^\s/]", u) or any(c in u for c in "\r\n\t \"<>"):
+        return None
+    u = redact(strip_userinfo(u))
+    return u if len(u) <= WAIT_URL_MAX else None
+
+
 def _reduce_url(v: object) -> object:
     """Connection string / broker URL -> scheme://host:port/db (userinfo, query and fragment dropped)."""
     if not isinstance(v, str) or "://" not in v:
@@ -349,6 +389,10 @@ def _keep_strict(k: str, allow: tuple, msg_keys: tuple) -> bool:
 def _scalar(v: object, patterns: list | None, key: str = "") -> object:
     if isinstance(v, bool) or isinstance(v, (int, float)) or v is None:
         return v
+    if key == "agentglow.wait.url":
+        return wait_url(v)
+    if key.startswith("agentglow.wait.detail."):
+        return pii(decision_text(v, 80), patterns, ids=False) if isinstance(v, str) else None
     if isinstance(v, (list, tuple)):
         return [_scalar(x, patterns, key) for x in v][:20]
     return pii(_reduce_url(str(v))[:256], patterns, ids=not key.endswith(ID_KEY_SUFFIX))
