@@ -24,7 +24,7 @@ from langchain.chat_models import init_chat_model  # noqa: E402
 from langchain_core.tools import tool  # noqa: E402
 from opentelemetry import trace  # noqa: E402
 
-# Any LangChain "<provider>:<model>": openai:gpt-5.6-luna, anthropic:claude-sonnet-5, google_genai:gemini-3.8-flash
+# Any LangChain "<provider>:<model>": openai:gpt-5.6-luna, anthropic:claude-sonnet-5-5, google_genai:gemini-3.8-flash
 MODEL = os.environ.get("AGENT_MODEL", "openai:gpt-5.6-luna")
 # OpenAI reasoning models only accept function tools on the Responses API
 model = init_chat_model(MODEL, **({"use_responses_api": True} if MODEL.startswith("openai:") else {}))

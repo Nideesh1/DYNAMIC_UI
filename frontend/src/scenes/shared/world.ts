@@ -15,6 +15,8 @@
  * Scenes read `world` every frame inside useFrame (mutable, no re-render) and use `useWorld()` for HUD/DOM.
  */
 import { useSyncExternalStore } from "react";
+import { applyPrim, noteRejected, PRIM_NO_LOG, PRIM_QUIET, PRIM_TYPES, tickPrims, type Backlog, type PrimEdge, type PrimState, type PrimWorldEvent, type ResStat } from "./prims";
+export type { PrimState, PrimWorldEvent } from "./prims";
 
 export type AgentType = "planner" | "researcher" | "graph_scout" | "records_scout" | "data_scout" | "writer";
 /** Any workflow-defined step name (the backend scrubs and caps it). */
@@ -24,15 +26,21 @@ export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "fai
 
 // ------------------------------------------------------------------ event contract (v2)
 export type WorldEvent =
-  | { type: "run"; run_id: string; status: "started" | "renamed" | "completed" | "failed"; topic: string; workflow: string; ts: number }
+  | { type: "run"; run_id: string; status: "started" | "renamed" | "completed" | "failed"; topic: string; workflow: string; ts: number; reason?: string }
+  // idle: an open run silent for AGENTGLOW_IDLE_DIM_MIN (not waiting on purpose); `since` = its last event (epoch ms).
+  // active: it produced an event again (sent right before that event)
+  | { type: "run"; run_id: string; status: "idle" | "active"; since?: number; ts: number }
   // "waiting": the step is paused in a wait (approval, durable sleep, ...); `reason` = what it waits on, `until` = epoch ms
-  | { type: "step"; run_id: string; step: StepName; status: "running" | "waiting" | "done" | "failed"; reason?: string; until?: number; ts: number }
-  | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; ts: number }
+  // declared waits also carry the drawer fields (WaitExtra: kind "approval", title, details, url, because)
+  | ({ type: "step"; run_id: string; step: StepName; status: "running" | "waiting" | "done" | "failed"; reason?: string; until?: number; ts: number } & WaitExtra)
+  // `job`: a long-running request of the service `parent_id` (docs/SPEC.md "Backend services"), open since `since` (epoch ms)
+  | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; job?: boolean; since?: number; ts: number }
   | { type: "exit"; run_id: string; id: string; status: "done" | "failed"; ts: number }
-  | { type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; reason?: string; until?: number; ts: number }
+  | ({ type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; reason?: string; until?: number; ts: number } & WaitExtra)
   // tokens_in = ALL prompt tokens (cached included); tokens_cached / tokens_cache_write are subsets of it, never added
   | { type: "llm"; run_id: string; id: string; tokens_in: number; tokens_out: number; tokens_cached?: number; tokens_cache_write?: number; latency_ms: number; ts: number }
-  | { type: "message"; run_id: string; from_id: string; to_id: string; text: string; ts: number }
+  // `failed`: a publish that raised (backend services): the comet fizzles out instead of arriving
+  | { type: "message"; run_id: string; from_id: string; to_id: string; text: string; ts: number; failed?: boolean }
   | { type: "tool"; run_id: string; id: string; tool: string; args_preview: string; ts: number }
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
   | { type: "final"; run_id: string; text: string; ts: number }
@@ -45,17 +53,31 @@ export type WorldEvent =
   // (ordinal level) or noul (yes / no); p = probability of `result`, options = top 5 {name, p}, ms = latency
   // `hv`: sent while the agent is in high-volume mode (its decisions are aggregated in `decision_stats`); `why` = what
   // made it interesting (important | deny | flip | low_p)
-  | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; scope?: string; ms: number; ts: number; hv?: boolean; why?: string }
+  | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; scope?: string; threshold?: number; ms: number; ts: number; hv?: boolean; why?: string }
   // high-volume mode: one per agent per ~1 s window (docs/SPEC.md "Decisions" > "High volume")
   | { type: "decision_stats"; run_id: string; id: string; window_ms: number; n: number; by_purpose: DecisionStatsByPurpose; p50_ms: number; p95_ms: number; providers: Record<string, number>; ts: number }
+  // backend services (docs/SPEC.md "Backend services"): a request / handled message on the service agent `id`;
+  // `hv` = an error sent individually while the service's requests are aggregated in `service_stats`
+  // `rejected`: admission / backpressure (429 / 503 with `agentglow.rejected`): amber, not an error
+  | { type: "request"; run_id: string; id: string; service: string; name: string; kind: "http" | "rpc" | "message" | "event"; status?: number; error: boolean; rejected?: boolean; ms: number; ts: number; hv?: boolean }
+  // one per service per ~1 s window: requests, errors, status classes ("2xx": n), latency, top routes
+  | { type: "service_stats"; run_id: string; id: string; service: string; window_ms: number; n: number; errors: number; codes: Record<string, number>; p50_ms: number; p95_ms: number; routes: Record<string, number>; ts: number; instances?: number; inflight?: number }
+  // backend services: the service `id` drives the agent run `target_run` (its spans come from that service's process)
+  | { type: "drives"; run_id: string; id: string; target_run: string; ts: number }
   // an order action (paper when dry_run) by agent instance `id`
   | { type: "order"; run_id: string; id: string; side: string; qty: number; price?: number; status: OrderStatus; instrument: string; dry_run: boolean; reason?: string; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
   // topology: an MCP server and the backends behind it (sent at worker startup and to every new viewer)
   | { type: "mcp_register"; run_id?: string; server: string; resources: { name: string; kind: ResourceKind }[]; ts: number }
-  | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number; resource?: string; resource_kind?: ResourceKind };
+  | { type: "mcp"; run_id: string; id: string; server: string; tool: string; phase: "call" | "result"; latency_ms?: number; ts: number; resource?: string; resource_kind?: ResourceKind; units?: number; unit?: string; device?: string }
+  // generic primitives (docs/SPEC.md "Generic primitives", prims.ts)
+  | PrimWorldEvent;
 
 export type DecisionKind = "choice" | "score" | "noul";
+/** The decision that triggered a wait (docs/SPEC.md "Human approval"): a summary of its `decision` event. */
+export type WaitBecause = { id?: string; kind: string; question: string; result: string; p?: number; provider?: string; purpose?: string; target?: string; threshold?: number; ms?: number; ts?: number };
+/** A declared wait's drawer fields (`agentglow.wait.*`): `kind` "approval" = a human approval ("Needs you"). */
+export type WaitExtra = { kind?: string; title?: string; details?: Record<string, string | number | boolean>; url?: string; because?: WaitBecause };
 export type DecisionStatsByPurpose = {
   route?: { n: number; results: Record<string, number> };
   guard?: { n: number; allow: number; deny: number };
@@ -71,7 +93,7 @@ const ORDERS_KEPT = 8;
  * High-volume decisions, per agent (from `decision_stats`): smoothed (EMA) so the halo and its label never flicker.
  * `seg` = smoothed share of each outcome category, in HALO_CATS order.
  */
-export type HvStats = { at: number; bump: number; bumpDeny: boolean; rate: number; deny: number; p50: number; p95: number; seg: number[]; provider: string; n: number; windows: number };
+export type HvStats = { at: number; bump: number; bumpDeny: boolean; rate: number; deny: number; p50: number; p95: number; seg: number[]; provider: string; n: number; windows: number; unit?: "req" | "msg"; instances?: number; inflight?: number };
 /** outcome categories of a decision halo arc: allow, deny, check yes, check no, route result slots 0..3, other */
 export const HALO_CATS = ["allow", "deny", "yes", "no", "r0", "r1", "r2", "r3", "other"] as const;
 export const HALO_COLORS = ["#4ade80", "#fb3b5c", "#5eead4", "#fbbf24", "#60a5fa", "#c084fc", "#f472b6", "#facc15", "#94a3b8"];
@@ -94,14 +116,46 @@ export function haloMix(h: HvStats | null, now = performance.now()): number {
   if (t < HV_QUIET_MS) return inn;
   return Math.max(0, 1 - (t - HV_QUIET_MS) / HV_FADE_MS) * inn;
 }
+/** a backend service with no traffic for this long (ms) reads as idle: dimmed, label `feed · idle` */
+export const SVC_IDLE_MS = 10000;
+/** a top-level backend service agent (`svc:` id) */
+export const isSvc = (i: Instance) => !i.parent && i.id.startsWith("svc:");
+/** a backend service with no requests / messages in the last SVC_IDLE_MS (or none since it appeared) */
+export const svcIdle = (i: Instance, now = performance.now()) => isSvc(i) && now - (i.svcAt ?? i.bornAt) > SVC_IDLE_MS;
+/** record traffic on a service agent (no-op for other agents) */
+const svcTraffic = (i: Instance | undefined, now: number) => {
+  if (i && isSvc(i)) i.svcAt = now;
+};
 /** the agent is in high-volume mode now (recent decision_stats) */
 export const hvActive = (i: Instance, now = performance.now()) => !!i.hv && now - i.hv.at < HV_QUIET_MS + HV_FADE_MS;
-/** `jev 42/s · 3% deny · p50 38ms` */
+/** The halo label: rate + error / deny share (only when > 0): `jev 42/s · 3% deny`; a service: `42 req/s · 2% errors`
+ * (`msg/s` for a consumer). Latency lives in the Selected panel and the label's hover tooltip (`haloLatency`). */
 export function haloText(h: HvStats): string {
   const r = h.rate >= 10 ? Math.round(h.rate) : Math.round(h.rate * 10) / 10;
-  const d = h.deny * 100;
-  return `${h.provider} ${r}/s · ${d > 0 && d < 1 ? "<1" : Math.round(d)}% deny · p50 ${Math.round(h.p50)}ms`;
+  const share = haloShare(h);
+  return `${h.unit ? `${r} ${h.unit}/s` : `${h.provider} ${r}/s`}${share ? ` · ${share}` : ""}`;
 }
+/** `3% deny` / `2% errors` / "" when none */
+export function haloShare(h: HvStats): string {
+  const d = h.deny * 100;
+  if (!(d > 0)) return "";
+  return `${d < 1 ? "<1" : Math.round(d)}% ${h.unit ? "errors" : "deny"}`;
+}
+/** `p50 38ms · p95 120ms` (+ `· 3 in flight` for a service) */
+export function haloLatency(h: HvStats): string {
+  return `p50 ${Math.round(h.p50)}ms · p95 ${Math.round(h.p95)}ms${h.inflight ? ` · ${h.inflight} in flight` : ""}`;
+}
+/** `2m14s` / `38s` / `1h05m` */
+export function elapsedText(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+}
+/** a job's name label: `mkt:tick · 2m14s` (frozen at its end) */
+export const jobText = (i: Instance) => (i.job ? `${i.name} · ${elapsedText((i.job.end || Date.now()) - i.job.since)}` : i.name);
+/** a job's end flash 0..1 (green done / red failed), ~1.2 s */
+export const flashMix = (i: Instance, now = performance.now()) => (i.flash ? Math.max(0, 1 - (now - i.flash.at) / 1200) : 0);
 /** One decision on one agent; `at` (performance.now()) = when its glyph starts (staggered so a burst reads one by one). */
 export type DecisionUse = Omit<Extract<WorldEvent, { type: "decision" }>, "type" | "run_id" | "id"> & {
   at: number;
@@ -163,7 +217,11 @@ export function orderText(o: { side: string; qty: number; price?: number; status
 }
 
 /** What sits behind an MCP server (the server is a node; its backends are nodes too). */
-export type ResourceKind = "db" | "warehouse" | "spark" | "api" | "storage" | "queue";
+export type ResourceKind = "db" | "warehouse" | "spark" | "api" | "storage" | "queue" | "model" | "gpu" | "worker" | "cache";
+/** the six shapes every theme draws: newer kinds map onto the closest one (model / gpu -> spark, worker -> storage, cache -> db) */
+export type ShapeKind = "db" | "warehouse" | "spark" | "api" | "storage" | "queue";
+export const shapeKind = (k: string | undefined): ShapeKind =>
+  k === "model" || k === "gpu" ? "spark" : k === "worker" ? "storage" : k === "cache" ? "db" : k === "db" || k === "warehouse" || k === "spark" || k === "storage" || k === "queue" ? k : "api";
 
 export const AGENT_TYPES: { type: AgentType; label: string; color: string }[] = [
   { type: "planner", label: "Planner", color: "#a78bfa" },
@@ -247,9 +305,30 @@ export type Instance = {
   chat: { role: "user" | "agent"; text: string }[];
   /** what it is waiting on (status "waiting" with a reason), else null */
   wait: Wait | null;
+  /** backend service agent: requests / errors handled (from `service_stats`) */
+  svcN?: number;
+  svcErr?: number;
+  /** backend service agent: performance.now() of its last traffic (requests / messages in or out); see svcIdle */
+  svcAt?: number;
+  /** a long-running request of a service shown as its subagent: started / ended (epoch ms, end 0 while open) */
+  job?: { since: number; end: number };
+  /** a job just ended: its halo flashes green (ok) / red (performance.now()) */
+  flash?: { at: number; ok: boolean };
+  /** generic primitives (prims.ts): created on the instance's first primitive event */
+  prim?: PrimState;
 };
 /** A declared wait: what it waits on ("approval", "sleep", an event key) and its deadline / wake-up (epoch ms, 0 = none). */
-export type Wait = { reason: string; until: number };
+export type Wait = { reason: string; until: number } & WaitExtra;
+/** reason / until + the drawer fields of a waiting `step` / `agent` event */
+export function waitOf(ev: { reason?: string; until?: number } & WaitExtra): Wait {
+  const w: Wait = { reason: ev.reason || "wait", until: ev.until ?? 0 };
+  if (ev.kind) w.kind = ev.kind;
+  if (ev.title) w.title = ev.title;
+  if (ev.details) w.details = ev.details;
+  if (ev.url) w.url = ev.url;
+  if (ev.because) w.because = ev.because;
+  return w;
+}
 /** one skill on one agent; startAt / endAt (performance.now()) drive its sigil ring (endAt 0 while active) */
 export type SkillUse = { active: boolean; count: number; last: number; startAt: number; endAt: number };
 /** Skill sigil timing (ms): fade in, minimum time shown after a start (Claude Code skills are instantaneous tool
@@ -308,6 +387,8 @@ export type Run = {
   final: string;
   /** performance.now() of the run's latest event (stale detection) */
   lastEventAt: number;
+  /** server-declared idle since (epoch ms of its last event), 0 = active (isIdle / idleText) */
+  idleSince: number;
 };
 /** Which of the 3 scene slots a step is drawn in (see STEP_SLOTS). */
 export function stepSlot(r: Run, step: StepName): number {
@@ -341,6 +422,67 @@ const hhmm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit"
  * STALE_GRACE_MS (e.g. its worker restarted mid-run: nobody will resolve the wait or end the run). */
 export const STALE_QUIET_MS = 20_000;
 export const STALE_GRACE_MS = 15_000;
+/** Idle run (server `run` status "idle"): its agents are dimmed (IDLE_DIM) and its label says "idle · 4m". */
+export const IDLE_DIM = 0.55;
+export const isIdle = (r: Run | undefined): boolean => !!r && r.status === "started" && r.idleSince > 0;
+export function idleText(r: Run, wall = Date.now()): string {
+  const s = Math.max(0, (wall - r.idleSince) / 1000);
+  return `idle · ${s < 60 ? `${Math.floor(s)}s` : `${Math.floor(s / 60)}m`}`;
+}
+
+// ------------------------------------------------------------------ per-viewer dismissed runs
+/** Runs this viewer hid ("×"): run id -> Date.now() at dismissal, kept in localStorage. The world keeps applying
+ * their events (state stays right), lod.ts just never draws them; any new activity after the dismissal shows the run
+ * again (replayed older events do not). */
+const DISMISS_KEY = "agentglow.dismissedRuns";
+const DISMISS_MAX = 200;
+const dismissed: Map<string, number> = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(DISMISS_KEY) ?? "{}");
+    if (v && typeof v === "object") return new Map(Object.entries(v).filter((e): e is [string, number] => typeof e[1] === "number"));
+  } catch {
+    /* no storage (private window, blocked, SSR): nothing remembered */
+  }
+  return new Map<string, number>();
+})();
+function saveDismissed() {
+  try {
+    localStorage.setItem(DISMISS_KEY, JSON.stringify(Object.fromEntries(dismissed)));
+  } catch {
+    /* not remembered across reloads, still hidden now */
+  }
+}
+export const isDismissed = (runId: string | undefined): boolean => !!runId && dismissed.has(runId);
+/** Hide a run (and its agents) for this viewer. */
+export function dismissRun(runId: string) {
+  dismissed.delete(runId);
+  dismissed.set(runId, Date.now());
+  while (dismissed.size > DISMISS_MAX) dismissed.delete(dismissed.keys().next().value!);
+  saveDismissed();
+  const sel = world.selected ? world.instances.get(world.selected) : undefined;
+  if (sel?.run === runId) world.selected = null;
+  notify();
+}
+/** Show the given runs again (all dismissed ones when omitted). */
+export function undismissRuns(ids?: string[]) {
+  for (const id of ids ?? [...dismissed.keys()]) dismissed.delete(id);
+  saveDismissed();
+  notify();
+}
+/** Dismissed runs that are still in the world (the HUD's "N hidden" chip). */
+export const dismissedRuns = (): string[] => [...world.runs.keys()].filter((id) => dismissed.has(id));
+function undismissOnActivity(ev: WorldEvent) {
+  const id = (ev as { run_id?: string }).run_id;
+  const at = id ? dismissed.get(id) : undefined;
+  if (at === undefined) return;
+  // not activity: the run's own idle / end / relabel notices
+  if (ev.type === "run" && ev.status !== "started" && ev.status !== "active") return;
+  if (typeof ev.ts === "number" && ev.ts > at) {
+    dismissed.delete(id!);
+    saveDismissed();
+  }
+}
+
 export function isStale(r: Run | undefined, now = performance.now(), wall = Date.now()): boolean {
   if (!r || r.status !== "started" || now - r.lastEventAt < STALE_QUIET_MS) return false;
   const overdue = (w: Wait | null | undefined) => !!w && !!w.until && wall - w.until > STALE_GRACE_MS;
@@ -359,9 +501,20 @@ export function stepChips(r: Run, max = MAX_STEP_CHIPS): { shown: StepName[]; mo
   const cut = n > max ? max - 1 : n; // the "+N" chip takes the last place
   return { shown: r.stepOrder.slice(0, cut), more: n - cut };
 }
-export type Comet = { id: number; run: string; from: string; to: string; start: number; dur: number; text: string };
+export type Comet = { id: number; run: string; from: string; to: string; start: number; dur: number; text: string; failed?: boolean };
+/** a failed comet (a publish that raised) sputters out half way: it stalls here and is gone at FIZZLE_END of its life */
+export const FIZZLE_STALL = 0.55;
+export const FIZZLE_END = 0.8;
+/** path parameter (0..1, before a theme's easing) of a comet: a failed one decelerates to the midpoint and stops */
+export function cometPos(c: Comet, now = performance.now()): number {
+  const u = Math.max(0, (now - c.start) / c.dur);
+  return c.failed ? 0.5 * Math.min(1, u / FIZZLE_STALL) : Math.min(1, u);
+}
+/** the comet head is still drawn (a failed one never arrives: no arrival flash) */
+export const cometOn = (c: Comet, now = performance.now()) => (now - c.start) / c.dur < (c.failed ? FIZZLE_END : 1);
 /** External MCP servers agents call (persistent "satellites"; registered on first use). */
-export type McpResource = { name: string; kind: ResourceKind; activeAt: number; inflight: number; calls: number };
+/** `kind` = the shape themes draw (shapeKind), `sub` = the reported kind (model, gpu, worker, cache, ...) */
+export type McpResource = { name: string; kind: ShapeKind; sub: ResourceKind; activeAt: number; inflight: number; calls: number };
 export type McpServer = { name: string; color: string; slot: number; activeAt: number; calls: number; inflight: number; resources: Map<string, McpResource> };
 /** One MCP request/response: a packet flying instance → server ("call") or server → instance ("result"). */
 export type McpCall = { id: number; run: string; instance: string; server: string; tool: string; resource?: string; phase: "call" | "result"; start: number; dur: number };
@@ -417,7 +570,7 @@ export const world = {
   /** MCP tool name -> the server it was last called on (a guard deny on that tool flashes the line to it) */
   mcpTools: new Map<string, string>(),
   ticker: [] as WorldEvent[],
-  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0, decisions: 0, decisionMs: 0 },
+  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0, decisions: 0, decisionMs: 0, requests: 0, errors: 0, rejected: 0 },
   /** decisions per provider (jev / laya / llm ...): count + summed latency (HUD chip tooltip) */
   decisionProviders: new Map<string, { n: number; ms: number }>(),
   /** session-wide decision rate (HUD): last full second's rate, deny share, p50/p95, 60 s sparkline (per second) */
@@ -454,7 +607,23 @@ export const world = {
   unauthorized: false,
   /** desk-wide halts (global-scope guard denies, see Halt), keyed by the owning agent */
   halts: new Map<string, Halt>(),
+  /** transient dashed edges: fallbacks and completed deferred callbacks (prims.ts) */
+  primEdges: [] as PrimEdge[],
+  /** broker backlog per topic (prims.ts) */
+  backlogs: new Map<string, Backlog>(),
+  /** resource stats (pools, caches, models) keyed `server|resource` */
+  resStats: new Map<string, ResStat>(),
+  /** message topics between two services (`mkt:tick` feed -> worker), keyed `from|to|topic`: a persistent edge */
+  topics: new Map<string, SvcTopic>(),
+  /** service -> agent run it drives (`drives`), keyed `svc|run` */
+  drives: new Map<string, { svc: string; run: string }>(),
 };
+
+/** A topic between two services: first / last message (performance.now()), messages seen, the last one failed. */
+export type SvcTopic = { from: string; to: string; topic: string; first: number; at: number; n: number; failed: boolean };
+/** a topic edge stays drawn this long after its last message */
+export const TOPIC_STALE_MS = 15_000;
+const TOPICS_MAX = 64;
 
 /**
  * A desk-wide halt: a guard decision with `scope: "global"` (docs/SPEC.md "Decisions") said no, e.g. a kill switch.
@@ -580,7 +749,7 @@ function admitHv(d: DecisionUse, now: number): boolean {
   return true;
 }
 /** high-frequency event types: no immediate React notify (the HUD catches up within HUD_NOTIFY_MS) */
-const QUIET = new Set(["decision", "decision_stats", "order"]);
+const QUIET = new Set(["decision", "decision_stats", "order", "request", "service_stats", "drives", ...PRIM_QUIET]);
 const HUD_NOTIFY_MS = 250;
 let dirty = false;
 let notifiedAt = 0;
@@ -589,16 +758,20 @@ export function apply(ev: WorldEvent) {
   const now = performance.now();
   const evRun = "run_id" in ev ? world.runs.get(ev.run_id as string) : undefined;
   if (evRun) evRun.lastEventAt = now;
+  if ("run_id" in ev && dismissed.size) undismissOnActivity(ev);
   // stats windows are not log lines (the halo shows them); everything else goes to the event log
-  if (ev.type !== "mcp_register" && ev.type !== "decision_stats") {
+  if (ev.type !== "mcp_register" && ev.type !== "decision_stats" && ev.type !== "service_stats" && ev.type !== "drives" && !PRIM_NO_LOG.has(ev.type) && !(ev.type === "session" && ev.phase === "progress")) {
     world.ticker.unshift(ev);
     if (world.ticker.length > 60) world.ticker.length = 60;
   }
+  if (PRIM_TYPES.has(ev.type)) applyPrim(world, ev as PrimWorldEvent, now);
   switch (ev.type) {
     case "run": {
       if (ev.status === "renamed") {
         const r = world.runs.get(ev.run_id);
         if (r) r.topic = ev.topic; // e.g. a Claude Code session /rename: label only, run state untouched
+      } else if (ev.status === "idle" || ev.status === "active") {
+        if (evRun) evRun.idleSince = ev.status === "idle" ? ev.since || ev.ts || Date.now() : 0;
       } else if (ev.status === "started") {
         const slot = freeSlot();
         world.runs.set(ev.run_id, {
@@ -620,6 +793,7 @@ export function apply(ev: WorldEvent) {
           lastDone: "",
           final: "",
           lastEventAt: now,
+          idleSince: 0,
         });
         world.stats.runs++;
       } else {
@@ -628,6 +802,7 @@ export function apply(ev: WorldEvent) {
           r.status = ev.status;
           r.endedAt = now;
         }
+        for (const [k, d] of world.drives) if (d.run === ev.run_id) world.drives.delete(k);
         // the run ended: its finished (dimmed) agents and any stragglers fade out together
         for (const i of world.instances.values()) if (i.run === ev.run_id && !i.exitAt) i.exitAt = now;
       }
@@ -641,7 +816,7 @@ export function apply(ev: WorldEvent) {
       const was = r.steps[ev.step];
       const status = ev.status === "waiting" ? "running" : ev.status; // waiting = running but paused
       r.steps[ev.step] = status; // a retry just overwrites: failed → running → done
-      if (ev.status === "waiting") r.waits[ev.step] = { reason: ev.reason || "wait", until: ev.until ?? 0 };
+      if (ev.status === "waiting") r.waits[ev.step] = waitOf(ev);
       else delete r.waits[ev.step];
       if (status === "done") r.lastDone = ev.step;
       if (status === "running" && was !== "running") {
@@ -690,6 +865,7 @@ export function apply(ev: WorldEvent) {
         orders: [],
         chat: [],
         wait: null,
+        ...(ev.job ? { job: { since: ev.since ?? ev.ts, end: 0 } } : {}),
       });
       world.stats.spawned++;
       world.focus = ev.id;
@@ -702,6 +878,10 @@ export function apply(ev: WorldEvent) {
         i.status = ev.status;
         i.wait = null;
         i.doneAt = now;
+        if (i.job) {
+          i.job.end = ev.ts;
+          i.flash = { at: now, ok: ev.status === "done" };
+        }
         // stays dimmed until its run ends; no known (or an already ended) run, or a subagent replayed (e.g. on
         // page refresh) already genuinely old in real wall-clock time: fade right away instead of waiting again.
         // ev.ts and Date.now() are both real epoch ms (backend's now_ms() = time.time()*1000) - safe to compare
@@ -722,7 +902,7 @@ export function apply(ev: WorldEvent) {
       const i = world.instances.get(ev.id);
       if (i) {
         i.status = ev.status;
-        i.wait = ev.status === "waiting" && ev.reason ? { reason: ev.reason, until: ev.until ?? 0 } : null;
+        i.wait = ev.status === "waiting" && ev.reason ? waitOf(ev) : null;
       }
       if (ev.status === "thinking") {
         world.focus = ev.id;
@@ -744,7 +924,19 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "message":
-      world.comets.push({ id: ++seq, run: ev.run_id, from: ev.from_id, to: ev.to_id, start: now, dur: 1300, text: ev.text });
+      svcTraffic(world.instances.get(ev.from_id), now);
+      if (ev.to_id) svcTraffic(world.instances.get(ev.to_id), now);
+      if (ev.from_id !== ev.to_id && ev.from_id.startsWith("svc:") && ev.to_id?.startsWith("svc:")) {
+        const key = `${ev.from_id}|${ev.to_id}|${ev.text}`;
+        const t = world.topics.get(key);
+        if (t) (t.at = now), t.n++, (t.failed = !!ev.failed);
+        else {
+          if (world.topics.size >= TOPICS_MAX) world.topics.delete(world.topics.keys().next().value!);
+          world.topics.set(key, { from: ev.from_id, to: ev.to_id, topic: ev.text, first: now, at: now, n: 1, failed: !!ev.failed });
+        }
+      }
+      // a failed publish: a short comet flagged `failed` (it sputters out half way, Fizzle.tsx)
+      world.comets.push({ id: ++seq, run: ev.run_id, from: ev.from_id, to: ev.to_id || ev.from_id, start: now, dur: ev.failed ? 700 : 1300, text: ev.text, ...(ev.failed ? { failed: true } : {}) });
       world.focus = ev.to_id;
       world.focusAt = now;
       break;
@@ -872,6 +1064,69 @@ export function apply(ev: WorldEvent) {
       }
       break;
     }
+    case "request": {
+      // an individual request pulses the service, an error flashes its halo red (counted by `service_stats`)
+      const i = world.instances.get(ev.id);
+      if (ev.rejected) noteRejected(world, i, ev.status ? `${ev.status}` : "busy", now);
+      if (!i) break;
+      svcTraffic(i, now);
+      i.pulse = Math.max(i.pulse * Math.exp(-((now - i.pulseAt) / 1000) * 2.2), ev.error ? 1.2 : 0.7);
+      i.pulseAt = now;
+      if (ev.error && !ev.rejected) {
+        if (!i.hv) i.hv = { at: now, bump: 0, bumpDeny: false, rate: 0, deny: 0, p50: ev.ms, p95: ev.ms, seg: SEG_SCRATCH.map(() => 0), provider: "", n: 0, windows: 0, unit: ev.kind === "http" ? "req" : "msg" };
+        i.hv.bump = now;
+        i.hv.bumpDeny = true;
+      }
+      break;
+    }
+    case "service_stats": {
+      // every request is counted here (the backend sends a window for each second with requests)
+      world.stats.requests += ev.n;
+      world.stats.errors += ev.errors;
+      const i = world.instances.get(ev.id);
+      if (!i) break;
+      if (ev.n > 0 || ev.inflight) svcTraffic(i, now);
+      if (ev.inflight !== undefined && i.hv) i.hv.inflight = ev.inflight;
+      if (ev.n <= 0) {
+        // only long requests in flight: keep the halo (and its `N in flight` label) up
+        if (!ev.inflight) break;
+        if (i.hv) i.hv.at = now;
+        else i.hv = { at: now, bump: 0, bumpDeny: false, rate: 0, deny: 0, p50: 0, p95: 0, seg: SEG_SCRATCH.map((_, k) => (k === 8 ? 1 : 0)), provider: "msg", n: 0, windows: 0, unit: "msg", inflight: ev.inflight };
+        break;
+      }
+      const c = ev.codes;
+      const http = Object.keys(c).length > 0;
+      const ok = http ? (c["1xx"] ?? 0) + (c["2xx"] ?? 0) + (c["3xx"] ?? 0) : ev.n - ev.errors;
+      const seg = SEG_SCRATCH.fill(0);
+      // halo arc: ok green, 5xx / errors red, 4xx amber, anything else grey
+      seg[0] = ok;
+      seg[1] = http ? c["5xx"] ?? 0 : ev.errors;
+      seg[3] = (c["4xx"] ?? 0) + (c["rejected"] ?? 0); // rejected (admission / backpressure): amber, never in 5xx
+      seg[8] = Math.max(0, ev.n - seg[0] - seg[1] - seg[3]);
+      const tot = seg.reduce((x, y) => x + y, 0) || 1;
+      const rate = (ev.n * 1000) / Math.max(1, ev.window_ms);
+      const deny = ev.errors / ev.n;
+      const unit = http ? "req" : "msg";
+      const h = i.hv;
+      if (!h || now - h.at > HV_QUIET_MS + HV_FADE_MS || !h.unit) {
+        i.hv = { at: now, bump: h?.bump ?? 0, bumpDeny: h?.bumpDeny ?? false, rate, deny, p50: ev.p50_ms, p95: ev.p95_ms, seg: seg.map((x) => x / tot), provider: unit, n: ev.n, windows: h ? h.windows : 0, unit, inflight: ev.inflight ?? h?.inflight };
+      } else {
+        const k = HV_ALPHA;
+        h.at = now;
+        h.rate += (rate - h.rate) * k;
+        h.deny += (deny - h.deny) * k;
+        h.p50 += (ev.p50_ms - h.p50) * k;
+        h.p95 += (ev.p95_ms - h.p95) * k;
+        for (let j = 0; j < seg.length; j++) h.seg[j] += (seg[j] / tot - h.seg[j]) * k;
+        h.n = ev.n;
+        h.unit = unit;
+        h.windows++;
+      }
+      i.hv!.instances = ev.instances ?? 1; // replicas of this service (`×2` on the halo label)
+      i.svcN = (i.svcN ?? 0) + ev.n;
+      i.svcErr = (i.svcErr ?? 0) + ev.errors;
+      break;
+    }
     case "order": {
       world.orders.n++;
       if (ev.dry_run) world.orders.paper++;
@@ -912,7 +1167,8 @@ export function apply(ev: WorldEvent) {
       if (ev.resource) {
         res = srv.resources.get(ev.resource);
         if (!res) {
-          res = { name: ev.resource, kind: ev.resource_kind ?? world.mcpRegistry.get(ev.server)?.get(ev.resource) ?? "api", activeAt: now, inflight: 0, calls: 0 };
+          const sub = ev.resource_kind ?? world.mcpRegistry.get(ev.server)?.get(ev.resource) ?? "api";
+          res = { name: ev.resource, kind: shapeKind(sub), sub, activeAt: now, inflight: 0, calls: 0 };
           srv.resources.set(ev.resource, res);
         }
         res.activeAt = now;
@@ -944,6 +1200,9 @@ export function apply(ev: WorldEvent) {
       if (i) i.chat = [...i.chat, { role: ev.role, text: ev.text }].slice(-20);
       break;
     }
+    case "drives":
+      world.drives.set(`${ev.id}|${ev.target_run}`, { svc: ev.id, run: ev.target_run });
+      break;
     case "final": {
       const r = world.runs.get(ev.run_id);
       if (r) r.final = ev.text;
@@ -951,7 +1210,7 @@ export function apply(ev: WorldEvent) {
       break;
     }
   }
-  const id = ev.type === "decision_stats" ? null : "id" in ev ? ev.id : ev.type === "message" ? ev.from_id : null;
+  const id = ev.type === "decision_stats" || ev.type === "service_stats" || PRIM_NO_LOG.has(ev.type) || (ev.type === "session" && ev.phase === "progress") ? null : "id" in ev ? ev.id : ev.type === "message" ? ev.from_id : null;
   if (id) {
     const i = world.instances.get(id);
     if (i) {
@@ -1000,6 +1259,7 @@ function expireSkills(i: Instance, now: number) {
 }
 
 const staleRuns = new Set<string>();
+let idleKey = "";
 let staleCheckAt = 0;
 
 export function tick(now = performance.now()) {
@@ -1007,10 +1267,14 @@ export function tick(now = performance.now()) {
   if (now - staleCheckAt > 1000) {
     // stale runs (isStale) appear without any event: notify the HUD / labels when one flips
     staleCheckAt = now;
+    let idle = "";
     for (const r of world.runs.values()) {
       const st = isStale(r, now);
       if (st !== staleRuns.has(r.id)) (st ? staleRuns.add(r.id) : staleRuns.delete(r.id)), (changed = true);
+      if (isIdle(r)) idle += `${r.id} ${idleText(r)}\n`;
     }
+    // "idle · 4m" labels count up without events
+    if (idle !== idleKey) (idleKey = idle), (changed = true);
   }
   if (dirty && now - notifiedAt >= HUD_NOTIFY_MS) changed = true;
   runsWithInstances.clear();
@@ -1043,6 +1307,7 @@ export function tick(now = performance.now()) {
       changed = true;
     }
   }
+  tickPrims(world, now);
   const nc = world.comets.length;
   world.comets = world.comets.filter((c) => now - c.start < c.dur + 250);
   world.mcpResolved = world.mcpResolved.filter((r) => now - r.resolvedAt < 700);
@@ -1160,6 +1425,11 @@ export function resetWorld() {
   world.graphAt = 0;
   world.halts.clear();
   globalBy.clear();
+  world.primEdges.length = 0;
+  world.backlogs.clear();
+  world.resStats.clear();
+  world.topics.clear();
+  world.drives.clear();
   notify();
 }
 

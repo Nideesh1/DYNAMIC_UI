@@ -11,7 +11,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, energy, lingerMs, presence, world, type Comet } from "../shared/world";
+import { TYPE_COLOR, energy, lingerMs, presence, world, type Comet, jobText, cometOn, cometPos } from "../shared/world";
 import { isExpanded, lod, showLabel } from "../shared/lod";
 import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
@@ -217,6 +217,7 @@ export function Soma({ agent, onSelect }: AgentSlotProps) {
           <Label3D
             ref={label}
             text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
+            live={inst.job ? () => jobText(inst) : null}
             color={TYPE_COLOR[inst.type]}
             size={inst.subagent ? 0.22 : 0.3}
             opacity={0}
@@ -256,9 +257,9 @@ function Pulse({ comet }: { comet: Comet }) {
     s.b.copy(pb);
     if (ctrlChild) s.c.copy(ctrlChild);
     else bowControl(s.a, s.b, 1.2, s.c);
-    const t = clamp01((performance.now() - comet.start) / comet.dur);
+    const t = cometPos(comet);
     bezier(s.a, s.c, s.b, easeInOut(t), s.h);
-    head.current.visible = t < 1;
+    head.current.visible = cometOn(comet);
     head.current.position.copy(s.h);
     head.current.scale.setScalar(1.1);
   });
@@ -277,8 +278,9 @@ export function Pulses() {
       k.n = c.length;
       k.first = first;
       k.last = last;
-      // collapsed agents have no soma: only pulse between drawn neurons
-      setList(lod.grouped ? c.filter((x) => isExpanded(x.from) && isExpanded(x.to)) : c.slice());
+      // collapsed agents have no soma: only pulse between drawn neurons; service -> service messages ride the kit's
+      // topic edge (ServiceLinks: labelled, rate-limited comets), not a synapse
+      setList(c.filter((x) => !(x.from.startsWith("svc:") && x.to.startsWith("svc:") && !x.failed) && (!lod.grouped || (isExpanded(x.from) && isExpanded(x.to)))));
     }
   });
   return (

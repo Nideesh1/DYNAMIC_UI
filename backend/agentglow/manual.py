@@ -19,7 +19,6 @@ UI after the secret scrub: do not put PHI/PII in it.
 from __future__ import annotations
 
 import contextvars
-import functools
 import inspect
 import json
 import time
@@ -28,6 +27,7 @@ from typing import Any, Callable
 from opentelemetry import baggage, context, trace
 from opentelemetry.trace import Status, StatusCode
 
+from .dual import DualUse, decorate, is_target, rebuild
 from .scope import KEY as SCOPE_KEY
 
 _TRACER_NAME = "agentglow.manual"
@@ -57,8 +57,9 @@ def _preview(v: Any) -> str:
         return str(v)
 
 
-class _Span:
-    """Context-managed span (sync `with` and `async with`). Attributes are all set at start (live view)."""
+class _Span(DualUse):
+    """Context-managed span (sync `with` and `async with`; also a decorator when built by a factory, dual.py).
+    Attributes are all set at start (live view)."""
 
     _name = "span"
 
@@ -207,8 +208,8 @@ class Agent(_Span):
     def decision(self, kind: str, question: str, **kw: Any) -> "Decision":
         return decision(kind, question, parent=self, **kw)
 
-    def decided(self, kind: str, question: str, result: Any, p: float | None = None, **kw: Any) -> None:
-        decided(kind, question, result, p, parent=self, **kw)
+    def decided(self, kind: str, question: str, result: Any, p: float | None = None, **kw: Any) -> "Decision":
+        return decided(kind, question, result, p, parent=self, **kw)
 
     def order(self, side: str, qty: float, price: float | None = None, **kw: Any) -> None:
         order(side, qty, price, parent=self, **kw)
@@ -239,6 +240,14 @@ class Tool(_Span):
 
 
 DECISION_KINDS = ("choice", "score", "noul")
+
+
+def _float(v: Any) -> float | None:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and abs(f) != float("inf") else None
 MAX_OPTIONS = 5
 
 
@@ -265,14 +274,15 @@ class Decision(_Span):
     def __init__(self, kind: str, question: str, result: Any = None, p: float | None = None, options: Any = None,
                  provider: str = "llm", purpose: str | None = None, target: str | None = None,
                  parent: _Span | None = None, start_ns: int | None = None, important: bool = False,
-                 scope: str | None = None) -> None:
+                 scope: str | None = None, threshold: float | None = None) -> None:
         kind = str(kind).lower()
         super().__init__(f"decision {kind}", {"agentglow.decision": kind, "agentglow.decision.question": question,
                                               "agentglow.decision.provider": provider,
                                               "agentglow.decision.purpose": purpose,
                                               "agentglow.decision.target": target,
                                               "agentglow.decision.important": True if important else None,
-                                              "agentglow.decision.scope": scope},
+                                              "agentglow.decision.scope": scope,
+                                              "agentglow.decision.threshold": _float(threshold)},
                          parent=parent, start_ns=start_ns)
         self.kind = kind
         self._attrs.update(self._outcome(result, p, options))
@@ -294,27 +304,52 @@ class Decision(_Span):
         for k, v in {**self._outcome(result, p, options), "agentglow.decision.target": target}.items():
             self.set(k, v)
 
+    def _returned(self, value: Any) -> None:
+        """Decorator use (`@agentglow.decision(...)`): the function's return value is the decision. bool -> yes/no;
+        (result, p) -> both; {"result", "p", "options"} -> those; None -> nothing; anything else -> str(value)."""
+        if value is None:
+            return
+        result, p, options = value, None, None
+        if isinstance(value, tuple) and len(value) == 2:
+            result, p = value
+        elif isinstance(value, dict) and any(k in value for k in ("result", "p", "options")):
+            result, p, options = value.get("result"), value.get("p"), value.get("options")
+        if result is not None and not isinstance(result, bool):
+            result = str(result)[:MAX_RESULT]
+        self.record(result, p, options)
+
+
+MAX_RESULT = 80  # a decorated decision's str(return value) is cut to this many characters
+
 
 # ---------------------------------------------------------------------- public helpers
 def run(topic: str = "run", run_id: str | None = None, scope: str | None = None, workflow: str | None = None) -> Run:
     """`with agentglow.run(topic="Inbound call"):` (or `async with`) - one run in the world view."""
-    return Run(topic, run_id=run_id, scope=scope, workflow=workflow)
+    return rebuild(Run(topic, run_id=run_id, scope=scope, workflow=workflow),
+                   lambda c: Run(topic, run_id=run_id, scope=scope, workflow=workflow))
 
 
-def agent(name: str, final: bool | None = None, task: str | None = None, parent: Agent | None = None) -> Agent:
+def agent(name: Any = None, final: bool | None = None, task: str | None = None, parent: Agent | None = None) -> Agent:
     """`with agentglow.agent("receptionist") as a:` - an agent; inside another agent it is a subagent (`task` = the
-    delegation text shown on the link)."""
-    return Agent(name, final=final, task=task, parent=parent)
+    delegation text shown on the link). Also a decorator: `@agentglow.agent("receptionist")` / `@agentglow.agent`
+    (name = the function's name): each call is one agent span."""
+    if is_target(name):  # bare @agent
+        return agent()(name)
+    return rebuild(Agent(name or "agent", final=final, task=task, parent=parent),
+                   lambda c: Agent(name or c.name, final=final, task=task, parent=parent))
 
 
 def llm(model: str = "llm", tokens_in: int | None = None, tokens_out: int | None = None, parent: _Span | None = None) -> LLM:
     """`with agentglow.llm(model="gpt-realtime") as l: ...; l.set_tokens(812, 64)` - one LLM turn."""
-    return LLM(model, tokens_in, tokens_out, parent=parent)
+    return rebuild(LLM(model, tokens_in, tokens_out, parent=parent), lambda c: LLM(model, tokens_in, tokens_out, parent=parent))
 
 
-def tool(name: str, args: Any = None, parent: _Span | None = None) -> Tool:
-    """`with agentglow.tool("book_appointment", args={...}) as t:` - a tool call on the current agent."""
-    return Tool(name, args, parent=parent)
+def tool(name: Any = None, args: Any = None, parent: _Span | None = None) -> Tool:
+    """`with agentglow.tool("book_appointment", args={...}) as t:` - a tool call on the current agent. Also a
+    decorator: `@agentglow.tool("book")` / `@agentglow.tool` (name = the function's name; arguments NOT recorded)."""
+    if is_target(name):  # bare @tool
+        return tool()(name)
+    return rebuild(Tool(name or "tool", args, parent=parent), lambda c: Tool(name or c.name, args, parent=parent))
 
 
 def mcp(server: str, tool: str | None = None, resource: str | None = None, kind: str = "api", args: Any = None,
@@ -322,45 +357,57 @@ def mcp(server: str, tool: str | None = None, resource: str | None = None, kind:
     """`with agentglow.mcp("clinic-db", tool="query", resource="Postgres", kind="db"):` - an MCP / backend call
     (kind: db, warehouse, spark, api, storage, queue)."""
     name = tool or "call"
-    return Tool(name, args, parent=parent, extra={"agentglow.mcp.server": server, "agentglow.mcp.tool": name,
-                                                  "agentglow.mcp.resource": resource, "agentglow.mcp.resource_kind": kind})
+    extra = {"agentglow.mcp.server": server, "agentglow.mcp.tool": name, "agentglow.mcp.resource": resource,
+             "agentglow.mcp.resource_kind": kind}
+    return rebuild(Tool(name, args, parent=parent, extra=extra), lambda c: Tool(name, args, parent=parent, extra=extra))
 
 
 def graph(op: str = "read", nodes: list | None = None, system: str = "graph", parent: _Span | None = None) -> _Span:
     """`with agentglow.graph("write", nodes=["Patient", "Appointment"]):` - a knowledge-graph / DB read or write."""
-    return _Span(f"db {op}", {"db.system": system, "agentglow.db.op": op,
-                              "agentglow.graph.nodes": [str(n) for n in (nodes or [])] or None}, parent=parent)
+    attrs = {"db.system": system, "agentglow.db.op": op, "agentglow.graph.nodes": [str(n) for n in (nodes or [])] or None}
+    return rebuild(_Span(f"db {op}", attrs, parent=parent), lambda c: _Span(f"db {op}", attrs, parent=parent))
 
 
 def skill(name: str, parent: _Span | None = None) -> Tool:
     """`with agentglow.skill("summarize"):` - the current agent uses a skill (a tool span with `agentglow.skill`:
     a skill badge on the agent while the block runs). Only the name is recorded."""
-    return Tool(name, None, parent=parent, extra={"agentglow.skill": name})
+    return rebuild(Tool(name, None, parent=parent, extra={"agentglow.skill": name}),
+                   lambda c: Tool(name, None, parent=parent, extra={"agentglow.skill": name}))
 
 
 def decision(kind: str, question: str, result: Any = None, p: float | None = None, options: Any = None,
              provider: str = "llm", purpose: str | None = None, target: str | None = None,
-             parent: _Span | None = None, important: bool = False, scope: str | None = None) -> Decision:
+             parent: _Span | None = None, important: bool = False, scope: str | None = None,
+             threshold: float | None = None) -> Decision:
     """`with agentglow.decision("choice", "route", provider="jev", purpose="route") as d: ...; d.record("haiku", 0.92,
     {"haiku": 0.92, "sonnet": 0.07})` - a fast structured decision by the current agent (kind: choice | score | noul;
     purpose: route | guard | check; target: e.g. the tool being gated). Latency = the block's duration.
     `question` is a short name (scrubbed, max 80 chars): do not put PHI/PII in it. `important=True`: always shown
     individually, even when the agent decides so often that its decisions are aggregated (high-volume mode).
-    `scope="global"`: a desk-wide guard (e.g. a kill switch): a `no` halts everything below this agent, shown once."""
-    return Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, important=important,
-                    scope=scope)
+    `scope="global"`: a desk-wide guard (e.g. a kill switch): a `no` halts everything below this agent, shown once.
+    Also a decorator: `@agentglow.decision("noul", "safe?", purpose="guard")` records the function's return value as
+    the outcome (bool -> yes/no; (result, p); {"result", "p", "options"}; else str(value)) and returns it unchanged."""
+    def make(c: Any = None) -> Decision:
+        return Decision(kind, question, result, p, options, provider, purpose, target, parent=parent,
+                        important=important, scope=scope, threshold=threshold)
+    return rebuild(make(), make)
 
 
 def decided(kind: str, question: str, result: Any, p: float | None = None, options: Any = None, provider: str = "llm",
             purpose: str | None = None, target: str | None = None, latency_ms: float = 0,
-            parent: _Span | None = None, important: bool = False, scope: str | None = None) -> None:
-    """Record one finished decision (backdated by `latency_ms`), e.g. after `jev.noul(...)` returned."""
+            parent: _Span | None = None, important: bool = False, scope: str | None = None,
+            threshold: float | None = None) -> Decision:
+    """Record one finished decision (backdated by `latency_ms`), e.g. after `jev.noul(...)` returned. `threshold`: the
+    cut-off the result was judged against (shown with the decision, e.g. why a wait was needed). Returns the ended
+    decision (pass it as `wait(..., because=d)` / `approval(..., because=d)`)."""
     start = None
     if latency_ms:  # backdate, but never before the enclosing span started (keeps ended-span replay ordered)
         around = parent.span if parent is not None else trace.get_current_span()
         start = max(time.time_ns() - int(latency_ms * 1e6), getattr(around, "start_time", None) or 0)
-    Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, start_ns=start,
-             important=important, scope=scope).start().end()
+    d = Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, start_ns=start,
+                 important=important, scope=scope, threshold=threshold)
+    d.start().end()
+    return d
 
 
 ORDER_STATUSES = ("would_place", "placed", "filled", "rejected", "cancelled")
@@ -382,48 +429,23 @@ def current_agent() -> Agent | None:
     return _agent.get()
 
 
-def _decorator(make: Callable[[tuple, dict], _Span]):
-    def wrap(fn):
-        if inspect.iscoroutinefunction(fn):
-            @functools.wraps(fn)
-            async def aw(*args, **kwargs):
-                async with make(args, kwargs):
-                    return await fn(*args, **kwargs)
-            return aw
-
-        @functools.wraps(fn)
-        def w(*args, **kwargs):
-            with make(args, kwargs):
-                return fn(*args, **kwargs)
-        return w
-    return wrap
-
-
 def traced_agent(name: str | Callable | None = None, final: bool | None = None):
-    """`@agentglow.traced_agent("receptionist")` on a sync or async function: each call is an agent span."""
-    if callable(name):  # bare @traced_agent
-        return traced_agent(None)(name)
-
-    def deco(fn):
-        return _decorator(lambda a, k: Agent(name or fn.__name__, final=final))(fn)
-    return deco
+    """`@agentglow.traced_agent("receptionist")` on a sync or async function: each call is an agent span. Same as
+    `@agentglow.agent(...)` (kept as an alias)."""
+    return agent(name, final=final)
 
 
 def traced_tool(name: str | Callable | None = None, capture_args: bool = False):
     """`@agentglow.traced_tool("lookup_patient")` on a sync or async function: each call is a tool span. Arguments
-    are recorded only with `capture_args=True` (they may hold PHI/PII)."""
-    if callable(name):  # bare @traced_tool
-        return traced_tool(None)(name)
+    are recorded only with `capture_args=True` (they may hold PHI/PII). Without it, same as `@agentglow.tool(...)`."""
+    if not capture_args:
+        return tool(name)
 
-    def deco(fn):
-        def make(a, k):
-            args = None
-            if capture_args:
-                try:
-                    bound = inspect.signature(fn).bind_partial(*a, **k)
-                    args = {n: v for n, v in bound.arguments.items() if n not in ("self", "cls")}
-                except TypeError:
-                    args = {"args": list(a), **k}
-            return Tool(name or fn.__name__, args)
-        return _decorator(make)(fn)
-    return deco
+    def make(c: Any) -> Tool:
+        try:
+            bound = inspect.signature(c.fn).bind_partial(*c.args, **c.kwargs)
+            args = {n: v for n, v in bound.arguments.items() if n not in ("self", "cls")}
+        except TypeError:
+            args = {"args": list(c.args), **c.kwargs}
+        return Tool(name or c.name, args)
+    return lambda fn: decorate(fn, make)

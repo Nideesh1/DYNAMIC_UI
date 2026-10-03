@@ -11,7 +11,7 @@
 import * as THREE from "three";
 import { clusterOf, isExpanded, isRunExpanded, LOD_LANES, lod } from "../lod";
 import { alt, jit } from "../spread";
-import { graphMix, graphShown, isDone, mcpWanted, roleScale, world, type AgentType, type Instance } from "../world";
+import { IDLE_DIM, graphMix, graphShown, isDone, isIdle, mcpWanted, roleScale, svcIdle, world, type AgentType, type Instance } from "../world";
 import { fit, fitTick } from "./fit";
 import { radial, type LayoutPreset, type Point2, type PresetCtx, type Slot2 } from "./presets";
 import { kit, nextUid, planePoint, reduced, type KitAgent, type KitBackend, type KitMcp, type KitRun } from "./state";
@@ -79,6 +79,7 @@ function mkRun(id: string): KitRun {
     members: 0,
     foot: 0,
     tops: 0,
+    svc: 0,
     u0: 0,
     u1: 0,
     v0: 0,
@@ -132,6 +133,8 @@ function mkAgent(inst: Instance): KitAgent {
     sib,
     sibs: 1,
     kidsMax: 0,
+    kidsHi: 0,
+    kidsLowAt: 0,
     kidFoot: 0,
     foot: 0,
     rx: 0,
@@ -140,6 +143,7 @@ function mkAgent(inst: Instance): KitAgent {
     cell: 0,
     ringOff: 0,
     ringAt: -1,
+    svcIdx: -1,
     fresh: true,
     dim: isDone(inst) ? 1 : 0,
   };
@@ -150,7 +154,10 @@ const kitScale = (inst: Instance, depth: number) => (depth > 0 ? Math.min(roleSc
 /** members of a big top-level ring (a desk's markets) are the main actors on a spread-out screen: a bit bigger */
 const RING_BIG = 6;
 const RING_SCALE = 1.15;
+/** a backend service node (`svc:` top-level): a bit bigger than a run's root agent, it carries a whole process */
+const SVC_SCALE = 1.55;
 function agentScale(a: KitAgent) {
+  if (a.depth === 0 && a.id.startsWith("svc:")) return SVC_SCALE;
   if (a.depth === 1 && a.sibs >= RING_BIG) return RING_SCALE;
   return kitScale(a.inst, a.depth);
 }
@@ -224,7 +231,10 @@ let seenRunsVersion = -1;
 function orderRuns() {
   if (seenRunsVersion === kit.runsVersion && kit.runOrder.length === kit.runs.size) return;
   seenRunsVersion = kit.runsVersion;
-  kit.runOrder = [...kit.runs.values()].sort((a, b) => (a.run?.startedAt ?? 0) - (b.run?.startedAt ?? 0) || (a.id < b.id ? -1 : 1));
+  // backend services runs first: with two runs the first sits on the right, where the MCP servers / backends column
+  // is, so the services group lies between the agent run and the resources its services call
+  const svc = (r: KitRun) => (r.run?.workflow === "services" ? 0 : 1);
+  kit.runOrder = [...kit.runs.values()].sort((a, b) => svc(a) - svc(b) || (a.run?.startedAt ?? 0) - (b.run?.startedAt ?? 0) || (a.id < b.id ? -1 : 1));
 }
 
 // ------------------------------------------------------------------ run-local agent layout
@@ -283,11 +293,27 @@ function sidesUsed() {
   return false;
 }
 
+/** a service's ring shrinks back this long after its tasks / jobs left the outer slots (agent runs never shrink) */
+const SVC_SHRINK_MS = 6000;
+
 function measureRings() {
   const L = config.preset.local;
-  for (const a of kit.agents.values()) a.kidFoot = 0;
-  for (const r of kit.runs.values()) (r.foot = FOOT), (r.tops = 0);
-  for (const a of kit.agents.values()) if (a.depth === 0) a.run.tops++;
+  const now = performance.now();
+  for (const a of kit.agents.values()) (a.kidFoot = 0), (a.kidsHi = 0);
+  for (const a of kit.agents.values()) {
+    const p = a.depth > 0 && a.inst.parent ? kit.agents.get(a.inst.parent) : undefined;
+    if (p) p.kidsHi = Math.max(p.kidsHi, a.sib + 1);
+  }
+  for (const r of kit.runs.values()) (r.foot = FOOT), (r.tops = 0), (r.svc = 0);
+  for (const a of kit.agents.values()) {
+    if (a.depth !== 0) continue;
+    a.run.tops++;
+    a.svcIdx = a.id.startsWith("svc:") ? a.run.svc++ : -1;
+    // a long-lived service's tasks / jobs come and go all day: its ring follows what is there (after a while)
+    if (a.svcIdx < 0 || a.kidsHi >= a.kidsMax) a.kidsLowAt = 0;
+    else if (!a.kidsLowAt) a.kidsLowAt = now;
+    else if (now - a.kidsLowAt > SVC_SHRINK_MS) (a.kidsMax = a.kidsHi), (a.kidsLowAt = 0);
+  }
   for (let d = 6; d >= 0; d--)
     for (const a of kit.agents.values()) {
       if (a.depth !== d && !(d === 6 && a.depth > 6)) continue;
@@ -360,6 +386,7 @@ function ringOffset(p: KitAgent, cnt: number) {
   const gp = p.depth > 0 && p.inst.parent ? kit.agents.get(p.inst.parent) : undefined;
   if (gp) FORBID.push(Math.atan2(gp.v - p.v, gp.u - p.u)), FORBID_W.push(1);
   else if (p.run.tops > 1 || p.run.run?.hasSteps) FORBID.push(0, Math.PI), FORBID_W.push(0.8, 0.8);
+  if (p.inst.hv) FORBID.push(FORBID[0] + Math.PI), FORBID_W.push(1); // its halo label above the ring
   const rx = Math.max(1e-3, p.rx);
   const ry = Math.max(1e-3, p.ry);
   let best = 0;
@@ -381,6 +408,27 @@ function placeLocal(a: KitAgent) {
   const L = config.preset.local;
   const sp = fit.spread;
   const inst = a.inst;
+  if (a.depth === 0 && a.svcIdx >= 0 && a.run.svc > 1) {
+    // backend services (2+): apart on a ring (2 = left | right), each with its own ring of tasks / jobs, so their
+    // halo labels never stack and message comets visibly travel between them
+    const n = a.run.svc;
+    // (two: a long edge so their message comets visibly travel; beside agent runs the group spreads with them, so it
+    // never reads as a tiny cluster next to a big desk ring)
+    const chord = Math.max(L.topGap * (n === 2 ? 3 : 2.4), a.run.foot * 2 + L.topGap, (otherRunSpan(a.run) / sp) * 0.62);
+    const R = chord / (2 * Math.sin(Math.PI / n));
+    // screen angle (x right, y down): 2 = on a slight diagonal (lines from one to the resources at the side never run
+    // through the other), the one that drives agent runs / consumes (worker) towards them, the producer (feed) away,
+    // towards the resources; 3+ = from the top, clockwise; then into the run's frame (a run on a ring of runs is
+    // rotated: screen-down is downAngle there)
+    const th = n === 2 ? svcInward(a) + (svcInner(a) ? 0.32 : Math.PI + 0.32) : -Math.PI / 2 + (a.svcIdx * TAU) / n;
+    const sx = Math.sqrt(THREE.MathUtils.clamp(fit.aspect, 1, 2));
+    const x = Math.cos(th) * R * sx;
+    const y = Math.sin(th) * R;
+    const phi = downAngle(a.run) - Math.PI / 2;
+    a.u = (x * Math.cos(phi) - y * Math.sin(phi)) * sp;
+    a.v = (x * Math.sin(phi) + y * Math.cos(phi)) * sp;
+    return;
+  }
   if (a.depth === 0) {
     // top-level agents of a run on a line (planner | researcher | writer), clear of the biggest one's rings
     const gap = Math.max(L.topGap, a.run.foot + FOOT + 0.8);
@@ -420,6 +468,34 @@ function placeLocal(a: KitAgent) {
   a.v = p.v + dv * sp;
 }
 
+/** widest other (agent) run on screen, stage units (its padded extent) */
+function otherRunSpan(r: KitRun) {
+  let w = 0;
+  for (const o of kit.runs.values()) if (o !== r && o.run?.workflow !== "services" && o.u0 !== Infinity) w = Math.max(w, 2 * Math.max(o.hu, o.hv));
+  return w;
+}
+/** screen angle (x right, y down) from a services run towards the stage centre (the agent runs); left when alone */
+function svcInward(a: KitAgent) {
+  // (from its slot on the ring of runs, not its target: services beside one agent run sit a bit below the line)
+  if (kit.runs.size < 2) return Math.PI;
+  const t = a.run.targetAngle;
+  return Math.atan2(Math.sin(t), -Math.cos(t));
+}
+/** of two services, the one on the agent-run side: it drives an agent run or consumes the other's topic */
+function svcInner(a: KitAgent) {
+  let other: KitAgent | undefined;
+  for (const o of kit.agents.values()) if (o !== a && o.run === a.run && o.svcIdx >= 0) other = o;
+  if (!other) return a.svcIdx === 1;
+  const sc = (id: string) => {
+    let v = 0;
+    for (const d of world.drives.values()) if (d.svc === id) v += 4;
+    for (const t of world.topics.values()) v += t.to === id ? 1 : t.from === id ? -1 : 0;
+    return v;
+  };
+  const sa = sc(a.id), so = sc(other.id);
+  return sa !== so ? sa > so : a.svcIdx === 1;
+}
+
 function layoutAgents() {
   measureRings();
   // depth order: parents before children (depth is small)
@@ -442,6 +518,10 @@ function layoutAgents() {
       r.v1 = Math.max(r.v1, a.v + pd);
     }
   }
+  // a service with a ring: room above it for its halo label (HighVolume puts it over the ring), so the run label
+  // above the run never sits on it
+  for (const a of kit.agents.values())
+    if (a.svcIdx >= 0 && a.rings && a.run.u0 !== Infinity) a.run.v0 = Math.min(a.run.v0, a.v - (a.ry * fit.spread + pad * 2.4));
   // Hatchet runs keep room for all three step roles (the run doesn't slide as planner/writer come and go)
   const tg = config.preset.local.topGap * fit.spread;
   for (const r of kit.runs.values()) {
@@ -507,6 +587,11 @@ function layoutRuns() {
     r.index = i;
     r.count = order.length;
     P.run(i, ctx, slot);
+    if (order.length === 2 && r.run?.workflow === "services" && Math.abs(slot.a) > 1e-3) {
+      // services beside an agent run: a bit below the centre line, so the agents' tethers to the MCP servers (level
+      // with the core) pass above the services group instead of through its topic edge and labels
+      slot.b -= Math.abs(Math.sin(slot.angle)) * r.hv + Math.abs(Math.cos(slot.angle)) * r.hu + 1.5;
+    }
     planePoint(slot.a, slot.b, r.target);
     r.targetAngle = slot.angle;
   }
@@ -713,7 +798,10 @@ export function kitTick(now = performance.now()) {
     }
     const r = a.run;
     a.pos.copy(r.origin).addScaledVector(r.side, a.eu - r.cu).addScaledVector(r.axis, a.ev - r.cv);
-    a.live.copy(a.pos);    const dw = isDone(a.inst) ? 1 : 0;
+    a.live.copy(a.pos);
+    // finished agents dim fully, an idle run's agents part way (server `run idle`), and so does a backend service
+    // with no traffic for a while (world.svcIdle); it brightens again on its next request / message
+    const dw = isDone(a.inst) ? 1 : isIdle(a.run.run) || (a.depth === 0 && svcIdle(a.inst, now)) ? IDLE_DIM : 0;
     a.dim = reduced ? dw : a.dim + (dw - a.dim) * Math.min(1, dt / DIM_S);
   }
   for (const lane of activeLanes) {
@@ -766,6 +854,8 @@ export function kitExtents(visit: (p: THREE.Vector3, r: number) => void, agentRa
     // member is drawn (kidsMax never shrinks), so children coming and going never re-frame the camera
     const kids = a.depth === 1 && a.sibs >= RING_BIG && a.kidsMax > 0 ? (a.foot - FOOT) * fit.spread : 0;
     visit(a.target, agentRadius * a.scale + kids);
+    // the camera keeps the largest agent at a sane on-screen size (FitProfile.maxNode); leaving agents don't count
+    if (!a.inst.exitAt) fit.nodeR = Math.max(fit.nodeR, agentRadius * a.scale);
     // room for its decision label below and its halo label above (px-sized: world size at the fitted distance)
     const r = agentRadius * a.scale * 1.3;
     planePoint(a2(a.target), b2(a.target) - r - (LABEL_BELOW_PX * fit.wpp) / fit.foreshorten, _x);

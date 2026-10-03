@@ -7,7 +7,7 @@
 #   docker compose exec worker uv run python trigger.py --incident   # incident triage demo (see the example README)
 #   docker compose exec worker uv run python trigger.py --vendor     # long-running vendor consolidation demo, then:
 #   curl -X POST localhost:8300/approve                               # approve it (or: trigger.py --approve)
-#   docker compose exec worker uv run python trigger.py --desk       # paper trading desk (fast Jev gates, deepagents analyst)
+#   docker compose exec worker uv run python trigger.py --desk       # FLAGSHIP: paper trading desk (feed -> Redis stream -> worker, Jev gates, deepagents analyst)
 #   ./scripts/gen-obs-env.sh   # only for the langfuse profile: generates its local secrets into .env
 #   LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d     # + Langfuse at :3100 (same spans, side by side)
 #
@@ -91,15 +91,60 @@ services:
     depends_on: [agentglow]
     restart: unless-stopped
 
-  mcp_market:   # `market_data` MCP server (:8205/mcp) → Exchange feed / Tick history DB / NWS forecast API (simulated), trading desk demo
+  mcp_market:   # `market_data` MCP server (:8205/mcp) → Redis (book) / feed API (history) / forecast stub, auto-discovered; trading desk
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
     command: ["uv", "run", "python", "-m", "app.market_mcp_server"]
     environment:
       AGENTGLOW_URL: http://agentglow:8100
       AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
-    depends_on: [agentglow]
+      REDIS_URL: redis://mkt_redis:6379
+      FEED_URL: http://feed:8400
+      FORECAST_URL: http://forecast:8401
+    depends_on: [agentglow, mkt_redis]
     restart: unless-stopped
+
+  # ------------------------------------------------------------------ example: trading desk backend (flagship)
+  feed:         # market data + paper exchange (FastAPI :8400): ticks -> Redis stream `mkt:tick` (FastStream), paper fills -> Postgres `desk`
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["uv", "run", "python", "-m", "app.feed"]
+    environment:
+      AGENTGLOW_URL: http://agentglow:8100
+      AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
+      REDIS_URL: redis://mkt_redis:6379
+      DESK_PG_DSN: postgres://hatchet:hatchet@obs_postgres:5432/desk
+      DESK_TICK_S: ${DESK_TICK_S:-1.0}
+      DESK_OUTAGE_EVERY_S: ${DESK_OUTAGE_EVERY_S:-0}     # feed outage -> kill switch: 0 = once per session, N = every N s, -1 = never
+    depends_on:
+      agentglow: {condition: service_started}
+      mkt_redis: {condition: service_started}
+      desk_db_init: {condition: service_completed_successfully}
+    restart: unless-stopped
+
+  forecast:     # weather forecast API stub (:8401), NOT instrumented: a plain HTTP host the market_data MCP server calls
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["uv", "run", "python", "-m", "app.forecast_stub"]
+    environment:
+      REDIS_URL: redis://mkt_redis:6379
+    depends_on: [mkt_redis]
+    restart: unless-stopped
+
+  mkt_redis:    # the desk's Redis: `mkt:tick` stream, book / history cache, live positions (internal only)
+    image: redis:7.2-alpine
+    restart: unless-stopped
+
+  desk_db_init: # creates the `desk` database (paper orders / fills / positions) in obs_postgres, once
+    image: postgres:15.6
+    environment: [PGPASSWORD=hatchet]
+    entrypoint: >
+      /bin/sh -c "
+      psql -h obs_postgres -U hatchet -d hatchet -tc \"select 1 from pg_database where datname='desk'\" | grep -q 1 || psql -h obs_postgres -U hatchet -d hatchet -c \"create database desk\";
+      echo desk db ready;
+      "
+    depends_on:
+      obs_postgres: {condition: service_healthy}
 
   worker:       # Hatchet worker running the deepagents workflows `agent_smoke`, `incident_triage`, `vendor_consolidation`, `trading_desk`
     image: agentglow-example-deepagents-hatchet:local
@@ -114,6 +159,8 @@ services:
       ERP_MCP_URL: http://mcp_erp:8203/mcp
       EMAIL_MCP_URL: http://mcp_email:8204/mcp
       MARKET_MCP_URL: http://mcp_market:8205/mcp
+      REDIS_URL: redis://mkt_redis:6379     # trading desk: the feed's `mkt:tick` stream (app/ingest.py)
+      FEED_URL: http://feed:8400
       DEMO_SLEEP_S: ${DEMO_SLEEP_S:-20}                 # vendor demo: durable sleep between negotiation rounds
       APPROVAL_TIMEOUT_S: ${APPROVAL_TIMEOUT_S:-1800}   # vendor demo: auto-approve after 30 min
       # trading desk demo (paper only, see the example README): session size, analyst cooldown, human gate, Jev cap
@@ -123,7 +170,6 @@ services:
       DESK_THINK_COOLDOWN_S: ${DESK_THINK_COOLDOWN_S:-30}
       DESK_MAX_ANALYSTS: ${DESK_MAX_ANALYSTS:-3}
       DESK_HUMAN_TIMEOUT_S: ${DESK_HUMAN_TIMEOUT_S:-8}
-      DESK_OUTAGE_EVERY_S: ${DESK_OUTAGE_EVERY_S:-0}     # feed outage -> kill switch: 0 = once per session, N = every N s, -1 = never
       JEV_MAX_RPS: ${JEV_MAX_RPS:-5}                    # hard cap on real Jev requests/s; overflow -> local jev-sim
       DESK_LOOP_DEBUG: ${DESK_LOOP_DEBUG:-0}            # 1: asyncio debug (slow callbacks > 0.25s logged); the loop-lag watchdog is always on
       FALKOR_HOST: falkordb
@@ -156,6 +202,7 @@ services:
       mcp_erp: {condition: service_started}
       mcp_email: {condition: service_started}
       mcp_market: {condition: service_started}
+      feed: {condition: service_started}
       obs_hatchet_engine: {condition: service_started}
       obs_hatchet_token: {condition: service_completed_successfully}
     restart: unless-stopped

@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type LabelSeg } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEP_SLOTS, hash01, slotStatus, stepChips, useWorld, world, type Run } from "../shared/world";
+import { RUN_LINGER_MS, STEP_SLOTS, hash01, idleText, isIdle, slotStatus, stepChips, useWorld, world, type Run } from "../shared/world";
 import type { RunSlotProps } from "../shared/kit";
 import { reduced, runSpin, STEP_ANGLE } from "./layout";
 
@@ -56,7 +56,8 @@ function RunLabel({ run, color }: { run: Run; color: string }) {
     const { shown, more } = stepChips(run);
     for (const s of shown) segs.push({ text: ` ${run.steps[s] === "running" ? "›" : "·"}${s}`, color: STEP_COLOR[run.steps[s]] });
     if (more) segs.push({ text: ` +${more}`, color: STEP_COLOR.queued });
-  } else segs.push({ text: done ? "complete" : "running…", color: "#94a3b8" });
+  } else segs.push({ text: done ? "complete" : isIdle(run) ? idleText(run) : "running…", color: "#94a3b8" });
+  if (run.hasSteps && !done && isIdle(run)) segs.push({ text: `  ${idleText(run)}`, color: "#94a3b8" });
   if (done) segs.push({ text: "  brief ready", color: "#4ade80" });
   return <Label3D text={run.topic} secondary={segs} textColor="#f1f5f9" color={color} size={0.32} maxWidth={9} opacity={done ? 0.65 : 1} fadeMs={300} anchorY="bottom" pxRange={[9.5, 14]} />;
 }

@@ -54,6 +54,11 @@ export type KitAgent = {
   /** where its ring starts (fraction of a step) and the frame that was computed in (layout.ts) */
   ringOff: number;
   ringAt: number;
+  /** a service's ring: highest occupied sibling slot + 1 this frame, and since when it is below kidsMax (layout.ts) */
+  kidsHi: number;
+  kidsLowAt: number;
+  /** backend service agent (`svc:` id, top-level): its slot among the run's services (-1 = not a service) */
+  svcIdx: number;
   /** set false after the first layout (pos snaps to target instead of easing) */
   fresh: boolean;
   /**
@@ -98,6 +103,8 @@ export type KitRun = {
   foot: number;
   /** top-level agents drawn in it (layout.ts) */
   tops: number;
+  /** backend service agents among them (layout.ts): 2+ sit apart on a ring, not on the role line */
+  svc: number;
   /** footprint scratch (internal) */
   u0: number;
   u1: number;

@@ -1,0 +1,38 @@
+# AgentGlow
+
+> Watch AI agents and whole backends live in 3D, from the OpenTelemetry they already emit. A Python server
+> (`agentglow serve`, port 8100) maps spans, Claude Code hooks and flat HTTP events to a 3D scene. One line to
+> instrument: `agentglow.watch()` (LangChain, LangGraph, deepagents, OpenAI Agents SDK, Hatchet, MCP),
+> `agentglow.watch(app=/broker=/mcp=)` (FastAPI, FastStream, FastMCP), `watch()` from `agentglow/node` (Node,
+> Next.js), `npx agentglow setup` (Claude Code). Packages: PyPI `agentglow`, npm `agentglow`. MIT.
+
+## Using AgentGlow
+
+- [Skill (start here)](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/SKILL.md): decision tree and common recipes for agents
+- [Claude Code setup](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/setup-claude-code.md): `npx agentglow setup`, plugin, token counts
+- [Python agents](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/python-agents.md): `watch()`, frameworks, manual API, waits, scopes
+- [Backend services](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/backend-services.md): FastAPI, FastStream, FastMCP, `watch()` arguments, job nodes
+- [Generic primitives](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/primitives.md): session, stage, progress, pool, job, gate, backlog, ...
+- [Node / Next.js](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/node.md): `agentglow/node`, `agentglow/pulse`
+- [HTTP, OTLP, auth](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/events-http.md): `/v1/events`, `/v1/traces`, ingest keys, viewer tokens, endpoints
+- [React embed](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/react-embed.md): `<AgentScene/>` props and themes
+- [Privacy](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/privacy.md): what is kept and dropped
+- [Troubleshooting](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/troubleshooting.md)
+- [Recipes](https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/references/recipes.md): FastAPI + FastStream, deepagents + Hatchet, Next.js BFF, voice sessions, pipelines
+
+## Reference
+
+- [README](https://github.com/Nideesh1/agentglow/blob/main/README.md): overview, get started, primitives, themes, security
+- [SPEC](https://raw.githubusercontent.com/Nideesh1/agentglow/main/docs/SPEC.md): the contract (endpoints, span to world event mapping, attributes, privacy)
+- [Python package README](https://raw.githubusercontent.com/Nideesh1/agentglow/main/backend/README.md)
+- [npm package README](https://raw.githubusercontent.com/Nideesh1/agentglow/main/frontend/README.md): CLI, `<AgentScene/>`, `agentglow/node`
+
+## Examples
+
+- [fastapi-faststream](https://github.com/Nideesh1/agentglow/tree/main/examples/fastapi-faststream): a backend with every primitive, no LLM key
+- [deepagents-hatchet](https://github.com/Nideesh1/agentglow/tree/main/examples/deepagents-hatchet): the docker compose demo stack (trading desk flagship)
+- [node-proxy](https://github.com/Nideesh1/agentglow/tree/main/examples/node-proxy), [custom-loop](https://github.com/Nideesh1/agentglow/tree/main/examples/custom-loop), [quickstart](https://github.com/Nideesh1/agentglow/tree/main/examples/quickstart), [langgraph](https://github.com/Nideesh1/agentglow/tree/main/examples/langgraph), [openai-agents](https://github.com/Nideesh1/agentglow/tree/main/examples/openai-agents), [react-embed](https://github.com/Nideesh1/agentglow/tree/main/examples/react-embed), [claude-code](https://github.com/Nideesh1/agentglow/tree/main/examples/claude-code)
+
+## Contributing
+
+- [CLAUDE.md](https://raw.githubusercontent.com/Nideesh1/agentglow/main/CLAUDE.md): repo layout, tests, conventions, release

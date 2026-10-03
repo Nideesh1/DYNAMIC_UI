@@ -24,7 +24,7 @@ Any LangChain `init_chat_model` spec via `AGENT_MODEL` (key from `.env` or the e
 | `AGENT_MODEL` | Key |
 |---|---|
 | `openai:gpt-5.6-luna` (default) | `OPENAI_API_KEY` |
-| `anthropic:claude-sonnet-5` | `ANTHROPIC_API_KEY` |
+| `anthropic:claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
 | `google_genai:gemini-3.8-flash` | `GEMINI_API_KEY` |
 
 `AGENTGLOW_URL` overrides the server (default `http://localhost:8100`).

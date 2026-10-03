@@ -44,7 +44,9 @@ silence rule are revived (new agent span, same name and parent) if a later event
 
 Hooks may be async (delivered out of order): a PostToolUse seen before its PreToolUse is remembered and the late
 start is emitted already ended; events for an unknown/closed turn are dropped. State is per session, bounded, and
-dangling spans are ended on SessionEnd or after `idle_ms` without events.
+dangling spans are ended on SessionEnd or after `idle_ms` without events (AGENTGLOW_SESSION_IDLE_MIN, default 10: a
+closed terminal fires no SessionEnd). That idle close is an abandoned session: closed like SessionEnd, its run completes
+with `reason` "abandoned"; a later hook of the same session id brings it back at once as a new run (next run number).
 """
 from __future__ import annotations
 
@@ -77,6 +79,7 @@ TRACE_WAIT_MS = 15_000  # hooks+traces: an agent's exit waits this long for its 
 MAX_TRACES = 64
 HOLD_MS = 1000  # a SubagentStart that beat its Agent PreToolUse (async hooks) waits this long for it
 MAX_ORPHANS = 16  # cap on orphaned agents per session: a lost hook can't leak spans forever
+SESSION_IDLE_MIN = 10.0  # default AGENTGLOW_SESSION_IDLE_MIN: a session silent this long was abandoned
 SOURCE_RE = re.compile(r"^agent\.(?:builtin|custom|plugin)\.(.+)$")
 
 
@@ -94,6 +97,15 @@ def run_label(cwd: Any, session: Any = "", ts_ms: int = 0, title: str = "") -> s
     if ts_ms:
         parts.append(time.strftime("%H:%M", time.localtime(ts_ms / 1000)))
     return " · ".join(parts)
+
+
+def env_ms(name: str, default_min: float) -> int:
+    """Env var in minutes (float, e.g. 0.5) -> ms; unset / invalid / negative = `default_min`."""
+    try:
+        v = float(os.environ.get(name) or default_min)
+    except ValueError:
+        v = default_min
+    return int((v if v >= 0 else default_min) * 60_000)
 
 
 def _hex(n: int) -> str:
@@ -232,10 +244,14 @@ class _CT:  # traces-only state for one claude_code.interaction trace
 
 
 class ClaudeCodeAdapter:
-    def __init__(self, idle_ms: int = 30 * 60_000, max_sessions: int = MAX_SESSIONS, capture_prompts: bool = False) -> None:
+    def __init__(self, idle_ms: int | None = None, max_sessions: int = MAX_SESSIONS, capture_prompts: bool = False) -> None:
         self.capture_prompts = capture_prompts
         self.sessions: OrderedDict[str, _Session] = OrderedDict()
-        self.idle_ms = idle_ms
+        # silence that closes a session as abandoned (env AGENTGLOW_SESSION_IDLE_MIN; 30 = the pre-0.4 behavior)
+        self.idle_ms = idle_ms if idle_ms is not None else env_ms("AGENTGLOW_SESSION_IDLE_MIN", SESSION_IDLE_MIN)
+        # closed sessions: session id -> (last run number, abandoned). A later hook continues the numbering (a new run
+        # id, never a reused one); an abandoned session's next hook of any kind opens its new run at once.
+        self.closed: OrderedDict[str, tuple[int, bool]] = OrderedDict()
         self.max_sessions = max_sessions
         self.ended: OrderedDict[str, None] = OrderedDict()  # ended hooks sessions: their late traces are dropped
         self.names: OrderedDict[str, str] = OrderedDict()  # agent_id -> type named by a SubagentStart hook
@@ -252,19 +268,27 @@ class ClaudeCodeAdapter:
         ev = str(p.get("hook_event_name") or "")
         out: list[dict] = []
         s = self.sessions.get(sid)
+        revive = False
         if s is None:
             if ev == "SessionEnd":
                 return out
             s = self.sessions[sid] = _Session(sid, now)
+            n, abandoned = self.closed.pop(sid, (0, False))
+            s.n = n
+            self.ended.pop(sid, None)
             while len(self.sessions) > self.max_sessions:
                 _, old = self.sessions.popitem(last=False)
                 self._close_session(old, now, out)
+                self._note_closed(old)
+            revive = abandoned and ev != "UserPromptSubmit"  # back from abandoned: show it now, whatever the hook
         self.sessions.move_to_end(sid)
         s.last = now
         if p.get("cwd"):
             s.cwd = str(p["cwd"])
         if isinstance(p.get("transcript_path"), str) and p["transcript_path"]:
             s.transcript = p["transcript_path"]
+        if revive:
+            self._open_turn(s, "", now, out)
         aid = p.get("agent_id")
         if aid and str(aid) in s.held and ev != "SubagentStart":  # the subagent is active: show it now
             self._spawn_sub(s, *s.held.pop(str(aid)), now, out)
@@ -313,10 +337,14 @@ class ClaudeCodeAdapter:
                 if not ag.closed:
                     extra = {"agentglow.final": ag.turn.final[:2000], "agentglow.output_text": ag.turn.final[:2000]} if ag.turn.final else {}
                     self._close_agent(ag, now, out, extra, "unset")
-            if now - s.last >= self.idle_ms or (s.ending is not None and now >= s.ending):
+            if s.ending is not None and now >= s.ending:
                 self._close_session(s, now, out)
                 self.sessions.pop(sid, None)
-                self._ended(sid)
+                self._ended(s)
+            elif now - s.last >= self.idle_ms:  # no SessionEnd (terminal closed, process killed): abandoned
+                self._close_session(s, now, out, reason="abandoned")
+                self.sessions.pop(sid, None)
+                self._ended(s, abandoned=True)
         for tr, ct in list(self.ctraces.items()):
             if now - ct.last >= self.idle_ms:
                 self._ct_close(self.ctraces.pop(tr), now, "unset", out)
@@ -525,7 +553,7 @@ class ClaudeCodeAdapter:
             return
         self._close_session(s, now, out)
         self.sessions.pop(s.id, None)
-        self._ended(s.id)
+        self._ended(s)
 
     # ------------------------------------------------------------------ stopped / interrupted subagents
     def _agent_returned(self, s: _Session, tid: str, p: dict, status: str, now: int, out: list) -> None:
@@ -782,7 +810,8 @@ class ClaudeCodeAdapter:
         if ag in s.orphans:
             s.orphans.remove(ag)
 
-    def _stop_turn(self, s: _Session, turn: _Turn, text: str, now: int, out: list, status: str = "ok") -> None:
+    def _stop_turn(self, s: _Session, turn: _Turn, text: str, now: int, out: list, status: str = "ok",
+                   attrs: dict | None = None) -> None:
         """Really close a turn's main agent for good: end its thinking span, close tools and stand-in tasks.
         Used only by _close_session."""
         turn.stopped = True
@@ -799,7 +828,7 @@ class ClaudeCodeAdapter:
         # Really close the main agent
         if turn.main is not None and not turn.main.closed:
             extra = {"agentglow.final": text[:2000], "agentglow.output_text": text[:2000]} if text else {}
-            self._close_agent(turn.main, now, out, extra, status)
+            self._close_agent(turn.main, now, out, {**extra, **(attrs or {})}, status)
             if turn.main in s.orphans:
                 s.orphans.remove(turn.main)
 
@@ -809,7 +838,9 @@ class ClaudeCodeAdapter:
             self._close_agent(item[0], now, out, item[1])
             self._maybe_close_orphan(s, item[0].turn.main, now, out)
 
-    def _close_session(self, s: _Session, now: int, out: list) -> None:
+    def _close_session(self, s: _Session, now: int, out: list, reason: str = "") -> None:
+        """Close everything still open. `reason` (e.g. "abandoned") ends up on the run's `completed` event."""
+        attrs = {"agentglow.run.end_reason": reason} if reason else {}
         # Close any subagents still waiting in s.stopping
         for tid in list(s.stopping):
             self._finish_sub(s, tid, now, out)
@@ -819,13 +850,13 @@ class ClaudeCodeAdapter:
         s.agents.clear()
         # Close the current turn's main if it exists and not yet closed
         if s.turn and s.turn.main is not None and not s.turn.main.closed:
-            self._stop_turn(s, s.turn, s.turn.final, now, out, status="ok")
+            self._stop_turn(s, s.turn, s.turn.final, now, out, status="ok", attrs=attrs)
         s.turn = None
         # Close any orphaned turns' mains (earlier turns left open for background work)
         for ag in list(s.orphans):
             if not ag.closed:
                 extra = {"agentglow.final": ag.turn.final[:2000], "agentglow.output_text": ag.turn.final[:2000]} if ag.turn.final else {}
-                self._close_agent(ag, now, out, extra, "unset")
+                self._close_agent(ag, now, out, {**extra, **attrs}, "unset")
         s.orphans.clear()
 
     # ------------------------------------------------------------------ OTel traces (claude_code.* spans)
@@ -919,12 +950,19 @@ class ClaudeCodeAdapter:
         if s.ending is not None and not self._pending_traces(s):
             self._close_session(s, now, out)
             self.sessions.pop(s.id, None)
-            self._ended(s.id)
+            self._ended(s)
 
-    def _ended(self, sid: str) -> None:
-        self.ended[sid] = None
+    def _ended(self, s: _Session, abandoned: bool = False) -> None:
+        self.ended[s.id] = None
         while len(self.ended) > MAX_DONE_IDS:
             self.ended.popitem(last=False)
+        self._note_closed(s, abandoned)
+
+    def _note_closed(self, s: _Session, abandoned: bool = False) -> None:
+        self.closed[s.id] = (s.n, abandoned)
+        self.closed.move_to_end(s.id)
+        while len(self.closed) > MAX_DONE_IDS:
+            self.closed.popitem(last=False)
 
     # ---- traces only: translate into synthetic live spans
     def _live(self, out: list, trace: str, sid: str, parent: str | None, name: str, t0: int, t1: int | None,

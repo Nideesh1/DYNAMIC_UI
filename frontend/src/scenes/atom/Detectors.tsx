@@ -9,7 +9,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { mcpGlow, waitSeconds, world, type McpCall, type ResourceKind } from "../shared/world";
+import { mcpGlow, waitSeconds, world, type McpCall, type ShapeKind } from "../shared/world";
 import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { AMBER, ARROW_GEO, ArrowPool, CurvePool, RED, TUBE_GEO, WHITE, additive, bezier, bow, clamp01, easeInOut, easeOut, glowSprite, lineMat, reduced, tubeMaterial } from "./fx";
 
@@ -51,7 +51,7 @@ const DET_FILL = new THREE.CylinderGeometry(1.0, 1.0, 1.4, 32, 1, true).rotateX(
 
 type Part = { geo: THREE.BufferGeometry; edges: THREE.BufferGeometry; pos?: [number, number, number]; rot?: [number, number, number] };
 const part = (geo: THREE.BufferGeometry, pos?: [number, number, number], rot?: [number, number, number]): Part => ({ geo, edges: new THREE.EdgesGeometry(geo, 25), pos, rot });
-const KIND_PARTS: Record<ResourceKind, () => Part[]> = {
+const KIND_PARTS: Record<ShapeKind, () => Part[]> = {
   db: () => [part(new THREE.CylinderGeometry(0.4, 0.4, 0.66, 24)), part(new THREE.TorusGeometry(0.4, 0.01, 4, 40), [0, 0.11, 0], [Math.PI / 2, 0, 0])],
   warehouse: () => [-0.28, 0, 0.28].map((y) => part(new THREE.BoxGeometry(0.9, 0.18, 0.55), [0, y, 0])),
   spark: () => [part(new THREE.IcosahedronGeometry(0.42, 0))],

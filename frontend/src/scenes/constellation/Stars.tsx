@@ -13,7 +13,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { TYPE_COLOR, energy, world } from "../shared/world";
+import { TYPE_COLOR, energy, world, jobText, cometOn, cometPos } from "../shared/world";
 import { showLabel } from "../shared/lod";
 import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
@@ -184,6 +184,7 @@ export function Star({ agent, selected, onSelect }: AgentSlotProps) {
         <Label3D
           ref={label}
           text={`${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`}
+            live={inst.job ? () => jobText(inst) : null}
           color={TYPE_COLOR[inst.type]}
           size={inst.subagent ? 0.22 : 0.28}
           letterSpacing={0.02}
@@ -252,8 +253,8 @@ export function Lines() {
       const pa = agentLive(c.from);
       const pb = agentLive(c.to);
       if (!pa || !pb) continue;
-      const u = clamp01((now - c.start) / c.dur);
-      if (u >= 1) continue;
+      const u = cometPos(c, now);
+      if (!cometOn(c, now)) continue;
       const from = world.instances.get(c.from);
       const to = world.instances.get(c.to);
       const lineage = to?.parent === c.from || from?.parent === c.to;

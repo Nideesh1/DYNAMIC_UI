@@ -16,17 +16,17 @@ vendors):
               DEMO_SLEEP_S between rounds (stands in for days waiting on vendor replies), 3 rounds
   report      plan_writer writes the consolidation plan, saves it to FalkorDB (agentglow.final)
 
-Waits are declared for AgentGlow with a span carrying `agentglow.wait` (+ `agentglow.wait.until`, epoch ms), see
-docs/SPEC.md "Waits": the step shows `waiting` (approval / vendor reply) instead of looking stalled.
+Waits are declared for AgentGlow with `agentglow.approval(...)` / `agentglow.wait(...)` (docs/SPEC.md "Waits"): the step
+shows `waiting` (approval / vendor reply) instead of looking stalled; the approval has a title and details in the drawer.
 Agents are compiled in worker.py's lifespan and reached via ctx.lifespan.
 """
 import os
 import re
-import time
-from contextlib import contextmanager
 from datetime import timedelta
 
 from . import config  # noqa: F401  (must be first: Hatchet env)
+
+import agentglow
 
 from hatchet_sdk import ConcurrencyExpression, ConcurrencyLimitStrategy, Context, DurableContext
 from hatchet_sdk.conditions import SleepCondition, UserEventCondition, or_
@@ -37,7 +37,7 @@ from typing_extensions import NotRequired
 
 from . import decide
 from .config import APPROVAL_TIMEOUT_S, DEMO_SLEEP_S, MODEL
-from .erp_mcp_server import CATEGORIES, VENDORS
+from .erp_mcp_server import _BY_VENDOR, CATEGORIES, VENDORS
 from .tools import tool_context
 from .workflow import hatchet, text_of
 
@@ -121,12 +121,9 @@ def step_span(topic: str):
     return span
 
 
-@contextmanager
 def waiting(reason: str, seconds: float):
     """Declare a wait for AgentGlow (docs/SPEC.md "Waits"): the step shows `waiting` with a reason and deadline."""
-    until_ms = int((time.time() + seconds) * 1000)
-    with tracer.start_as_current_span(f"wait {reason}", attributes={"agentglow.wait": reason, "agentglow.wait.until": until_ms}) as span:
-        yield span
+    return agentglow.wait(reason, timeout_s=seconds)
 
 
 async def _ask(ctx: Context, agent: str, step: str, prompt: str, limit: int = 40) -> str:
@@ -195,7 +192,12 @@ async def approval(input: VendorInput, ctx: DurableContext) -> dict:
     run_id = ctx.workflow_run_id
     # an agent-shaped span so the 3D view has someone standing at the gate while the step waits
     with tracer.start_as_current_span("approver", attributes={"agentglow.agent": "approver", "agentglow.run.topic": input.topic}):
-        with waiting("approval", APPROVAL_TIMEOUT_S):
+        shortlist = ctx.task_output(analyze).get("shortlist") or []
+        spend = sum(_BY_VENDOR[v.lower()][2] for v in shortlist if v.lower() in _BY_VENDOR)
+        # a human approval: listed under "Needs you" with Approve / Reject and a details drawer (title + details)
+        with agentglow.approval("approval", timeout_s=APPROVAL_TIMEOUT_S, title=f"Negotiate with {len(shortlist)} vendors",
+                                details={"vendors": len(shortlist), "shortlist_spend_usd": spend,
+                                         "categories": len(CATEGORIES), "rounds": ROUNDS}):
             res = await ctx.aio_wait_for(
                 "vendor-approval",
                 or_(

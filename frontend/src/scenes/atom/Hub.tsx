@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, runStepsLine, type LabelSeg } from "../shared/Label3D";
-import { RUN_LINGER_MS, STEP_SLOTS, hash01, slotStatus, isLive, useWorld, world, type Run } from "../shared/world";
+import { RUN_LINGER_MS, STEP_SLOTS, hash01, idleText, isIdle, slotStatus, isLive, useWorld, world, type Run } from "../shared/world";
 import { fit, kit, runLocal, type KitRun, type RunSlotProps } from "../shared/kit";
 import { AMBER, BLUE, ICE, PINK, WHITE, additive, clamp01, easeOut, glowSprite, hubs, reduced, runTops } from "./fx";
 
@@ -183,5 +183,6 @@ function RunLabel({ run, color }: { run: Run; color: string }) {
   for (const i of world.instances.values()) if (i.run === run.id && isLive(i)) n++;
   const sub: LabelSeg[] = run.hasSteps ? [...(runStepsLine(run, { base: "#9fb3d1", current: "#ffc24a", done: "#cfe9ff" }) as LabelSeg[])] : [{ text: "nucleus", color: "#9fb3d1" }];
   sub.push({ text: done ? " · complete" : ` · ${n} e-`, color: "#9fb3d1" });
+  if (!run.hasSteps && isIdle(run)) sub.push({ text: ` · ${idleText(run)}`, color: "#9fb3d1" });
   return <Label3D text={run.topic} secondary={sub} color={color} size={0.32} secondarySize={0.25} maxWidth={10} opacity={done ? 0.5 : 0.95} fadeMs={400} anchorY="bottom" pxRange={[10, 14]} />;
 }

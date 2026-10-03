@@ -51,9 +51,11 @@ def otlp_proto_spans(body: bytes) -> list[dict]:
     req.ParseFromString(body)
     out = []
     for rs in req.resource_spans:
+        service = next((_any_value(kv.value) for kv in rs.resource.attributes if kv.key == "service.name"), None)
+        instance = next((_any_value(kv.value) for kv in rs.resource.attributes if kv.key == "service.instance.id"), None)
         for ss in rs.scope_spans:
             for sp in ss.spans:
-                out.append({
+                out.append(_extra({
                     "trace_id": sp.trace_id.hex(),
                     "span_id": sp.span_id.hex(),
                     "parent_span_id": sp.parent_span_id.hex() or None,
@@ -62,8 +64,28 @@ def otlp_proto_spans(body: bytes) -> list[dict]:
                     "end_time_ms": sp.end_time_unix_nano // 1_000_000 or None,
                     "status": {1: "ok", 2: "error"}.get(sp.status.code, "unset"),
                     "attributes": {kv.key: _any_value(kv.value) for kv in sp.attributes},
-                })
+                }, sp.kind, service, [(lk.trace_id.hex(), lk.span_id.hex()) for lk in sp.links], instance))
     return out
+
+
+SPAN_KINDS = {1: "internal", 2: "server", 3: "client", 4: "producer", 5: "consumer"}
+
+
+def _extra(span: dict, kind, service, links: list[tuple], instance=None) -> dict:
+    """Backend services fields (docs/SPEC.md "Backend services"): kind, resource service.name / service.instance.id,
+    links; only when set."""
+    if isinstance(kind, str):
+        kind = {f"SPAN_KIND_{v.upper()}": k for k, v in SPAN_KINDS.items()}.get(kind, 0)
+    if SPAN_KINDS.get(int(kind or 0)):
+        span["kind"] = SPAN_KINDS[int(kind)]
+    if service:
+        span["service"] = str(service)
+    if instance:
+        span["instance"] = str(instance)
+    links = [{"trace_id": t, "span_id": s} for t, s in links if s]
+    if links:
+        span["links"] = links
+    return span
 
 
 def _json_value(v: dict) -> object:  # OTLP/JSON AnyValue → python
@@ -94,11 +116,14 @@ def _id(x: str | None) -> str | None:
 def otlp_json_spans(data: dict) -> list[dict]:
     out = []
     for rs in data.get("resourceSpans", []):
+        res = (rs.get("resource") or {}).get("attributes", [])
+        service = next((_json_value(a.get("value", {})) for a in res if a.get("key") == "service.name"), None)
+        instance = next((_json_value(a.get("value", {})) for a in res if a.get("key") == "service.instance.id"), None)
         for ss in rs.get("scopeSpans", []):
             for sp in ss.get("spans", []):
                 code = (sp.get("status") or {}).get("code", 0)
                 code = {"STATUS_CODE_OK": 1, "STATUS_CODE_ERROR": 2}.get(code, code)
-                out.append({
+                out.append(_extra({
                     "trace_id": _id(sp.get("traceId")),
                     "span_id": _id(sp.get("spanId")),
                     "parent_span_id": _id(sp.get("parentSpanId")),
@@ -107,7 +132,7 @@ def otlp_json_spans(data: dict) -> list[dict]:
                     "end_time_ms": int(sp.get("endTimeUnixNano", 0)) // 1_000_000 or None,
                     "status": {1: "ok", 2: "error"}.get(int(code or 0), "unset"),
                     "attributes": {a["key"]: _json_value(a.get("value", {})) for a in sp.get("attributes", [])},
-                })
+                }, sp.get("kind", 0), service, [(_id(lk.get("traceId")), _id(lk.get("spanId"))) for lk in sp.get("links", [])], instance))
     return out
 
 
@@ -164,8 +189,8 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
     `secret` (or AGENTGLOW_SECRET): viewer endpoints require `Authorization: Bearer <token>` (agentglow.make_token)
     and the token alone decides what the viewer sees. Without it (dev), X-AgentGlow-Scope / X-AgentGlow-Run headers
     (and `?run=` on /live/stream) pick the filter.
-    `ingest_key` (or AGENTGLOW_INGEST_KEY; comma-separated for rotation): POST /v1/live, /v1/traces, /v1/claude-code
-    and /live/topology require `x-api-key: <key>` (or `Authorization: Bearer <key>`), else 401. Unset (dev): open.
+    `ingest_key` (or AGENTGLOW_INGEST_KEY; comma-separated for rotation): POST /v1/live, /v1/traces, /v1/events,
+    /v1/claude-code and /live/topology require `x-api-key: <key>` (or `Authorization: Bearer <key>`), else 401. Unset (dev): open.
     `capture_prompts`: keep Claude Code user prompts (redacted, capped) as `chat` events. Never read from the env here:
     only `agentglow serve` turns it on (AGENTGLOW_CAPTURE_PROMPTS=1 with a loopback --host)."""
     hub = hub or Hub(capture_prompts=capture_prompts)
@@ -231,6 +256,20 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
         require_ingest_key(request)
         items = json.loads(await body_of(request) or b"[]")
         return {"ok": True, "n": hub.ingest_live(items if isinstance(items, list) else [items], ingest_scope(request))}
+
+    @app.post("/v1/events")
+    async def events(request: Request):
+        """Flat events from anything that can POST JSON (no OTel needed): one object or an array of
+        `{"service"|"agent", "event": "request"|"message"|"call"|"error"|"llm"|"tool"|..., "name", "status",
+        "duration_ms", "to"?, "topic"?, "tokens_in"?, "tokens_out"?}`. Ids and timing are the server's (now).
+        Same ingest key, scope (`?scope=` / X-AgentGlow-Scope, or `scope` per event) and scrub as /v1/live."""
+        require_ingest_key(request)
+        try:
+            items = json.loads(await body_of(request) or b"[]")
+        except ValueError as e:
+            raise HTTPException(400, f"bad JSON: {e}")
+        items = items if isinstance(items, list) else [items]
+        return {"ok": True, "n": hub.ingest_events(items[:5000], now_ms(), ingest_scope(request))}
 
     @app.post("/v1/claude-code")
     async def claude_code_hook(request: Request):

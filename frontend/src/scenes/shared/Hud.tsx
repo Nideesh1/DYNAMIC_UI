@@ -1,5 +1,5 @@
 /** Shared glass HUD for every scene: top bar (title, mode, theme, live totals) + right sidebar (Agents | Events | Selected). */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useSceneConfig } from "./config";
 import { HUD_LAYOUT_EVENT } from "./kit/fit";
 import "./hud.css";
@@ -7,7 +7,10 @@ import { sendApproval, startLiveRun, useApproveAvailable, useRunAvailable, useRu
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
 import { decisionTint } from "./kit/DecisionGlyph";
-import { STALE_TEXT, decisionText, getInstance, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
+import { haloHover } from "./kit/HighVolume";
+import { fmtMs, gaugeText, jobStateText, metricText } from "./prims";
+import { PrimDetail } from "./PrimPanel";
+import { STALE_TEXT, dismissRun, dismissedRuns, idleText, isDismissed, isIdle, undismissRuns, decisionText, getInstance, jobText, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloLatency, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -25,7 +28,8 @@ function short(id: string) {
 export function describe(e: WorldEvent): string {
   switch (e.type) {
     case "run":
-      return `run ${e.status} · ${e.topic}`;
+      if (!("topic" in e)) return `run ${e.status} · ${world.runs.get(e.run_id)?.topic ?? shortRun(e.run_id)}`;
+      return `run ${e.status}${e.reason ? ` (${e.reason})` : ""} · ${e.topic}`;
     case "step":
       return e.status === "waiting" ? `step ${e.step} ${waitLabel({ reason: e.reason || "wait", until: e.until ?? 0 })} · ${shortRun(e.run_id)}` : `step ${e.step} ${e.status} · ${shortRun(e.run_id)}`;
     case "spawn":
@@ -37,7 +41,7 @@ export function describe(e: WorldEvent): string {
     case "llm":
       return e.tokens_in || e.tokens_out ? `${short(e.id)} · LLM ${e.tokens_in}→${e.tokens_out} tok` : `${short(e.id)} · thinking…`; // no usage (e.g. Claude Code hooks): no fake 0→0
     case "message":
-      return `${short(e.from_id)} → ${short(e.to_id)}: ${e.text}`;
+      return e.failed ? `${short(e.from_id)} ✕ ${e.text}: publish failed` : `${short(e.from_id)} → ${short(e.to_id)}: ${e.text}`;
     case "tool":
       return `${short(e.id)} · ${e.tool}(${e.args_preview})`;
     case "graph":
@@ -54,10 +58,50 @@ export function describe(e: WorldEvent): string {
       return `${short(e.id)} · ${e.n} decisions in ${Math.round(e.window_ms)}ms`;
     case "order":
       return `${short(e.id)} · ${orderText(e)}${e.reason ? ` · ${e.reason}` : ""}`;
+    case "request":
+      return `${short(e.id)} · ${e.name}${e.status !== undefined ? ` ${e.status}` : ""}${e.error ? " ERROR" : ""} · ${Math.round(e.ms)}ms`;
+    case "service_stats":
+      return `${short(e.id)} · ${e.n} requests in ${Math.round(e.window_ms)}ms${e.instances && e.instances > 1 ? ` · ×${e.instances}` : ""}`;
+    case "drives":
+      return `${short(e.id)} drives ${shortRun(e.target_run)}`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
     case "chat":
       return `${e.role === "user" ? "you" : world.instances.get(e.id)?.name ?? "agent"}: ${e.text}`;
+    case "session":
+      return e.phase === "start"
+        ? `${short(e.id)} · ${e.kind} session started`
+        : e.phase === "end"
+          ? `${short(e.id)} · session ended${e.outcome ? ` · ${e.outcome}` : ""}${e.reason ? ` (${e.reason})` : ""}`
+          : e.phase === "turn"
+            ? `${short(e.id)} · turn${e.role ? ` · ${e.role}` : ""}`
+            : `${short(e.id)} · ${Object.entries(e.gauges ?? {}).map(([k, v]) => gaugeText(k, v)).join(", ")}`;
+    case "stage":
+      return `${short(e.id)} · stage ${e.name} ${e.status}${e.ms !== undefined && e.status !== "running" ? ` · ${fmtMs(e.ms)}` : ""}`;
+    case "progress":
+      return `${short(e.id)} · ${Math.round(e.frac * 100)}%${e.label ? ` ${e.label}` : ""}`;
+    case "capacity":
+      return `${short(e.id)} · ${e.name} ${e.used}/${e.max}`;
+    case "rejected":
+      return `${short(e.id)} · rejected: ${e.reason}${e.status ? ` (${e.status})` : ""}${e.retry_after_ms ? ` · retry in ${fmtMs(e.retry_after_ms)}` : ""}`;
+    case "job":
+      return `job ${e.job_id} ${jobStateText(e.state)}${e.attempt > 1 ? ` #${e.attempt}` : ""}${e.at ? ` · ${e.at}` : ""}`;
+    case "deferred":
+      return e.phase === "open" ? `${short(e.id)} · awaiting ${e.label || "callback"}` : `${short(e.id)} · callback ${e.status || "ok"}${e.wait_ms ? ` after ${fmtMs(e.wait_ms)}` : ""}`;
+    case "fallback":
+      return `${short(e.id)} · fallback ${e.from} → ${e.to}${e.reason ? ` (${e.reason})` : ""}`;
+    case "gate":
+      return `${short(e.id)} · ${e.name} ${e.state}${e.attempts_left !== undefined ? ` · ${e.attempts_left} left` : ""}`;
+    case "backlog":
+      return `${e.topic} backlog ${e.depth}${e.lag_ms ? ` · lag ${fmtMs(e.lag_ms)}` : ""}`;
+    case "lifecycle":
+      return `${short(e.id)} · ${e.state}`;
+    case "metric":
+      return `${short(e.id)} · ${metricText(e.name, e)}`;
+    case "event":
+      return `${short(e.id)} · ${e.kind}${e.label ? ` ${e.label}` : ""}`;
+    case "resource_stats":
+      return `${e.resource} · ${e.calls} calls`;
   }
 }
 
@@ -144,6 +188,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const canRun = useRunAvailable();
   const canApprove = useApproveAvailable();
   const w = useWorld();
+  const drawerId = useDrawer();
   const lastDec = w.ticker.find((e): e is Extract<WorldEvent, { type: "decision" }> => e.type === "decision");
   const halt = haltedNow();
   const [, tick] = useState(0);
@@ -218,8 +263,9 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const seenAt = seen.current ? w.ticker.indexOf(seen.current) : -1;
   const unseen = side.tab === "events" && !side.collapsed ? 0 : seenAt >= 0 ? seenAt : w.ticker.length;
 
-  const alive = [...w.instances.values()].filter(isLive);
-  const runs = [...w.runs.values()].filter((r) => r.status === "started" && !isStale(r));
+  const alive = [...w.instances.values()].filter((i) => isLive(i) && !isDismissed(i.run));
+  const runs = [...w.runs.values()].filter((r) => r.status === "started" && !isStale(r) && !isDismissed(r.id));
+  const hidden = dismissedRuns();
   const graph = w.stats.graphReads + w.stats.graphWrites;
   const close = () => {
     selectInstance(null);
@@ -255,6 +301,11 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
             <button className={`hud-info${info ? " on" : ""}`} onClick={() => setInfo((v) => !v)} aria-label="What am I looking at?" aria-expanded={info} title="What am I looking at?">
               i
             </button>
+            {hidden.length > 0 && (
+              <button className="hud-badge hud-hidden" onClick={() => undismissRuns(hidden)} title="Runs you hid with ×: click to show them again">
+                {hidden.length} hidden · show
+              </button>
+            )}
             {w.mode === "live" && canRun && <RunButton />}
             {!embedded && (
               <select className="hud-theme" value={here} aria-label="Theme" onChange={(e) => (location.href = `/${e.target.value}${qs}`)}>
@@ -279,6 +330,11 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
               {graph > 0 && (
                 <span className="hud-stat" title={`graph reads ${w.stats.graphReads} · writes ${w.stats.graphWrites}`}>
                   <b>{graph}</b> graph
+                </span>
+              )}
+              {w.stats.rejected > 0 && (
+                <span className="hud-stat hud-rejected" title="requests / work turned away by admission control or backpressure (429 / 503), not errors">
+                  rejected <b>{fmtK(w.stats.rejected)}</b>
                 </span>
               )}
               {halt && (
@@ -308,6 +364,11 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
                 <span className="hud-stat" title={`orders: ${w.orders.n} · paper ${w.orders.paper} · rejected/cancelled ${w.orders.rejected}`}>
                   orders <b>{w.orders.n}</b>
                   {w.orders.paper > 0 && w.orders.paper === w.orders.n ? " (paper)" : w.orders.paper > 0 ? ` (${w.orders.paper} paper)` : ""}
+                </span>
+              )}
+              {w.stats.requests > 0 && (
+                <span className={`hud-stat${w.stats.errors > 0 ? " is-deny" : ""}`} title={`backend requests / handled messages: ${w.stats.requests} · errors ${w.stats.errors}`}>
+                  <b>{fmtK(w.stats.requests)}</b> req{w.stats.errors > 0 ? ` · ${fmtK(w.stats.errors)} err` : ""}
                 </span>
               )}
               {w.stats.mcpCalls > 0 && (
@@ -376,6 +437,9 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
       </aside>
 
       {w.mode === "live" && canApprove && <ApprovalTray rail={side.collapsed} />}
+      <DeepLinkFocus />
+      {drawerId && getInstance(drawerId) && <ApprovalDrawer id={drawerId} rail={side.collapsed} canApprove={w.mode === "live" && canApprove} embedded={embedded} />}
+      <HaloTip />
       {children}
     </>
   );
@@ -549,9 +613,10 @@ export function RunButton() {
 
 // ------------------------------------------------------------------ live: optional POST /live/approve
 
-/** A live agent waiting on a human (the wait contract's reason, e.g. "approval", "human approval yes 12"). */
+/** A live agent waiting on a human: an `approval()` wait (kind "approval"), or a wait whose reason says so ("approval",
+ * "human approval yes 12"). */
 export function needsHuman(i: Instance): boolean {
-  return isLive(i) && i.status === "waiting" && !!i.wait && /human|approv/i.test(i.wait.reason);
+  return isLive(i) && i.status === "waiting" && !!i.wait && (i.wait.kind === "approval" || /human|approv/i.test(i.wait.reason));
 }
 
 type Verdict = "approving" | "rejecting" | "approved" | "rejected" | "gone" | "error";
@@ -560,7 +625,7 @@ const verdicts = new Map<string, Verdict>();
 const verdictSubs = new Set<() => void>();
 const waitKey = (i: Instance) => `${i.id}|${i.wait?.reason}|${i.wait?.until}`;
 
-async function decide(i: Instance, approve: boolean) {
+async function decide(i: Instance, approve: boolean, note?: string) {
   const k = waitKey(i);
   const set = (v: Verdict) => {
     verdicts.set(k, v);
@@ -573,7 +638,7 @@ async function decide(i: Instance, approve: boolean) {
     const v = verdicts.get(k);
     if (v && v !== "error" && v !== "gone") (verdicts.delete(k), verdictSubs.forEach((f) => f()));
   }, VERDICT_TIMEOUT_MS);
-  const r = await sendApproval(i.run, i.id, approve);
+  const r = await sendApproval(i.run, i.id, approve, note);
   if (verdicts.has(k)) set(r === "ok" ? (approve ? "approved" : "rejected") : r);
 }
 const VERDICT_TIMEOUT_MS = 10_000;
@@ -582,8 +647,16 @@ const AUTO_DUE_MS = 10_000;
 function deadlineText(i: Instance, now: number): [string, "due" | "overdue" | ""] {
   const until = i.wait?.until;
   if (!until) return ["", ""];
-  if (now < until) return [`${Math.round((until - now) / 1000)}s`, ""];
+  if (now < until) return [leftText(until - now), ""];
   return now - until < AUTO_DUE_MS ? ["auto-approve due", "due"] : ["overdue", "overdue"];
+}
+
+/** `45s` / `29m 40s` / `2h 05m` */
+function leftText(ms: number): string {
+  const t = Math.round(ms / 1000);
+  if (t < 60) return `${t}s`;
+  if (t < 3600) return `${Math.floor(t / 60)}m ${String(t % 60).padStart(2, "0")}s`;
+  return `${Math.floor(t / 3600)}h ${String(Math.floor((t % 3600) / 60)).padStart(2, "0")}m`;
 }
 
 const VERDICT_TEXT: Record<Verdict, string> = {
@@ -592,7 +665,7 @@ const VERDICT_TEXT: Record<Verdict, string> = {
 };
 
 /** Approve / Reject for one waiting agent; after a click, its state until the wait clears (from the event stream). */
-function ApproveButtons({ i, compact }: { i: Instance; compact?: boolean }) {
+function ApproveButtons({ i, compact, note, keys }: { i: Instance; compact?: boolean; note?: string; keys?: boolean }) {
   const [, bump] = useState(0);
   useEffect(() => {
     const f = () => bump((x) => x + 1);
@@ -605,15 +678,289 @@ function ApproveButtons({ i, compact }: { i: Instance; compact?: boolean }) {
     <div className={`hud-approve${compact ? " is-compact" : ""}`} data-verdict={v}>
       {!locked && (
         <>
-          <button className="ha-yes" onClick={() => decide(i, true)} title={`Approve: ${i.wait?.reason}`}>
+          <button className="ha-yes" onClick={() => decide(i, true, note)} title={`Approve: ${i.wait?.title || i.wait?.reason}${keys ? " (A)" : ""}`}>
             Approve
           </button>
-          <button className="ha-no" onClick={() => decide(i, false)} title={`Reject: ${i.wait?.reason}`}>
+          <button className="ha-no" onClick={() => decide(i, false, note)} title={`Reject: ${i.wait?.title || i.wait?.reason}${keys ? " (R)" : ""}`}>
             Reject
           </button>
         </>
       )}
       {v && <span role="status">{VERDICT_TEXT[v]}</span>}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ approval details drawer
+/** the agent whose wait the details drawer shows (null = closed); opening it also selects the agent in 3D */
+const drawer = { id: null as string | null, subs: new Set<() => void>() };
+export function openDrawer(id: string | null) {
+  if (id) selectInstance(id);
+  if (drawer.id === id) return;
+  drawer.id = id;
+  drawer.subs.forEach((f) => f());
+}
+function useDrawer(): string | null {
+  return useSyncExternalStore(
+    (f) => (drawer.subs.add(f), () => void drawer.subs.delete(f)),
+    () => drawer.id,
+    () => null,
+  );
+}
+
+/** link to AgentGlow focused on this run + agent (`?run=<id>&agent=<id>`, other params kept) */
+export function deepLink(i: Pick<Instance, "run" | "id">, href = location.href): string {
+  const u = new URL(href);
+  u.searchParams.set("run", i.run);
+  u.searchParams.set("agent", i.id);
+  return u.toString();
+}
+
+/** `?agent=<id>` (standalone app): select that agent once it shows up; open its drawer while it waits on a human */
+function DeepLinkFocus() {
+  const { embedded } = useSceneConfig();
+  const w = useWorld();
+  const want = useRef(embedded || typeof location === "undefined" ? null : new URLSearchParams(location.search).get("agent"));
+  useEffect(() => {
+    const id = want.current;
+    const i = id ? getInstance(id) : undefined;
+    if (!id || !i) return;
+    want.current = null;
+    if (needsHuman(i)) openDrawer(id);
+    else selectInstance(id);
+  }, [w.ticker[0]]);
+  return null;
+}
+
+type CtxRow = { k: string; badge: string; text: string; ts: number; color?: string; deny?: boolean };
+/** the agent's last few decisions, tool / MCP calls and orders, newest first (from the world state) */
+function recentContext(i: Instance, n = 6): CtxRow[] {
+  const rows: CtxRow[] = [];
+  i.decisions.slice(-5).forEach((d, k) =>
+    rows.push({ k: `d${k}`, badge: isDeny(d) ? "DENY" : kindBadge(d.kind), text: `${decisionText(d)} · ${Math.round(d.ms)}ms`, ts: d.ts, color: decisionColor(d), deny: isDeny(d) }),
+  );
+  i.orders.slice(-3).forEach((o, k) => rows.push({ k: `o${k}`, badge: o.dry_run ? "paper" : o.status, text: `${orderText(o)} ${o.instrument}`, ts: o.ts, color: orderColor(o) }));
+  let calls = 0;
+  for (const e of i.recent) {
+    if (calls >= 5) break;
+    if (e.type === "tool") rows.push({ k: `t${calls++}`, badge: "tool", text: e.tool, ts: e.ts });
+    else if (e.type === "mcp" && e.phase === "call") rows.push({ k: `m${calls++}`, badge: "MCP", text: `${e.server} · ${e.tool}`, ts: e.ts });
+  }
+  return rows.sort((a, b) => b.ts - a.ts).slice(0, n);
+}
+
+const pct = (p: number) => `${Math.round(p * 100)}%`;
+const detailValue = (v: string | number | boolean) => (typeof v === "boolean" ? (v ? "yes" : "no") : String(v));
+const RESOLVED_CLOSE_MS = 4000;
+
+/** Side drawer for one waiting agent: what it waits on, why (the triggering decision), the app's details, recent
+ * context, the deadline, Approve / Reject with a note, "Open in app" and "Copy link". The scene keeps running. */
+function ApprovalDrawer({ id, rail, canApprove, embedded }: { id: string; rail: boolean; canApprove: boolean; embedded: boolean }) {
+  const w = useWorld();
+  const ref = useRef<HTMLElement>(null);
+  const [note, setNote] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [, bump] = useState(0);
+  const last = useRef<Instance["wait"]>(null);
+  useEffect(() => {
+    const t = setInterval(() => bump((x) => x + 1), 1000);
+    const f = () => bump((x) => x + 1);
+    verdictSubs.add(f);
+    return () => (clearInterval(t), void verdictSubs.delete(f));
+  }, []);
+  useEffect(() => {
+    setNote("");
+    setCopied(false);
+    ref.current?.focus({ preventScroll: true });
+  }, [id]);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && openDrawer(null);
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, []);
+  const i = getInstance(id)!;
+  const waiting = needsHuman(i);
+  if (waiting) last.current = i.wait;
+  const wt = waiting ? i.wait! : last.current;
+  useEffect(() => {
+    if (waiting) return;
+    const t = setTimeout(() => drawer.id === id && openDrawer(null), RESOLVED_CLOSE_MS); // resolved: close soon
+    return () => clearTimeout(t);
+  }, [waiting, id]);
+  const run = w.runs.get(i.run);
+  const stale = isStale(run);
+  const [left, late] = !waiting ? ["", ""] : stale ? [STALE_TEXT, "overdue"] : deadlineText(i, Date.now());
+  const v = wt ? verdicts.get(`${i.id}|${wt.reason}|${wt.until}`) : undefined;
+  const locked = v !== undefined && v !== "error";
+  const ctx = recentContext(i);
+  const b = wt?.because;
+  const onKey = (e: ReactKeyboardEvent) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === "TEXTAREA" || tag === "INPUT" || e.metaKey || e.ctrlKey || e.altKey || !waiting || !canApprove || stale || locked) return;
+    if (e.key === "a" || e.key === "A") (e.preventDefault(), decide(i, true, note));
+    else if (e.key === "r" || e.key === "R") (e.preventDefault(), decide(i, false, note));
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(deepLink(i));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt("Copy this link", deepLink(i));
+    }
+  };
+  const title = wt?.title || wt?.reason || "waiting";
+  return (
+    <aside
+      ref={ref}
+      tabIndex={-1}
+      onKeyDown={onKey}
+      className={`hud hud-drawer${rail ? " is-rail" : ""}`}
+      role="dialog"
+      aria-label={`Waiting on you: ${title}`}
+      style={{ ["--c" as string]: TYPE_COLOR[i.type] }}
+    >
+      <header className="hd-head">
+        <div>
+          <p className="hd-kicker">{waiting ? (wt?.kind === "approval" || /human|approv/i.test(wt?.reason ?? "") ? "needs your approval" : "waiting") : "resolved"}</p>
+          <h3>{title}</h3>
+        </div>
+        <button className="hd-close" onClick={() => openDrawer(null)} aria-label="Close details (Esc)" title="Close (Esc)">
+          ×
+        </button>
+      </header>
+      <button className="hd-who" onClick={() => selectInstance(i.id)} title="Select in the scene">
+        <i />
+        <b>{i.name}</b>
+        <span>{run?.topic ?? shortRun(i.run)}</span>
+      </button>
+      <div className={`hd-deadline${late ? ` is-${late}` : !waiting && (v === "approved" || v === "approving") ? " is-due" : ""}`} role="status">
+        {!waiting ? (v ? VERDICT_TEXT[v] : "no longer waiting") : left ? (late ? left : `deadline in ${left}`) : "no deadline"}
+      </div>
+      <section>
+        <h4>Why</h4>
+        {b ? (
+          <div className={`hd-why${b.result === "no" ? " is-deny" : ""}`}>
+            <p>
+              <b>{kindBadge(b.kind)}</b> {b.question} → <em>{b.result}</em>
+              {b.p !== undefined && <> · p {pct(b.p)}</>}
+            </p>
+            <dl className="hd-dl">
+              {b.threshold !== undefined && (
+                <div>
+                  <dt>threshold</dt>
+                  <dd>{b.threshold <= 1 ? pct(b.threshold) : b.threshold}</dd>
+                </div>
+              )}
+              {b.provider && (
+                <div>
+                  <dt>decided by</dt>
+                  <dd>{providerBadge(b.provider)}</dd>
+                </div>
+              )}
+              {b.ms !== undefined && (
+                <div>
+                  <dt>latency</dt>
+                  <dd>{Math.round(b.ms)} ms</dd>
+                </div>
+              )}
+              {b.purpose && (
+                <div>
+                  <dt>purpose</dt>
+                  <dd>
+                    {b.purpose}
+                    {b.target ? ` · ${b.target}` : ""}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        ) : (
+          <p className="hd-reason">waiting on {wt?.reason ?? "a human"}</p>
+        )}
+      </section>
+      {wt?.details && Object.keys(wt.details).length > 0 && (
+        <section>
+          <h4>Details</h4>
+          <dl className="hd-dl hd-details">
+            {Object.entries(wt.details).map(([k, val]) => (
+              <div key={k}>
+                <dt>{k}</dt>
+                <dd title={detailValue(val)}>{detailValue(val)}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+      {ctx.length > 0 && (
+        <section>
+          <h4>Recent</h4>
+          <ul className="ap-decisions">
+            {ctx.map((r) => (
+              <li key={r.k} className={r.deny ? "is-deny" : undefined} style={r.color ? { ["--c" as string]: r.color } : undefined}>
+                <b>{r.badge}</b>
+                <span>{r.text}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <footer className="hd-foot">
+        {waiting && canApprove && !stale && (
+          <>
+            {!locked && (
+              <textarea
+                className="hd-note"
+                value={note}
+                maxLength={500}
+                rows={2}
+                placeholder="Note (optional, sent with your decision)"
+                onChange={(e) => setNote(e.target.value)}
+                aria-label="Note sent with your decision"
+              />
+            )}
+            <ApproveButtons i={i} note={note.trim() || undefined} keys />
+            {!locked && <p className="hd-keys">A approve · R reject · Esc close</p>}
+          </>
+        )}
+        <div className="hd-links">
+          {wt?.url && (
+            <a href={wt.url} target="_blank" rel="noopener noreferrer">
+              Open in app ↗
+            </a>
+          )}
+          {!embedded && (
+            <button onClick={copy} title="Link to AgentGlow focused on this run and agent">
+              {copied ? "Link copied" : "Copy link"}
+            </button>
+          )}
+        </div>
+      </footer>
+    </aside>
+  );
+}
+
+/** hover tooltip of a halo label: its latency (p50 / p95, in flight), which the label itself leaves out */
+function HaloTip() {
+  const id = useSyncExternalStore(
+    (f) => (haloHover.subs.add(f), () => void haloHover.subs.delete(f)),
+    () => haloHover.id,
+    () => null,
+  );
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  useEffect(() => {
+    if (!id) return;
+    const move = (e: PointerEvent) => setPos({ x: e.clientX, y: e.clientY });
+    window.addEventListener("pointermove", move);
+    return () => window.removeEventListener("pointermove", move);
+  }, [id]);
+  const i = id ? getInstance(id) : undefined;
+  if (!i?.hv || !pos.x) return null;
+  return (
+    <div className="hud-halotip" style={{ left: pos.x + 14, top: pos.y + 14 }} role="tooltip">
+      <b>{i.name}</b> {haloText(i.hv)}
+      <br />
+      {haloLatency(i.hv)}
     </div>
   );
 }
@@ -642,13 +989,16 @@ function ApprovalTray({ rail }: { rail: boolean }) {
           const [left, late] = stale ? [STALE_TEXT, "overdue" as const] : deadlineText(i, now);
           return (
             <li key={i.id} style={{ ["--c" as string]: TYPE_COLOR[i.type] }}>
-              <button className="ha-who" onClick={() => selectInstance(i.id)} title={`${i.name} · ${shortRun(i.run)}\n${waitLabel(i.wait!)}`}>
+              <button className="ha-who" onClick={() => openDrawer(i.id)} title={`${i.name} · ${shortRun(i.run)}\n${waitLabel(i.wait!)}\nclick for details`}>
                 <i />
                 <b>{i.name}</b>
                 <span>
-                  {i.wait!.reason}
+                  {i.wait!.title || i.wait!.reason}
                   {left && (late ? <em className={`ha-late is-${late}`}> · {left}</em> : ` · ${left}`)}
                 </span>
+              </button>
+              <button className="ha-details" onClick={() => openDrawer(i.id)} aria-label={`Details: ${i.wait!.title || i.wait!.reason}`}>
+                Details
               </button>
               {!stale && <ApproveButtons i={i} compact />}
             </li>
@@ -703,6 +1053,7 @@ function AgentList() {
   }, [all]);
   const needle = q.trim().toLowerCase();
   const rows = all
+    .filter((i) => !isDismissed(i.run))
     .filter((i) => (types.size ? types.has(i.name) : true))
     .filter((i) => matchesStatus(i, status))
     .filter((i) => (run ? i.run === run : true))
@@ -801,6 +1152,7 @@ function runWaitText(run: Run): string {
   return s ? chipState(run, s)[1] : "";
 }
 
+const LINEAGE_MAX = 12;
 function AgentDetail({ i }: { i: Instance }) {
   const w = useWorld();
   const canApprove = useApproveAvailable() && w.mode === "live";
@@ -808,6 +1160,8 @@ function AgentDetail({ i }: { i: Instance }) {
   const chips = run?.hasSteps ? stepChips(run) : null;
   const parent = getInstance(i.parent);
   const children = [...w.instances.values(), ...w.archive.values()].filter((c) => c.parent === i.id);
+  // a long-lived service has hundreds of finished tasks / jobs: live ones first, then the newest finished, capped
+  const lineage = children.length <= LINEAGE_MAX ? children : [...children.filter((c) => !isDone(c)), ...children.filter(isDone).reverse()].slice(0, LINEAGE_MAX);
   const pending = [...w.mcpPending.values()].filter((p) => p.instance === i.id);
   return (
     <div className="ap-detail" style={{ ["--c" as string]: TYPE_COLOR[i.type] }}>
@@ -817,7 +1171,14 @@ function AgentDetail({ i }: { i: Instance }) {
       <div className="ap-status" data-status={isLive(i) ? i.status : "done"}>
         {isLive(i) ? (i.status === "waiting" && i.wait ? waitLabel(i.wait) : statusText(i)) : `finished (${i.status})`} · alive {age(i)}
       </div>
-      {canApprove && needsHuman(i) && <ApproveButtons i={i} />}
+      {canApprove && needsHuman(i) && (
+        <div className="ap-approve-row">
+          <ApproveButtons i={i} />
+          <button className="ha-details" onClick={() => openDrawer(i.id)}>
+            Details
+          </button>
+        </div>
+      )}
       <dl className="ap-stats">
         <div>
           <dt>tokens</dt>
@@ -839,8 +1200,16 @@ function AgentDetail({ i }: { i: Instance }) {
         </div>
       </dl>
       <section>
-        <h4>Run</h4>
+        <h4 className="ap-runhead">
+          Run
+          {run && run.workflow !== "services" && (
+            <button className="ap-dismiss" onClick={() => dismissRun(run.id)} aria-label="Hide this run" title="Hide this run for you (comes back on new activity)">
+              ×
+            </button>
+          )}
+        </h4>
         <p>{run ? run.topic : i.run}</p>
+        {run && isIdle(run) && <p className="ap-idle">{idleText(run)}</p>}
         {run && isStale(run) && <p className="ap-wait">{STALE_TEXT}</p>}
         {run && runWaitText(run) && <p className="ap-wait">{runWaitText(run)}</p>}
         {run && chips && (
@@ -865,11 +1234,24 @@ function AgentDetail({ i }: { i: Instance }) {
               ↑ spawned by {short(parent.id)}
             </button>
           )}
-          {children.map((c) => (
+          {lineage.map((c) => (
             <button key={c.id} className="ap-chip-link" style={{ ["--c" as string]: TYPE_COLOR[c.type] }} onClick={() => selectInstance(c.id)}>
               ↓ {short(c.id)} {isDone(c) ? "✓" : ""}
             </button>
           ))}
+          {children.length > lineage.length && <p className="ap-more">+{children.length - lineage.length} more finished</p>}
+        </section>
+      )}
+      {children.some((c) => c.job && !c.job.end) && (
+        <section>
+          <h4>In flight{i.hv?.inflight ? ` · ${i.hv.inflight}` : ""}</h4>
+          {children
+            .filter((c) => c.job && !c.job.end)
+            .map((c) => (
+              <button key={c.id} className="ap-chip-link" style={{ ["--c" as string]: "#fbbf24" }} onClick={() => selectInstance(c.id)}>
+                {jobText(c)}
+              </button>
+            ))}
         </section>
       )}
       {i.skills.size > 0 && (
@@ -887,8 +1269,8 @@ function AgentDetail({ i }: { i: Instance }) {
       )}
       {i.hv && (
         <section>
-          <h4>Decision rate {hvActive(i) ? "" : "(quiet)"}</h4>
-          <p className="ap-hv">{haloText(i.hv)} · p95 {Math.round(i.hv.p95)}ms</p>
+          <h4>{i.hv.unit ? `Traffic${i.svcN ? ` · ${i.svcN} handled${i.svcErr ? `, ${i.svcErr} errors` : ""}` : ""}` : "Decision rate"} {hvActive(i) ? "" : "(quiet)"}</h4>
+          <p className="ap-hv">{haloText(i.hv)} · {haloLatency(i.hv)}</p>
           <div className="ap-hv-bar" title="outcome mix (smoothed)">
             {i.hv.seg.map((f, k) =>
               f > 0.005 ? <span key={k} style={{ flexGrow: f, background: HALO_COLORS[k] }} title={`${segName(k)} ${Math.round(f * 100)}%`} /> : null,
@@ -910,6 +1292,7 @@ function AgentDetail({ i }: { i: Instance }) {
           </ul>
         </section>
       )}
+      <PrimDetail i={i} />
       {i.decisions.length > 0 && (
         <section>
           <h4>{i.hv ? "Interesting decisions" : "Decisions"}</h4>

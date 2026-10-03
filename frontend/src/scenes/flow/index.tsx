@@ -12,7 +12,7 @@ import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocess
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
-import { mcpGlow, STEP_SLOTS, slotLabel, slotStatus, stepChips, TYPE_COLOR, useWorld, world, type AgentType } from "../shared/world";
+import { idleText, isIdle, mcpGlow, STEP_SLOTS, slotLabel, slotStatus, stepChips, TYPE_COLOR, useWorld, world, type AgentType, jobText } from "../shared/world";
 import { KitScene, fit, kit, kitRoleU, ResourceWire, runLocal, useKitGalaxy, type AgentSlotProps, type BackendSlotProps, type GraphSlotProps, type McpServerSlotProps, type RunSlotProps } from "../shared/kit";
 import { FlowEngine, NEB_R, PULSAR_Y, REDUCED } from "./engine";
 import "./flow.css";
@@ -125,6 +125,7 @@ function RunLabel({ run: kr }: RunSlotProps) {
     const { shown, more } = stepChips(run);
     const segs = shown.map((st, i) => ({ text: `${i ? "  " : ""}${st.toUpperCase()}`, color: chip(run.steps[st]) }));
     if (more) segs.push({ text: `  +${more}`, color: chip("queued") });
+    if (run.status === "started" && isIdle(run)) segs.push({ text: `  ${idleText(run)}`, color: chip("queued") });
     return segs;
   };
   return (
@@ -132,7 +133,7 @@ function RunLabel({ run: kr }: RunSlotProps) {
       <group ref={g}>
         <Label3D
           text={`${run.hasSteps ? "hatchet · " : ""}${run.topic}`}
-          secondary={compact ? undefined : run.hasSteps ? stepLine() : run.status === "started" ? "running…" : "run complete"}
+          secondary={compact ? undefined : run.hasSteps ? stepLine() : run.status === "started" ? (isIdle(run) ? idleText(run) : "running…") : "run complete"}
           secondarySize={0.24}
           color={run.color}
           size={0.32}
@@ -255,7 +256,7 @@ function FocusLabel() {
     el.current?.setOpacity(show ? 1 : 0);
     if (!s || !s.inst || !g.current || !el.current) return;
     g.current.position.set(s.x, s.y + 1.25 * Math.max(0.85, fit.scale), s.z);
-    const txt = s.inst.name + " · " + s.inst.status;
+    const txt = (s.inst.job ? jobText(s.inst) : s.inst.name) + " · " + s.inst.status;
     if (txt !== last.current) {
       last.current = txt;
       el.current.setText(txt);

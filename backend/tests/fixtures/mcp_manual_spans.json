@@ -1,0 +1,282 @@
+[
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000001",
+   "parent_span_id": null,
+   "name": "researcher",
+   "start_time_ms": 1790000000000,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "agentglow.agent": "researcher",
+    "agentglow.run.topic": "incident triage"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000002",
+   "parent_span_id": "a000000000000001",
+   "name": "chat gpt",
+   "start_time_ms": 1790000000010,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "gen_ai.operation.name": "chat",
+    "gen_ai.usage.input_tokens": 120,
+    "gen_ai.usage.output_tokens": 30
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000002",
+   "parent_span_id": "a000000000000001",
+   "name": "chat gpt",
+   "start_time_ms": 1790000000010,
+   "end_time_ms": 1790000000100,
+   "status": "ok",
+   "attributes": {
+    "gen_ai.operation.name": "chat",
+    "gen_ai.usage.input_tokens": 120,
+    "gen_ai.usage.output_tokens": 30
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000003",
+   "parent_span_id": "a000000000000001",
+   "name": "query_warehouse",
+   "start_time_ms": 1790000000110,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": "query_warehouse",
+    "input.value": "{\"question\": \"q3 revenue\"}"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000004",
+   "parent_span_id": "a000000000000003",
+   "name": "mcp analytics.query_warehouse \u2192 Snowflake warehouse",
+   "start_time_ms": 1790000000120,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "agentglow.mcp.server": "analytics",
+    "agentglow.mcp.tool": "query_warehouse",
+    "agentglow.mcp.resource": "Snowflake warehouse",
+    "agentglow.mcp.resource_kind": "warehouse",
+    "mcp.method.name": "tools/call",
+    "gen_ai.tool.name": "query_warehouse"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000004",
+   "parent_span_id": "a000000000000003",
+   "name": "mcp analytics.query_warehouse \u2192 Snowflake warehouse",
+   "start_time_ms": 1790000000120,
+   "end_time_ms": 1790000000390,
+   "status": "ok",
+   "attributes": {
+    "agentglow.mcp.server": "analytics",
+    "agentglow.mcp.tool": "query_warehouse",
+    "agentglow.mcp.resource": "Snowflake warehouse",
+    "agentglow.mcp.resource_kind": "warehouse",
+    "mcp.method.name": "tools/call",
+    "gen_ai.tool.name": "query_warehouse"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000003",
+   "parent_span_id": "a000000000000001",
+   "name": "query_warehouse",
+   "start_time_ms": 1790000000110,
+   "end_time_ms": 1790000000400,
+   "status": "ok",
+   "attributes": {
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": "query_warehouse",
+    "input.value": "{\"question\": \"q3 revenue\"}"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000005",
+   "parent_span_id": "a000000000000001",
+   "name": "lookup_customer",
+   "start_time_ms": 1790000000410,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": "lookup_customer"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000006",
+   "parent_span_id": "a000000000000005",
+   "name": "mcp analytics.lookup_customer \u2192 Postgres customers DB",
+   "start_time_ms": 1790000000420,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "agentglow.mcp.server": "analytics",
+    "agentglow.mcp.tool": "lookup_customer",
+    "agentglow.mcp.resource": "Postgres customers DB",
+    "agentglow.mcp.resource_kind": "db",
+    "mcp.method.name": "tools/call",
+    "gen_ai.tool.name": "lookup_customer"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000007",
+   "parent_span_id": "a000000000000006",
+   "name": "SELECT customers",
+   "start_time_ms": 1790000000430,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "db.system": "postgresql",
+    "db.statement": "SELECT * FROM customers WHERE id = $1"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000007",
+   "parent_span_id": "a000000000000006",
+   "name": "SELECT customers",
+   "start_time_ms": 1790000000430,
+   "end_time_ms": 1790000000600,
+   "status": "ok",
+   "attributes": {
+    "db.system": "postgresql",
+    "db.statement": "SELECT * FROM customers WHERE id = $1"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000006",
+   "parent_span_id": "a000000000000005",
+   "name": "mcp analytics.lookup_customer \u2192 Postgres customers DB",
+   "start_time_ms": 1790000000420,
+   "end_time_ms": 1790000000690,
+   "status": "ok",
+   "attributes": {
+    "agentglow.mcp.server": "analytics",
+    "agentglow.mcp.tool": "lookup_customer",
+    "agentglow.mcp.resource": "Postgres customers DB",
+    "agentglow.mcp.resource_kind": "db",
+    "mcp.method.name": "tools/call",
+    "gen_ai.tool.name": "lookup_customer"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000005",
+   "parent_span_id": "a000000000000001",
+   "name": "lookup_customer",
+   "start_time_ms": 1790000000410,
+   "end_time_ms": 1790000000700,
+   "status": "ok",
+   "attributes": {
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": "lookup_customer"
+   }
+  }
+ },
+ {
+  "kind": "start",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000008",
+   "parent_span_id": "a000000000000001",
+   "name": "chat gpt",
+   "start_time_ms": 1790000000710,
+   "end_time_ms": null,
+   "status": "unset",
+   "attributes": {
+    "gen_ai.operation.name": "chat",
+    "gen_ai.usage.input_tokens": 300,
+    "gen_ai.usage.output_tokens": 80,
+    "agentglow.final": "warehouse + customers checked"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000008",
+   "parent_span_id": "a000000000000001",
+   "name": "chat gpt",
+   "start_time_ms": 1790000000710,
+   "end_time_ms": 1790000000880,
+   "status": "ok",
+   "attributes": {
+    "gen_ai.operation.name": "chat",
+    "gen_ai.usage.input_tokens": 300,
+    "gen_ai.usage.output_tokens": 80,
+    "agentglow.final": "warehouse + customers checked"
+   }
+  }
+ },
+ {
+  "kind": "end",
+  "span": {
+   "trace_id": "abababababababababababababababab",
+   "span_id": "a000000000000001",
+   "parent_span_id": null,
+   "name": "researcher",
+   "start_time_ms": 1790000000000,
+   "end_time_ms": 1790000000900,
+   "status": "ok",
+   "attributes": {
+    "agentglow.agent": "researcher",
+    "agentglow.run.topic": "incident triage"
+   }
+  }
+ }
+]

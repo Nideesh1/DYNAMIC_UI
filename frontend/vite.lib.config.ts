@@ -1,9 +1,10 @@
-/** Library build: `agentglow` → dist/ (ESM, one lazy chunk per theme, dist/style.css). */
+/** Library build: `agentglow` → dist/ (ESM, one lazy chunk per theme, dist/style.css) + `agentglow/pulse` → dist/pulse.js
+ * + `agentglow/node` → dist/node.js (server-only; OpenTelemetry stays external: optional peer dependencies). */
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
-const external = [/^react($|\/)/, /^react-dom($|\/)/, /^three($|\/)/, /^@react-three\//, /^postprocessing($|\/)/];
+const external = [/^react($|\/)/, /^react-dom($|\/)/, /^three($|\/)/, /^@react-three\//, /^postprocessing($|\/)/, /^@opentelemetry\//, /^node:/];
 
 export default defineConfig({
   plugins: [react()],
@@ -12,9 +13,10 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     lib: {
-      entry: fileURLToPath(new URL("src/index.ts", import.meta.url)),
+      entry: { index: fileURLToPath(new URL("src/index.ts", import.meta.url)), pulse: fileURLToPath(new URL("src/pulse.ts", import.meta.url)),
+        node: fileURLToPath(new URL("src/node.ts", import.meta.url)) },
       formats: ["es"],
-      fileName: () => "index.js",
+      fileName: (_format, name) => `${name}.js`,
       cssFileName: "style",
     },
     rollupOptions: {

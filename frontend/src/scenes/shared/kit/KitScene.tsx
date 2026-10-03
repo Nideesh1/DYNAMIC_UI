@@ -19,7 +19,10 @@ import { config, kitExtents, kitTick } from "./layout";
 import { SkillSigil } from "./SkillSigil";
 import { DecisionGlyph } from "./DecisionGlyph";
 import { DecisionHalos, HaloLabel, OrderChip } from "./HighVolume";
+import { Fizzles } from "./Fizzle";
 import { HaltMark, haltMix } from "./Halt";
+import { EventChip, PrimEdges, PrimMark, ResourceStat } from "./Prims";
+import { ServiceLinks } from "./ServiceLinks";
 import { PRESETS, type LayoutPreset, type PresetName } from "./presets";
 import { kit, type KitAgent, type KitBackend, type KitMcp, type KitRun, type Plane } from "./state";
 
@@ -183,9 +186,14 @@ function Agents({ Agent, Edge, selected, onSelect, radius, height }: { Agent: Co
           <HaloLabel agent={a} radius={radius} height={height} />
           <OrderChip agent={a} radius={radius} height={height} />
           <HaltMark agent={a} radius={radius} height={height} />
+          <PrimMark agent={a} radius={radius} height={height} />
+          <EventChip agent={a} radius={radius} height={height} />
         </AgentScope>
       ))}
       <DecisionHalos radius={radius} height={height} />
+      <Fizzles scale={radius} />
+      <PrimEdges radius={radius} />
+      <ServiceLinks radius={radius} />
     </>
   );
 }
@@ -219,6 +227,7 @@ function Mcp({ McpServer, Backend }: { McpServer?: ComponentType<McpServerSlotPr
               [...m.backends.values()].map((b) => (
                 <Fade key={b.uid} item={b}>
                   <Backend mcp={m} backend={b} />
+                  <ResourceStat mcp={m} backend={b} />
                 </Fade>
               ))}
           </LabelScope.Provider>

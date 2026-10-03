@@ -62,6 +62,10 @@ Orders (docs/SPEC.md "Orders"): a span with `agentglow.event` = order (+ `agentg
 
 MCP backend spans (`agentglow.mcp.*`, from the MCP server's process) can reach the server before the caller's tool span:
 one whose parent is not known yet is held until the parent arrives, and dropped after ORPHAN_MS (never a run of its own).
+
+Backend services (docs/SPEC.md "Backend services", backend.py): a request (HTTP SERVER span) or handled message (CONSUMER
+span) is a pulse on its service's long-lived agent; DB / cache / HTTP CLIENT spans inside it (or inside an MCP tool span
+that names no backend) light up resources. Only those spans are handled there: agent-only traces map as before.
 """
 from __future__ import annotations
 
@@ -73,8 +77,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from .backend import Services, entry_kind
 from .hv import DecisionRate
-from .scrub import SKILL_KEY, decision_text, session_title, skill_name, step_name
+from .primitives import SIGNAL, Prims
+from .scrub import SKILL_KEY, decision_text, session_title, skill_name, step_name, wait_details, wait_url
 
 LLM_OPS = {"chat", "text_completion", "generate_content"}
 LG_NODES = {"model", "tools", "agent", "call_model", "__start__", "__end__"}
@@ -103,6 +109,8 @@ HATCHET_GRACE_MS = int(os.environ.get("AGENTGLOW_HATCHET_IDLE_MS", "60000"))
 HATCHET_FINAL_GRACE_MS = 3000
 # hard upper bound: a run with no span activity for this long completes even with open spans / waits
 RUN_MAX_IDLE_MS = int(os.environ.get("AGENTGLOW_RUN_MAX_IDLE_MS", str(24 * 3600 * 1000)))
+BECAUSE_MS = 30_000  # an approval wait starting this soon after its agent's guard decision links it
+DECISIONS_KEPT = 2000
 PARK_SLACK_MS = 1000  # a step ending this soon after its wait ended was (likely) evicted mid-wait
 PARK_SHOW_MS = 3000  # ...shown as waiting only if no step starts meanwhile (a satisfied wait moves on at once)
 HATCHET_WAIT_SPAN = "hatchet.durable.wait_for"
@@ -254,7 +262,14 @@ class Span:
     persist: bool = False  # supervisor agent: exits when its team graph ends, not when its first turn ends
     skill: str | None = None  # `agentglow.skill` name once its skill start was emitted
     wait: tuple | None = None  # (reason, until ms | None, declared by the app) while this span is a wait
+    covered: bool = False  # entry span holding a primitive job / session node: never also a long-request job node
     wait_step: str | None = None  # step span the wait belongs to
+    wait_extra: dict | None = None  # kind / title / details / url / because shown with the wait (declared waits)
+    kind: str | None = None  # OTel span kind (server, client, producer, consumer, internal) when known
+    svc: str | None = None  # service agent id: this span is (inside) a service request (backend.py)
+    entry: str | None = None  # the request / handled-message span itself: http | rpc | message | event
+    backend: tuple | None = None  # backend client call emitted (owner, server, tool, resource, kind); () = rate-limited
+    mcp_host: str | None = None  # nearest MCP tool span naming no backend (its CLIENT spans become its backends)
 
 
 @dataclass
@@ -294,6 +309,8 @@ class Run:
     last_wait: tuple | None = None  # (end ts, step span id, reason, until) of the last wait that ended
     parked: dict = field(default_factory=dict)  # step name -> (reason, until): ended with its wait (evicted)
     park_pending: dict = field(default_factory=dict)  # parked step name -> park time, its `waiting` not emitted yet
+    service: bool = False  # backend services run: long-lived, never completes when its spans close
+    reason: str = ""  # why it ended, when not just "its spans closed" (`agentglow.run.end_reason`, e.g. "abandoned")
 
 
 def _hatchet_workflow(a: dict) -> str:
@@ -319,6 +336,10 @@ class Mapper:
         self.step_runs: dict[str, str] = {}  # hatchet.step_run_id -> run id (Hatchet wait spans carry only that)
         self.orphans: dict[str, dict] = {}  # MCP backend span id -> {"start", "end", "parent", "ts"} until its parent shows
         self.hv = DecisionRate()  # high-volume decisions: per-agent aggregation + global cap (hv.py)
+        self.decisions_by_id: dict[str, dict] = {}  # decision span id -> summary (a wait's `because`), FIFO bounded
+        self.last_guard: dict[str, tuple] = {}  # agent id -> (ts, summary) of its latest guard / noul decision
+        self.svc = Services(self)  # backend services (backend.py)
+        self.prims = Prims(self)  # generic primitives (primitives.py)
 
     def _note_scope(self, s: "Span") -> None:
         if s.run in self.scopes:
@@ -336,6 +357,11 @@ class Mapper:
         out: list[dict] = []
         try:
             if self._hold_orphan(kind, span):
+                return out
+            a = span.get("attributes") or {}
+            if SIGNAL in a or a.get(EVENT_KEY) not in (None, "order"):  # a primitive signal / business event (primitives.py)
+                if kind == "end":
+                    self.prims.signal(span, out)
                 return out
             if kind == "start":
                 if span["span_id"] not in self.spans and span["span_id"] not in self.seen_ended:
@@ -359,7 +385,9 @@ class Mapper:
             return True
         a = d.get("attributes") or {}
         pid = d.get("parent_span_id")
-        if not (a.get("agentglow.mcp.server") and pid and pid not in self.spans and sid not in self.spans and sid not in self.seen_ended):
+        # (a span inside a held MCP span, e.g. its DB call, waits with it)
+        if not ((a.get("agentglow.mcp.server") or pid in self.orphans) and pid and pid not in self.spans and sid not in self.spans
+                and sid not in self.seen_ended):
             return False
         self.orphans[sid] = {"start": None, "end": None, "parent": pid, "ts": d.get("end_time_ms") or d.get("start_time_ms") or 0, kind: d}
         while len(self.orphans) > MAX_ORPHANS:
@@ -391,9 +419,13 @@ class Mapper:
 
     def tick(self, now_ms: int) -> list[dict]:
         out: list[dict] = self.hv.flush(now_ms)
+        out += self.svc.tick(now_ms)
+        out += self.prims.tick(now_ms)
         for k in [k for k, o in self.orphans.items() if now_ms - o["ts"] >= ORPHAN_MS]:  # parent never came: drop
             self.orphans.pop(k)
         for r in list(self.runs.values()):
+            if r.service:
+                continue
             for step, t in [(k, t) for k, t in r.park_pending.items() if now_ms - t >= PARK_SHOW_MS]:
                 del r.park_pending[step]
                 reason, until = r.parked[step]
@@ -402,10 +434,42 @@ class Mapper:
                 self._complete(r, now_ms, out)
         return out
 
+    def quiet_runs(self) -> set[str]:
+        """Open runs that are legitimately quiet (never shown idle): an open wait (declared approval / sleep, Hatchet
+        durable wait), a step parked in a wait, or an open primitive session / job span (long-lived by design)."""
+        out = {r.id for r in self.runs.values() if r.waits or r.parked}
+        for s in self.spans.values():
+            if s.end is None and ("agentglow.session" in s.attrs or "agentglow.job.id" in s.attrs):
+                out.add(s.run)
+        return out
+
     # ------------------------------------------------------------------ lifecycle
     def _start(self, d: dict, out: list) -> Span:
         a = dict(d.get("attributes") or {})
         parent = self.spans.get(d.get("parent_span_id") or "")
+        entry = entry_kind(d)
+        if entry:  # a service's request / handled message (backend.py): a pulse on the service agent
+            s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a,
+                     self.svc.run_id(a.get("agentglow.scope") or a.get("agentglow.run.scope")), kind=d.get("kind"))
+            self.spans[s.id] = s
+            self.svc.start_entry(s, entry, d, out)
+            return s
+        if not d.get("parent_span_id") and d.get("kind") == "client":
+            root = self.svc.root_client(d)
+            if root or self.svc.defer_root(d):
+                # a service's own DB / cache / HTTP call outside any request (a poll, a cron): a resource ping, never a
+                # run. Live starts often carry no attributes yet (redis, httpx set them after start): decided at end.
+                s = Span(d["span_id"], d["trace_id"], None, d.get("name") or "span", d.get("start_time_ms") or 0, a,
+                         self.svc.run_id(a.get("agentglow.scope") or a.get("agentglow.run.scope")), kind="client")
+                s.backend = ()
+                self.spans[s.id] = s
+                if root:
+                    self.svc.start_root_client(s, d, out)
+                return s
+        if parent is None and self.prims.anchored(a):
+            # a root (or orphan) session / job / stage / lease / inference span: it hangs off its process's service
+            parent = self.prims.anchor(d, out)
+            d = {**d, "parent_span_id": parent.id}
         up = a.get("hatchet.parent_workflow_run_id")  # child workflow run: shown inside its (still open) parent run
         wf = a.get("hatchet.workflow_run_id")
         if wf and not (up and str(up) in self.runs) and parent is not None and parent.run != str(wf) and \
@@ -415,7 +479,10 @@ class Mapper:
             up = a["hatchet.parent_workflow_run_id"] = parent.run
         run_id = str((up if up and str(up) in self.runs else None) or a.get("hatchet.workflow_run_id") or a.get("agentglow.run.id")
                      or self.step_runs.get(str(a.get("hatchet.step_run_id") or "")) or (parent.run if parent else d["trace_id"]))
-        s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a, run_id)
+        s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a, run_id,
+                 kind=d.get("kind"))
+        if parent is not None:
+            s.svc, s.mcp_host = parent.svc, parent.mcp_host
         self.spans[s.id] = s
         self._note_scope(s)
         if len(self.spans) > 200_000:  # memory guard for spans that never end
@@ -430,6 +497,8 @@ class Mapper:
         run.open += 1
         run.done_at = None
         run.last_ts = max(run.last_ts, ts)
+        if not run.service:
+            self.svc.note_run(d, run_id, a.get("agentglow.scope") or a.get("agentglow.run.scope"))
         run.hatchet = run.hatchet or "hatchet.workflow_run_id" in a
 
         step = step_name(a.get("agentglow.step") or (a.get("hatchet.step_name") if s.name.startswith("hatchet.start_step_run") else None))
@@ -470,18 +539,23 @@ class Mapper:
         elif self._is_tool(s) or (parent and parent.name == "tools"):
             self._tool_start(s, out, ts)
         self._mcp_call(s, out, ts)
+        if s.svc or s.mcp_host:
+            self.svc.child_start(s, out)
         self._skill_start(s, out, ts)
         if "agentglow.final" in a:
             self._final(s.run, a["agentglow.final"], out, ts)
         s.wait = self._wait_of(s)
         if s.wait:
             self._wait_start(s, run, out, ts)
+        self.prims.start(s, out)
         return s
 
     def _end(self, d: dict, out: list) -> None:
         sid = d["span_id"]
         if sid in self.seen_ended:
             return
+        if self.svc.undefer(sid):  # a root CLIENT span that had no attributes at start: classify it now
+            self.spans.pop(sid, None)
         s = self.spans.get(sid) or self._start(d, out)
         self.seen_ended[sid] = None
         if len(self.seen_ended) > 100_000:
@@ -493,6 +567,11 @@ class Mapper:
         s.status = d.get("status") or "unset"
         a, ts, run = s.attrs, s.end, self.runs.get(s.run)
         failed = s.status == "error"
+        if s.entry:
+            s.name = d.get("name") or s.name  # e.g. FastAPI renames "GET" to "GET /orders/{id}" once routed
+            self.svc.end_entry(s, out)
+            self.svc.span_ended(s)
+            return
 
         # late classification: attributes that only exist at end (OpenInference)
         if not s.agent and not s.container and not s.alias and not s.team:
@@ -511,6 +590,7 @@ class Mapper:
         if "SkillsMiddleware" in s.name:
             self._note_skills_metadata(s)
         self._skill_start(s, out, s.start)
+        self.prims.end(s, out)
 
         if s.llm:
             owner = self._owner(s, out)
@@ -544,7 +624,11 @@ class Mapper:
             out.append(ev)
         if s.skill:
             out.append({"type": "skill", "run_id": s.run, "id": self._owner(s, out), "name": s.skill, "status": "end", "ts": ts})
-        if a.get("db.system"):
+        if s.backend is None and (s.svc or s.mcp_host) and s.kind in ("client", "producer"):
+            self.svc.child_start(s, out)  # attributes set after the span started (redis, httpx): the call shows now
+        if s.backend is not None:
+            self.svc.child_end(s, out)
+        elif a.get("db.system"):
             self._graph(s, out, ts)
         if a.get(DECISION_KEY) and not s.agent:
             self._decision(s, out, ts)
@@ -575,13 +659,17 @@ class Mapper:
         if s.step and not run:
             out.append({"type": "step", "run_id": s.run, "step": s.step, "status": "failed" if failed else "done", "ts": ts})
 
-        if run:
+        if (run and run.service) or (run is None and s.backend is not None):
+            self.svc.span_ended(s)
+        elif run:
             run.open = max(0, run.open - 1)
             run.last_ts = max(run.last_ts, ts)
             if s.step:
                 self._step_end(s, run, failed, out, ts)
             if failed and run.root == s.id:
                 run.failed = True
+            if run.root == s.id and a.get("agentglow.run.end_reason"):
+                run.reason = str(a["agentglow.run.end_reason"])[:40]
             if run.open == 0:
                 if not run.hatchet:
                     self._complete(run, ts, out)
@@ -621,8 +709,11 @@ class Mapper:
         if run.synthetic:
             out.append({"type": "exit", "run_id": run.id, "id": run.synthetic, "status": "failed" if run.failed else "done", "ts": ts})
         root = self.spans.get(run.root or "")
-        out.append({"type": "run", "run_id": run.id, "status": "failed" if run.failed else "completed",
-                    "topic": self._topic(root) if root else run.id, "workflow": self._workflow(root) if root else "", "ts": ts})
+        ev = {"type": "run", "run_id": run.id, "status": "failed" if run.failed else "completed",
+              "topic": self._topic(root) if root else run.id, "workflow": self._workflow(root) if root else "", "ts": ts}
+        if run.reason:
+            ev["reason"] = run.reason
+        out.append(ev)
         self.runs.pop(run.id, None)
         for k in [k for k, s in self.spans.items() if s.run == run.id]:
             del self.spans[k]
@@ -635,6 +726,8 @@ class Mapper:
         v = a.get("agentglow.agent")
         if v:
             return s.name if v is True or str(v).lower() == "true" else str(v)
+        if s.svc and s.name == "fastapi.background_task":  # a service's background task: a short-lived subagent
+            return str(a.get("code.function.name") or "background_task").rsplit(".", 1)[-1] or "background_task"
         if a.get("gen_ai.operation.name") == "invoke_agent":
             return str(a.get("gen_ai.agent.name") or s.name.removeprefix("invoke_agent ").strip() or "agent")
         meta = _json(a.get("metadata")) or {}
@@ -662,7 +755,7 @@ class Mapper:
             if cur.agent:
                 return cur.id, via_tool
             if cur.alias:
-                return cur.alias, via_tool
+                return cur.alias, via_tool or cur.entry is not None  # an agent in a service request is its subagent
             if cur.team:  # an agent graph inside a langgraph-supervisor team is the supervisor's subagent
                 return cur.team, True
             via_tool = via_tool or cur.tool or cur.name == "task"
@@ -676,8 +769,11 @@ class Mapper:
         if host is not None and host.team and (self.agents.get(host.team) or Agent("", "")).name == name:
             s.alias = host.team  # the supervisor's next turn: same agent instance, no new spawn
             return
-        s.agent, s.candidate = name, None
         parent, via_tool = self._ancestor_agent(s)
+        if parent and s.svc and parent in self.svc.svcs and not self.svc.admit_task(parent, s.id):
+            s.alias = parent  # the service already runs MAX_TASKS tasks: this one shows as the service itself
+            return
+        s.agent, s.candidate = name, None
         run = self.runs.get(s.run)
         st = self._step_span(s)
         child = st is not None and st.attrs.get("hatchet.parent_workflow_run_id") == s.run
@@ -836,10 +932,12 @@ class Mapper:
         return next((k for k, ag in reversed(self.agents.items()) if ag.step_span == st.id and not ag.done), None)
 
     @staticmethod
-    def _step_wait_ev(run_id: str, step: str, reason: str, until: int | None, ts: int) -> dict:
+    def _step_wait_ev(run_id: str, step: str, reason: str, until: int | None, ts: int, extra: dict | None = None) -> dict:
         ev = {"type": "step", "run_id": run_id, "step": step, "status": "waiting", "reason": reason, "ts": ts}
         if until:
             ev["until"] = until
+        if extra:
+            ev.update(extra)
         return ev
 
     @staticmethod
@@ -855,7 +953,7 @@ class Mapper:
         if w is not None and w is shown:
             return
         if w is not None:
-            out.append(self._step_wait_ev(run.id, st.step, w.wait[0], w.wait[1], ts))
+            out.append(self._step_wait_ev(run.id, st.step, w.wait[0], w.wait[1], ts, w.wait_extra))
         elif st.end is None:
             out.append({"type": "step", "run_id": run.id, "step": st.step, "status": "running", "ts": ts})
 
@@ -866,11 +964,12 @@ class Mapper:
         st = self.spans.get(run.step_runs.get(srid) or "") if srid and not s.step else None
         st = st or self._step_span(s)
         s.wait_step = st.id if st else None
+        owner = self._wait_agent(s, st)
+        s.wait_extra = self._wait_extra(s, owner, ts) if s.wait[2] else None
         shown = self._shown_wait(run, st)
         run.waits[s.id] = s
         if st:
             self._step_wait_state(run, st, out, ts, shown)
-        owner = self._wait_agent(s, st)
         ag = self.agents.get(owner or "")
         others = [w for w in run.waits.values() if w is not s and self._wait_agent(w, self.spans.get(w.wait_step or "")) == owner]
         if ag and not any(w.wait[2] or not s.wait[2] for w in others):  # already waiting on a wait that wins
@@ -878,7 +977,37 @@ class Mapper:
             ev = {"type": "agent", "run_id": s.run, "id": owner, "status": "waiting", "reason": s.wait[0], "ts": ts}
             if s.wait[1]:
                 ev["until"] = s.wait[1]
+            if s.wait_extra:
+                ev.update(s.wait_extra)
             out.append(ev)
+
+    def _wait_extra(self, s: Span, owner: str | None, ts: int) -> dict | None:
+        """A declared wait's drawer fields: `kind` (approval), `title`, `details` {k: scalar}, `url`, and `because` =
+        the decision that triggered it (`agentglow.wait.because` = its span id; or, for an approval, the owner's
+        guard / noul decision of the last BECAUSE_MS)."""
+        a, x = s.attrs, {}
+        kind = decision_text(a.get("agentglow.wait.kind"), 16).lower()
+        if kind:
+            x["kind"] = kind
+        title = decision_text(a.get("agentglow.wait.title"), 80)
+        if title:
+            x["title"] = title
+        pre = "agentglow.wait.detail."
+        det = wait_details({k[len(pre):]: v for k, v in a.items() if k.startswith(pre)})
+        if det:
+            x["details"] = det
+        url = wait_url(a.get("agentglow.wait.url"))
+        if url:
+            x["url"] = url
+        bid = a.get("agentglow.wait.because")
+        because = self.decisions_by_id.get(str(bid)) if bid else None
+        if because is None and not bid and kind == "approval" and owner:
+            lg = self.last_guard.get(owner)
+            if lg and 0 <= ts - lg[0] <= BECAUSE_MS:
+                because = lg[1]
+        if because:
+            x["because"] = because
+        return x or None
 
     def _wait_end(self, s: Span, run: Run, out: list, ts: int) -> None:
         st = self.spans.get(s.wait_step or "")
@@ -908,7 +1037,8 @@ class Mapper:
                 continue
             a = st.attrs if st else w.attrs
             out = {"reason": w.wait[0], "step": st.step if st else None, "workflow": _hatchet_workflow(a) or None,
-                   "wait_run_id": str(a.get("hatchet.workflow_run_id") or "") or None}
+                   "wait_run_id": str(a.get("hatchet.workflow_run_id") or "") or None,
+                   "title": (w.wait_extra or {}).get("title")}
             return {k: v for k, v in out.items() if v}
         if step and not agent_id and step in run.parked:
             return {"reason": run.parked[step][0], "step": step}
@@ -1008,6 +1138,7 @@ class Mapper:
         kind = str(a.get("agentglow.mcp.resource_kind") or "api")
         kind = kind if kind in RESOURCE_KINDS else "api"
         s.mcp = (server, tool, str(res) if res else None, kind)
+        s.mcp_host = None if res else s.id  # no backend named: its CLIENT spans become its backends (backend.py)
         key = (server, s.mcp[2])
         if key not in self.mcp_known:
             self.mcp_known.add(key)
@@ -1164,9 +1295,26 @@ class Mapper:
             v = decision_text(a.get(f"{DECISION_KEY}.{k}"), 40)
             if v:
                 ev[k] = v
+        th = _num(a.get(DECISION_KEY + ".threshold"))
+        if th is not None:
+            ev["threshold"] = th
         ev.update(ms=max(0, (s.end or s.start) - s.start), ts=ts)
+        self._remember_decision(s.id, ev)
         important = a.get(DECISION_KEY + ".important")
         out += self.hv.offer(ev, important is True or str(important).lower() in ("true", "1"))
+
+    def _remember_decision(self, sid: str, ev: dict) -> None:
+        """Keep a short summary per decision span (a later wait's `because`) and each agent's latest guard."""
+        keep = ("kind", "question", "result", "p", "provider", "purpose", "target", "threshold", "ms", "ts")
+        summary = {"id": sid, **{k: ev[k] for k in keep if k in ev}}
+        self.decisions_by_id[sid] = summary
+        if len(self.decisions_by_id) > DECISIONS_KEPT:
+            self.decisions_by_id.pop(next(iter(self.decisions_by_id)))
+        if ev.get("purpose") == "guard" or ev.get("kind") == "noul":
+            self.last_guard.pop(ev["id"], None)
+            self.last_guard[ev["id"]] = (ev["ts"], summary)
+            if len(self.last_guard) > DECISIONS_KEPT:
+                self.last_guard.pop(next(iter(self.last_guard)))
 
     def _order(self, s: Span, out: list, ts: int) -> None:
         a, k = s.attrs, ORDER_KEY + "."

@@ -26,7 +26,7 @@ import interUrl from "./fonts/inter-latin-500-normal.woff";
 import monoUrl from "./fonts/jetbrains-mono-latin-500-normal.woff";
 import { fit } from "./kit/fit";
 import { LabelScope, labels, newLabelEntry, registerLabel, unregisterLabel, type LabelKind } from "./kit/labels";
-import { STALE_TEXT, isStale, runWait, slotLabel, stepChips, useWorld, waitLabel, type Run } from "./world";
+import { STALE_TEXT, idleText, isIdle, isStale, runWait, slotLabel, stepChips, useWorld, waitLabel, type Run } from "./world";
 
 /** kit/dim.ts skips this subtree (the label fades itself) */
 const NO_DIM = { kitNoDim: true };
@@ -111,6 +111,8 @@ export interface Label3DProps {
    */
   declutter?: LabelKind | false;
   ref?: Ref<Label3DHandle>;
+  /** text that changes over time (e.g. a job's elapsed timer): re-read ~2x/s and re-texted when it changes */
+  live?: (() => LabelLine) | null;
   /** extra objects in billboard space (decorations) */
   children?: ReactNode;
 }
@@ -229,7 +231,8 @@ function flattenLine(line: LabelLine | null | undefined, upper: boolean, tmp: TH
 
 /**
  * The shared run sub-line "hatchet · plan › research › write" as colored segments (current step bright, done
- * steps light, queued dim; a step paused in a wait amber, followed by " · waiting on approval"). Runs without Hatchet steps show `fallback` [working, finished, failed?].
+ * steps light, queued dim; a step paused in a wait amber, followed by " · waiting on approval"; an idle run ends with
+ * " · idle · 4m"). Runs without Hatchet steps show `fallback` [working, finished, failed?] ("idle · 4m" while idle).
  */
 export function runStepsLine(
   run: Run,
@@ -238,7 +241,8 @@ export function runStepsLine(
 ): LabelLine {
   const finished = run.status !== "started";
   if (isStale(run)) return [{ text: STALE_TEXT, color: WAIT_COLOR }];
-  if (!run.hasSteps) return [{ text: finished ? (run.status === "failed" ? (fallback[2] ?? "failed") : fallback[1]) : fallback[0], color: c.base }];
+  const idle = !finished && isIdle(run) ? idleText(run) : "";
+  if (!run.hasSteps) return [{ text: finished ? (run.status === "failed" ? (fallback[2] ?? "failed") : fallback[1]) : idle || fallback[0], color: c.base }];
   const segs: LabelSeg[] = [{ text: "hatchet · ", color: c.base }];
   const { shown, more } = stepChips(run);
   shown.forEach((st, i) => {
@@ -250,6 +254,7 @@ export function runStepsLine(
   if (more) segs.push({ text: ` +${more}`, color: c.base });
   const w = finished ? null : runWait(run);
   if (w) segs.push({ text: ` · ${waitLabel(w)}`, color: WAIT_COLOR });
+  else if (idle) segs.push({ text: ` · ${idle}`, color: c.base });
   return segs;
 }
 /** a step paused in a wait (approval, durable sleep) */
@@ -328,6 +333,7 @@ function Label3DInner(props: Label3DProps) {
       mainColor: new THREE.Color(),
       subColor: new THREE.Color(),
       tmp: new THREE.Color(),
+      liveAt: 0,
       wp: new THREE.Vector3(),
       q: new THREE.Quaternion(),
       hasSub: false,
@@ -553,6 +559,10 @@ function Label3DInner(props: Label3DProps) {
     const b = bb.current;
     if (!o || !b) return;
     const q = P.current;
+    if (q.live) {
+      const t = performance.now();
+      if (t - s.liveAt > 500) (s.liveAt = t), api.setLines(q.live(), q.secondary ?? null);
+    }
     if (s.cur !== s.target) {
       if (q.fadeMs <= 0) s.cur = s.target;
       else {

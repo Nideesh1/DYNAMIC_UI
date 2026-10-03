@@ -18,7 +18,8 @@ as `preset`; do not add per-theme placement code outside it.
    `<OrbitControls>`, `useSceneSetup()`, `selected` state, `<Hud>` and any stage-shift `<group position=[-2.2,..]>`
    (the kit centres in the free area with a view offset). Keep: background color, lights/stars/fog/floor
    (`Background`), `EffectComposer` (`PostFX`), title/subtitle, camera position + fov, polar limits (`controls`).
-   Props to set: `preset`, `plane`, `fit` (start from `{ nRef: 4, min: 0.62, max: 1.6, minRadius: 5.5 }`),
+   Props to set: `preset`, `plane`, `fit` (start from `{ nRef: 4, min: 0.62, max: 1.6, minRadius: 5.5 }`; `maxNode`, default
+   0.08, caps an agent's framed diameter as a fraction of the viewport height so a lone node never fills the screen),
    `agentRadius` (world radius of one agent at scale 1), `graph={{ natural, radius }}`, `peripheryGap`,
    `cluster` (the old `<ClusterBalls>` props) and `clusterOffset` (lift above a ground plane in `xz`).
 2. **Agent slot** (`AgentSlotProps = { agent, selected, onSelect }`). Convert the per-agent component:
