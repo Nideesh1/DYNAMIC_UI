@@ -26,7 +26,7 @@ import interUrl from "./fonts/inter-latin-500-normal.woff";
 import monoUrl from "./fonts/jetbrains-mono-latin-500-normal.woff";
 import { fit } from "./kit/fit";
 import { LabelScope, labels, newLabelEntry, registerLabel, unregisterLabel, type LabelKind } from "./kit/labels";
-import { runWait, slotLabel, stepChips, useWorld, waitLabel, type Run } from "./world";
+import { STALE_TEXT, isStale, runWait, slotLabel, stepChips, useWorld, waitLabel, type Run } from "./world";
 
 /** kit/dim.ts skips this subtree (the label fades itself) */
 const NO_DIM = { kitNoDim: true };
@@ -237,6 +237,7 @@ export function runStepsLine(
   fallback: [working: string, done: string, failed?: string] = ["working…", "done"],
 ): LabelLine {
   const finished = run.status !== "started";
+  if (isStale(run)) return [{ text: STALE_TEXT, color: WAIT_COLOR }];
   if (!run.hasSteps) return [{ text: finished ? (run.status === "failed" ? (fallback[2] ?? "failed") : fallback[1]) : fallback[0], color: c.base }];
   const segs: LabelSeg[] = [{ text: "hatchet · ", color: c.base }];
   const { shown, more } = stepChips(run);

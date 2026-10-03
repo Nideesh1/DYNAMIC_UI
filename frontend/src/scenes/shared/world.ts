@@ -306,6 +306,8 @@ export type Run = {
   /** the step that finished most recently (handoff source) */
   lastDone: StepName;
   final: string;
+  /** performance.now() of the run's latest event (stale detection) */
+  lastEventAt: number;
 };
 /** Which of the 3 scene slots a step is drawn in (see STEP_SLOTS). */
 export function stepSlot(r: Run, step: StepName): number {
@@ -335,6 +337,18 @@ export function runWait(r: Run): (Wait & { step: StepName }) | null {
 }
 const hhmm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 /** "sleeping until 14:05" / "waiting on approval" / "waiting on approval (until Oct 3, 09:00)" */
+/** A live run is stale when nothing arrived from it for STALE_QUIET_MS while a wait of it is past its deadline by
+ * STALE_GRACE_MS (e.g. its worker restarted mid-run: nobody will resolve the wait or end the run). */
+export const STALE_QUIET_MS = 20_000;
+export const STALE_GRACE_MS = 15_000;
+export function isStale(r: Run | undefined, now = performance.now(), wall = Date.now()): boolean {
+  if (!r || r.status !== "started" || now - r.lastEventAt < STALE_QUIET_MS) return false;
+  const overdue = (w: Wait | null | undefined) => !!w && !!w.until && wall - w.until > STALE_GRACE_MS;
+  if (Object.values(r.waits).some(overdue)) return true;
+  for (const i of world.instances.values()) if (i.run === r.id && !i.exitAt && overdue(i.wait)) return true;
+  return false;
+}
+export const STALE_TEXT = "stale: no worker activity";
 export function waitLabel(w: Wait, now = Date.now()): string {
   const when = !w.until ? "" : Math.abs(w.until - now) < 20 * 3600_000 ? hhmm(w.until) : `${new Date(w.until).toLocaleDateString([], { month: "short", day: "numeric" })}, ${hhmm(w.until)}`;
   if (w.reason === "sleep") return when ? `sleeping until ${when}` : "sleeping";
@@ -573,6 +587,8 @@ let notifiedAt = 0;
 
 export function apply(ev: WorldEvent) {
   const now = performance.now();
+  const evRun = "run_id" in ev ? world.runs.get(ev.run_id as string) : undefined;
+  if (evRun) evRun.lastEventAt = now;
   // stats windows are not log lines (the halo shows them); everything else goes to the event log
   if (ev.type !== "mcp_register" && ev.type !== "decision_stats") {
     world.ticker.unshift(ev);
@@ -603,6 +619,7 @@ export function apply(ev: WorldEvent) {
           handoffTo: 0,
           lastDone: "",
           final: "",
+          lastEventAt: now,
         });
         world.stats.runs++;
       } else {
@@ -787,6 +804,7 @@ export function apply(ev: WorldEvent) {
         a.p95 += ev.ms;
       }
       if (!i) break;
+      if (i.status === "spawning") i.status = "thinking"; // a code agent (no LLM) deciding is working, not spawning
       // desk-wide guards (scope "global"): the owner shows ONE halted state (Halt), no glyph; below it a global deny
       // only flashes the halo. Both stay in the agent's decision list.
       let hide = false;
@@ -826,6 +844,7 @@ export function apply(ev: WorldEvent) {
       a.p95 += ev.p95_ms * ev.n;
       const i = world.instances.get(ev.id);
       if (!i || ev.n <= 0) break;
+      if (i.status === "spawning") i.status = "thinking"; // a code agent (no LLM) deciding is working, not spawning
       // outcome shares this window, in HALO_CATS order
       const seg = SEG_SCRATCH.fill(0);
       if (b.guard) (seg[0] += b.guard.allow), (seg[1] += b.guard.deny);
@@ -980,8 +999,19 @@ function expireSkills(i: Instance, now: number) {
   if (!open) i.skillEndAt = now;
 }
 
+const staleRuns = new Set<string>();
+let staleCheckAt = 0;
+
 export function tick(now = performance.now()) {
   let changed = rollRate(now);
+  if (now - staleCheckAt > 1000) {
+    // stale runs (isStale) appear without any event: notify the HUD / labels when one flips
+    staleCheckAt = now;
+    for (const r of world.runs.values()) {
+      const st = isStale(r, now);
+      if (st !== staleRuns.has(r.id)) (st ? staleRuns.add(r.id) : staleRuns.delete(r.id)), (changed = true);
+    }
+  }
   if (dirty && now - notifiedAt >= HUD_NOTIFY_MS) changed = true;
   runsWithInstances.clear();
   runsWorking.clear();

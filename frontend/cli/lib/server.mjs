@@ -121,6 +121,55 @@ export function killTree(pid) {
   try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
 }
 
+/** Version the server on `port` reports in /live/health ("" when down or unknown). */
+export async function serverVersion(port) {
+  try { return JSON.parse((await fetchText(localBase(port) + "/live/health", 2000))?.body || "{}").version || ""; } catch { return ""; }
+}
+
+/** PIDs listening on a local TCP port (lsof; macOS / Linux). [] when unknown. */
+export function listenerPids(port) {
+  if (process.platform === "win32") return [];
+  const r = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" });
+  return (r.stdout || "").split(/\s+/).map(Number).filter((n) => n > 0 && n !== process.pid);
+}
+
+/**
+ * After `setup` (re)installed the login item: a server of another version still answering on the port (started by
+ * an older CLI, the SessionStart hook, or a login item launchd/systemd did not restart) is replaced by this version.
+ * Steps, each only while the old version still answers: stop the server this CLI started (pid file), restart the
+ * login item (launchctl kickstart -k / systemctl --user restart), then terminate whatever AgentGlow server still
+ * listens on the port. Waits for `expected` to answer. Returns "current" | "restarted" | "stale" (old one still up)
+ * | "down". Dependencies are injectable (tests).
+ */
+export async function refreshStaleServer({ port, expected, log = console.log, deps = {} }) {
+  const d = {
+    version: serverVersion, stop: stopServer, restart: () => false, listeners: listenerPids, kill: (pid) => process.kill(pid, "SIGTERM"),
+    sleep, timeoutMs: 120000, ...deps,
+  };
+  const running = await d.version(port);
+  if (!running || !expected || running === expected) return "current";
+  log(`The AgentGlow server on port ${port} is ${running}; this CLI is ${expected}. Restarting it ...`);
+  const waitFor = async (ms) => {
+    for (const t0 = Date.now(); Date.now() - t0 < ms; await d.sleep(500)) {
+      const v = await d.version(port);
+      if (v === expected) return v;
+      if (v && v !== running) return v;
+    }
+    return d.version(port);
+  };
+  await d.stop(port);
+  let v = await d.version(port);
+  if (v === running && d.restart()) v = await waitFor(8000);
+  if (v === running) {  // nobody manages it (or the supervisor left it): it is AgentGlow (it answered), stop it
+    for (const pid of d.listeners(port)) { try { d.kill(pid); } catch { /* gone */ } }
+    await d.sleep(1000);
+    if (!d.restart()) log("  (no login item to restart: the next claude session starts the server)");
+  }
+  v = await waitFor(d.timeoutMs);
+  if (v === expected) return "restarted";
+  return v ? "stale" : "down";
+}
+
 /** Stop a server this CLI started. Returns "stopped" | "not-ours" | "none". */
 export async function stopServer(port) {
   const starter = readLock(port);
