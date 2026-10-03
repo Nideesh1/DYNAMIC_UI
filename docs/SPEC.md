@@ -216,6 +216,7 @@ backend spans.
 | errors | request `error` | `request` with `error: true`; counted in `service_stats.errors` |
 | outcome | `agentglow.mark_outcome(...)` / `mark_error(...)` set status ERROR (+ `agentglow.outcome`, `agentglow.outcome.reason`) on the current span and its request / message / job span, even when nothing raised | the request is red (`error: true`) |
 | failed publish | PRODUCER span with `messaging.system` inside a request that ends with status ERROR, or `agentglow.message.failed` (a publish that raised, even if the app caught it) | `message` with `"failed": true` from the service to the topic's last known consumer (else to itself): a comet that fizzles; max one per edge per 250 ms. Flat events: `{"event": "message", "failed": true}` |
+| drives | any span of an agent run (not the services run) whose span JSON `service` (or `agentglow.service`) names a service on screen: the agent run runs in that service's process (a Hatchet worker that also consumes `mkt:tick`) | `{"type": "drives", "run_id": <services run>, "id": <service agent>, "target_run": <agent run id>, "ts"}` once per (service, run), sent at the server tick once both exist; re-sent to a new viewer while the run is open. Frontend: a faint dashed `drives` edge from the service to the run's root agent (worker -> desk) |
 | replicas | span JSON `instance` = resource `service.instance.id` (OTLP resource attribute, or `watch()`: hostname-pid) | one service agent for all processes of a `service.name`; `service_stats.instances` = distinct instances seen in the last `AGENTGLOW_SERVICE_INSTANCE_MS` (60 s), only when > 1; the halo label shows `×2 · 42 req/s ...` |
 | GenAI inside a request | any span the agent rules recognize | the usual `llm` / `tool` / `mcp` / ... events, owned by the service agent or its task subagent |
 
@@ -554,7 +555,7 @@ spans carry none of these keys and are unchanged (regression goldens).
 ## World events (backend → frontend)
 Source of truth: `WorldEvent` in `frontend/src/scenes/shared/world.ts`:
 `run, step, spawn(subagent?), exit, agent, llm, message, tool, graph, mcp_register, mcp, final, skill, chat, decision,
-decision_stats, order, request, service_stats, session, stage, progress, capacity, rejected, job, deferred, fallback, gate,
+decision_stats, order, request, service_stats, drives, session, stage, progress, capacity, rejected, job, deferred, fallback, gate,
 backlog, lifecycle, metric, event, resource_stats` (the last 14: see "Generic primitives"). `ts` = epoch ms.
 `request` = `{"type": "request", "run_id", "id": <service agent id>, "service", "name", "kind": "http"|"rpc"|"message"|"event",
 "status"?, "error", "rejected"?, "ms", "ts", "hv"?}` (`rejected: true` = turned away on purpose, `agentglow.rejected()`: never an
@@ -562,8 +563,11 @@ error, counted as `codes.rejected` in `service_stats`, not as `5xx`) and `servic
 `message` may carry `"failed": true` (a publish that raised: the comet is short and flagged `failed` in the world so
 themes can fizzle it; the HUD logs `api ✕ orders: publish failed`). Frontend: a request pulses its service,
 an error flashes the service halo red; `service_stats` drives the same halo as `decision_stats` (arc: ok green, 5xx /
-errors red, 4xx amber) with the label `42 req/s · 2% 5xx · p50 18ms` (`msg/s · err` for a consumer; with open requests
-`38 msg/s · 1% err · 3 in flight`); the HUD counts `N req · M err`. A job (`spawn` with `job: true`) rings its service like
+errors red, 4xx amber) with the label `api · 42 req/s · 2% 5xx · p50 18ms` (`msg/s · err` for a consumer; with open requests
+`38 msg/s · 1% err · 3 in flight`; the error share only when > 0), always shown on a service (it is never one of the
+top-3 decision halo labels); `message` comets between two services draw a persistent edge labelled with the topic
+(`mkt:tick`, fading 15 s after its last message) with at most one bright comet per ~0.4 s, and a service node is a bit
+bigger than a run's root agent; the HUD counts `N req · M err`. A job (`spawn` with `job: true`) rings its service like
 any subagent, its name label shows the elapsed time from `since` (`mkt:tick · 2m14s`), its halo flashes green when it
 ends done / red when it fails, and the Selected panel of a service lists its in-flight jobs.
 `chat` (opt-in prompt capture only, see Privacy) = `{"type": "chat", "run_id", "id": <main agent instance id>,

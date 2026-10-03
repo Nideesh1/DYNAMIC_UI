@@ -154,7 +154,10 @@ const kitScale = (inst: Instance, depth: number) => (depth > 0 ? Math.min(roleSc
 /** members of a big top-level ring (a desk's markets) are the main actors on a spread-out screen: a bit bigger */
 const RING_BIG = 6;
 const RING_SCALE = 1.15;
+/** a backend service node (`svc:` top-level): a bit bigger than a run's root agent, it carries a whole process */
+const SVC_SCALE = 1.55;
 function agentScale(a: KitAgent) {
+  if (a.depth === 0 && a.id.startsWith("svc:")) return SVC_SCALE;
   if (a.depth === 1 && a.sibs >= RING_BIG) return RING_SCALE;
   return kitScale(a.inst, a.depth);
 }
@@ -228,7 +231,10 @@ let seenRunsVersion = -1;
 function orderRuns() {
   if (seenRunsVersion === kit.runsVersion && kit.runOrder.length === kit.runs.size) return;
   seenRunsVersion = kit.runsVersion;
-  kit.runOrder = [...kit.runs.values()].sort((a, b) => (a.run?.startedAt ?? 0) - (b.run?.startedAt ?? 0) || (a.id < b.id ? -1 : 1));
+  // backend services runs first: with two runs the first sits on the right, where the MCP servers / backends column
+  // is, so the services group lies between the agent run and the resources its services call
+  const svc = (r: KitRun) => (r.run?.workflow === "services" ? 0 : 1);
+  kit.runOrder = [...kit.runs.values()].sort((a, b) => svc(a) - svc(b) || (a.run?.startedAt ?? 0) - (b.run?.startedAt ?? 0) || (a.id < b.id ? -1 : 1));
 }
 
 // ------------------------------------------------------------------ run-local agent layout
@@ -406,13 +412,15 @@ function placeLocal(a: KitAgent) {
     // backend services (2+): apart on a ring (2 = left | right), each with its own ring of tasks / jobs, so their
     // halo labels never stack and message comets visibly travel between them
     const n = a.run.svc;
-    // (two: a long edge so their message comets visibly travel)
-    const chord = Math.max(L.topGap * (n === 2 ? 3 : 2.4), a.run.foot * 2 + L.topGap);
+    // (two: a long edge so their message comets visibly travel; beside agent runs the group spreads with them, so it
+    // never reads as a tiny cluster next to a big desk ring)
+    const chord = Math.max(L.topGap * (n === 2 ? 3 : 2.4), a.run.foot * 2 + L.topGap, (otherRunSpan(a.run) / sp) * 0.62);
     const R = chord / (2 * Math.sin(Math.PI / n));
-    // screen angle (x right, y down): 2 = left | right on a slight diagonal (lines from one to the resources at the
-    // side never run through the other), 3+ = from the top, clockwise; then into the run's frame (a run on a ring
-    // of runs is rotated: screen-down is downAngle there)
-    const th = n === 2 ? (a.svcIdx ? Math.PI + 0.32 : 0.32) : -Math.PI / 2 + (a.svcIdx * TAU) / n;
+    // screen angle (x right, y down): 2 = on a slight diagonal (lines from one to the resources at the side never run
+    // through the other), the one that drives agent runs / consumes (worker) towards them, the producer (feed) away,
+    // towards the resources; 3+ = from the top, clockwise; then into the run's frame (a run on a ring of runs is
+    // rotated: screen-down is downAngle there)
+    const th = n === 2 ? svcInward(a) + (svcInner(a) ? 0.32 : Math.PI + 0.32) : -Math.PI / 2 + (a.svcIdx * TAU) / n;
     const sx = Math.sqrt(THREE.MathUtils.clamp(fit.aspect, 1, 2));
     const x = Math.cos(th) * R * sx;
     const y = Math.sin(th) * R;
@@ -458,6 +466,34 @@ function placeLocal(a: KitAgent) {
   }
   a.u = p.u + du * sp;
   a.v = p.v + dv * sp;
+}
+
+/** widest other (agent) run on screen, stage units (its padded extent) */
+function otherRunSpan(r: KitRun) {
+  let w = 0;
+  for (const o of kit.runs.values()) if (o !== r && o.run?.workflow !== "services" && o.u0 !== Infinity) w = Math.max(w, 2 * Math.max(o.hu, o.hv));
+  return w;
+}
+/** screen angle (x right, y down) from a services run towards the stage centre (the agent runs); left when alone */
+function svcInward(a: KitAgent) {
+  const r = a.run;
+  const x = a2(r.target), y = b2(r.target);
+  if (kit.runs.size < 2 || x * x + y * y < 1e-4) return Math.PI;
+  return Math.atan2(y, -x);
+}
+/** of two services, the one on the agent-run side: it drives an agent run or consumes the other's topic */
+function svcInner(a: KitAgent) {
+  let other: KitAgent | undefined;
+  for (const o of kit.agents.values()) if (o !== a && o.run === a.run && o.svcIdx >= 0) other = o;
+  if (!other) return a.svcIdx === 1;
+  const sc = (id: string) => {
+    let v = 0;
+    for (const d of world.drives.values()) if (d.svc === id) v += 4;
+    for (const t of world.topics.values()) v += t.to === id ? 1 : t.from === id ? -1 : 0;
+    return v;
+  };
+  const sa = sc(a.id), so = sc(other.id);
+  return sa !== so ? sa > so : a.svcIdx === 1;
 }
 
 function layoutAgents() {

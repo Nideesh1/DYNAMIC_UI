@@ -278,8 +278,9 @@ export function Pulses() {
       k.n = c.length;
       k.first = first;
       k.last = last;
-      // collapsed agents have no soma: only pulse between drawn neurons
-      setList(lod.grouped ? c.filter((x) => isExpanded(x.from) && isExpanded(x.to)) : c.slice());
+      // collapsed agents have no soma: only pulse between drawn neurons; service -> service messages ride the kit's
+      // topic edge (ServiceLinks: labelled, rate-limited comets), not a synapse
+      setList(c.filter((x) => !(x.from.startsWith("svc:") && x.to.startsWith("svc:") && !x.failed) && (!lod.grouped || (isExpanded(x.from) && isExpanded(x.to)))));
     }
   });
   return (

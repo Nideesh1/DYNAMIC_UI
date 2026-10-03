@@ -227,6 +227,28 @@ def test_otlp_json_carries_kind_service_links():
     assert [e["type"] for e in c.app.state.hub.buffer] == ["run", "spawn", "agent", "request"]
 
 
+def test_service_drives_agent_runs_of_its_process():
+    """An agent run whose spans come from a service's process (same service.name): a `drives` edge service -> run, sent
+    at the tick once both exist, replayed to new viewers while the run is open, gone when it completes."""
+    hub = Hub()
+    m = hub.mapper
+    proc = span("mkt:tick process", service="worker", kind="consumer", **{"messaging.system": "redis"})
+    agent = span("desk", service="worker", trace="d" * 32, t0=T + 5, **{"agentglow.agent": "desk", "agentglow.run.id": "desk-run"})
+    other = span("solo", service="cli", trace="e" * 32, t0=T + 5, **{"agentglow.agent": "solo", "agentglow.run.id": "solo-run"})
+    evs = run(m, proc) + m.feed("start", {**agent, "end_time_ms": None, "status": "unset"}) + \
+        m.feed("start", {**other, "end_time_ms": None, "status": "unset"})
+    assert not types(evs, "drives")  # sent at the tick, never inline
+    (dr,) = types(m.tick(T + 1000), "drives")
+    assert dr == {"type": "drives", "run_id": "services", "id": "svc:worker", "target_run": "desk-run", "ts": T + 1000}
+    assert not types(m.tick(T + 2000), "drives")  # once
+    hub.publish([dr])
+    hub.buffer.clear()
+    assert [e for e in hub.replay() if e["type"] == "drives"] == [dr]
+    m.feed("end", agent)
+    m.tick(T + 60_000)
+    assert "desk-run" not in m.runs and not [e for e in hub.replay() if e["type"] == "drives"]
+
+
 # ---------------------------------------------------------------------- hub: replay, flat events
 def test_replay_resends_service_spawn_after_buffer_eviction():
     hub = Hub(buffer=10)

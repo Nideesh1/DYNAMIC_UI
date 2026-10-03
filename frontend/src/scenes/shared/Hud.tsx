@@ -60,6 +60,8 @@ export function describe(e: WorldEvent): string {
       return `${short(e.id)} · ${e.name}${e.status !== undefined ? ` ${e.status}` : ""}${e.error ? " ERROR" : ""} · ${Math.round(e.ms)}ms`;
     case "service_stats":
       return `${short(e.id)} · ${e.n} requests in ${Math.round(e.window_ms)}ms${e.instances && e.instances > 1 ? ` · ×${e.instances}` : ""}`;
+    case "drives":
+      return `${short(e.id)} drives ${shortRun(e.target_run)}`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
     case "chat":

@@ -200,6 +200,7 @@ class Services:
         self.bucket, self.bucket_used, self.passed = -1, 0, 0
         self.cands: list[dict] = []
         self.last_flush: int | None = None
+        self.drives: dict[tuple, dict | None] = {}  # (service agent id, agent run id) -> its `drives` event once sent
 
     # ------------------------------------------------------------------ services
     @staticmethod
@@ -246,7 +247,19 @@ class Services:
         """`run started` + `spawn` + status of every live service (a new viewer gets them after they left the buffer)."""
         live = {sv.run for sv in self.svcs.values()}
         return [ev for rid, ev in self.run_started.items() if rid in live] + [e for sv in self.svcs.values() for e in (sv.spawn, sv.status) if e] + \
-            [e for sv in self.svcs.values() for j in sv.jobs.values() for e in j if e]
+            [e for sv in self.svcs.values() for j in sv.jobs.values() for e in j if e] + \
+            [e for (aid, rid), e in self.drives.items() if e and aid in self.svcs and rid in self.m.runs]
+
+    def note_run(self, d: dict, run_id: str, scope: object) -> None:
+        """A span of an agent run from a process whose service is (or may become) a service node: that service drives the
+        run (a `drives` edge service -> the run's agents; sent at the tick once both exist)."""
+        if not d.get("service") and not (d.get("attributes") or {}).get("agentglow.service"):
+            return
+        name = self.service_name(d)
+        key = (f"svc:{scope}:{name}" if scope else f"svc:{name}", run_id)
+        if key not in self.drives:
+            self.drives[key] = None
+            self._bound(self.drives, 4096)
 
     # ------------------------------------------------------------------ spans
     def start_entry(self, s: "Span", kind: str, d: dict, out: list) -> None:
@@ -515,6 +528,14 @@ class Services:
                 out.append({"type": "exit", "run_id": sv.run, "id": aid, "status": "done", "ts": now})
                 del self.svcs[aid]
                 self.m.agents.pop(aid, None)
+        for key in list(self.drives):
+            aid, rid = key
+            run = self.m.runs.get(rid)
+            if run is None or run.service:
+                del self.drives[key]  # the run completed: its edge goes with it
+            elif self.drives[key] is None and aid in self.svcs:
+                self.drives[key] = {"type": "drives", "run_id": self.svcs[aid].run, "id": aid, "target_run": rid, "ts": now}
+                out.append(self.drives[key])
         budget = max(0, round(CAP * window / 1000) - self.passed)
         self.passed = 0
         per: dict[str, int] = {}

@@ -482,6 +482,8 @@ class Mapper:
         run.open += 1
         run.done_at = None
         run.last_ts = max(run.last_ts, ts)
+        if not run.service:
+            self.svc.note_run(d, run_id, a.get("agentglow.scope") or a.get("agentglow.run.scope"))
         run.hatchet = run.hatchet or "hatchet.workflow_run_id" in a
 
         step = step_name(a.get("agentglow.step") or (a.get("hatchet.step_name") if s.name.startswith("hatchet.start_step_run") else None))

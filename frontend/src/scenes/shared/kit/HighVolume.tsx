@@ -207,15 +207,17 @@ export function HaloLabel({ agent, radius, height }: { agent: KitAgent; radius: 
 function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: number; height: number }) {
   const g = useRef<THREE.Group>(null);
   const l = useRef<Label3DHandle>(null);
-  const st = useMemo(() => ({ at: 0, key: "", vis: 0 }), []);
+  const st = useMemo(() => ({ at: 0, key: "", vis: 0, setAt: 0 }), []);
   useFrame(({ camera, size: vp }) => {
     const h = agent.inst.hv;
     const o = g.current;
     if (!h || !o) return;
     const now = performance.now();
-    const shown = haloTop.has(agent.id) || world.selected === agent.id;
+    // a backend service always shows its label (its name + traffic): the services group reads at a glance
+    const svc = agent.depth === 0 && agent.id.startsWith("svc:");
+    const shown = svc || haloTop.has(agent.id) || world.selected === agent.id;
     st.vis += ((shown ? 1 : 0) - st.vis) * 0.15;
-    const mix = haloMix(h, now) * presence(agent.inst, now) * (1 - 0.5 * agent.dim) * st.vis;
+    const mix = (svc ? Math.max(0.75, haloMix(h, now)) : haloMix(h, now)) * presence(agent.inst, now) * (1 - 0.5 * agent.dim) * st.vis;
     o.visible = mix > 0.003;
     l.current?.setOpacity(Math.min(1, mix * 1.4) * 0.92, true);
     if (!o.visible) return;
@@ -226,16 +228,22 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
       const dn = d > 0 && d < 1 ? "<1" : `${Math.round(d)}`;
       const p50 = `${Math.round(h.p50)}`;
       const reps = h.unit && (h.instances ?? 1) > 1 ? `×${h.instances} · ` : "";
-      const key = `${h.provider}|${h.unit}|${r}|${dn}|${p50}|${reps}|${h.inflight ?? 0}`;
-      if (key !== st.key) {
+      const key = `${h.provider}|${h.unit}|${r}|${dn}|${p50}|${reps}|${h.inflight ?? 0}|${svc}`;
+      // (re-applied every few seconds: a text set before the label's mesh mounted would otherwise stay empty)
+      if (l.current && (key !== st.key || now - st.setAt > 3000)) {
         st.key = key;
+        st.setAt = now;
         // a backend service (world `service_stats`): `42 req/s · 2% 5xx · p50 18ms`
+        // a service: `feed · 12 msg/s · p50 4ms` (`· 2% err` only with errors), `×2` replicas
         l.current?.setText([
+          ...(svc ? [{ text: `${agent.inst.name} · `, color: TEXT }] : []),
           ...(reps ? [{ text: reps, color: BADGE }] : []),
           { text: h.unit ? `${r} ` : `${h.provider} `, color: h.unit ? TEXT : BADGE },
           { text: h.unit ? `${h.unit}/s` : `${r}/s`, color: h.unit ? BADGE : TEXT },
-          { text: " · ", color: DIM },
-          { text: `${dn}% ${h.unit === "req" ? "5xx" : h.unit ? "err" : "deny"}`, color: d >= 1 ? RED : DIM },
+          ...(svc && d === 0 ? [] : [
+            { text: " · ", color: DIM },
+            { text: `${dn}% ${h.unit === "req" ? "5xx" : h.unit ? "err" : "deny"}`, color: d >= 1 ? RED : DIM },
+          ]),
           h.inflight ? { text: ` · ${h.inflight} in flight`, color: "#fbbf24" } : { text: ` · p50 ${p50}ms`, color: DIM },
         ]);
       }

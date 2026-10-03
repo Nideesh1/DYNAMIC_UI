@@ -58,6 +58,8 @@ export type WorldEvent =
   | { type: "request"; run_id: string; id: string; service: string; name: string; kind: "http" | "rpc" | "message" | "event"; status?: number; error: boolean; rejected?: boolean; ms: number; ts: number; hv?: boolean }
   // one per service per ~1 s window: requests, errors, status classes ("2xx": n), latency, top routes
   | { type: "service_stats"; run_id: string; id: string; service: string; window_ms: number; n: number; errors: number; codes: Record<string, number>; p50_ms: number; p95_ms: number; routes: Record<string, number>; ts: number; instances?: number; inflight?: number }
+  // backend services: the service `id` drives the agent run `target_run` (its spans come from that service's process)
+  | { type: "drives"; run_id: string; id: string; target_run: string; ts: number }
   // an order action (paper when dry_run) by agent instance `id`
   | { type: "order"; run_id: string; id: string; side: string; qty: number; price?: number; status: OrderStatus; instrument: string; dry_run: boolean; reason?: string; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
@@ -509,7 +511,17 @@ export const world = {
   backlogs: new Map<string, Backlog>(),
   /** resource stats (pools, caches, models) keyed `server|resource` */
   resStats: new Map<string, ResStat>(),
+  /** message topics between two services (`mkt:tick` feed -> worker), keyed `from|to|topic`: a persistent edge */
+  topics: new Map<string, SvcTopic>(),
+  /** service -> agent run it drives (`drives`), keyed `svc|run` */
+  drives: new Map<string, { svc: string; run: string }>(),
 };
+
+/** A topic between two services: first / last message (performance.now()), messages seen, the last one failed. */
+export type SvcTopic = { from: string; to: string; topic: string; first: number; at: number; n: number; failed: boolean };
+/** a topic edge stays drawn this long after its last message */
+export const TOPIC_STALE_MS = 15_000;
+const TOPICS_MAX = 64;
 
 /**
  * A desk-wide halt: a guard decision with `scope: "global"` (docs/SPEC.md "Decisions") said no, e.g. a kill switch.
@@ -635,7 +647,7 @@ function admitHv(d: DecisionUse, now: number): boolean {
   return true;
 }
 /** high-frequency event types: no immediate React notify (the HUD catches up within HUD_NOTIFY_MS) */
-const QUIET = new Set(["decision", "decision_stats", "order", "request", "service_stats", ...PRIM_QUIET]);
+const QUIET = new Set(["decision", "decision_stats", "order", "request", "service_stats", "drives", ...PRIM_QUIET]);
 const HUD_NOTIFY_MS = 250;
 let dirty = false;
 let notifiedAt = 0;
@@ -645,7 +657,7 @@ export function apply(ev: WorldEvent) {
   const evRun = "run_id" in ev ? world.runs.get(ev.run_id as string) : undefined;
   if (evRun) evRun.lastEventAt = now;
   // stats windows are not log lines (the halo shows them); everything else goes to the event log
-  if (ev.type !== "mcp_register" && ev.type !== "decision_stats" && ev.type !== "service_stats" && !PRIM_NO_LOG.has(ev.type) && !(ev.type === "session" && ev.phase === "progress")) {
+  if (ev.type !== "mcp_register" && ev.type !== "decision_stats" && ev.type !== "service_stats" && ev.type !== "drives" && !PRIM_NO_LOG.has(ev.type) && !(ev.type === "session" && ev.phase === "progress")) {
     world.ticker.unshift(ev);
     if (world.ticker.length > 60) world.ticker.length = 60;
   }
@@ -684,6 +696,7 @@ export function apply(ev: WorldEvent) {
           r.status = ev.status;
           r.endedAt = now;
         }
+        for (const [k, d] of world.drives) if (d.run === ev.run_id) world.drives.delete(k);
         // the run ended: its finished (dimmed) agents and any stragglers fade out together
         for (const i of world.instances.values()) if (i.run === ev.run_id && !i.exitAt) i.exitAt = now;
       }
@@ -805,6 +818,15 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "message":
+      if (ev.from_id !== ev.to_id && ev.from_id.startsWith("svc:") && ev.to_id?.startsWith("svc:")) {
+        const key = `${ev.from_id}|${ev.to_id}|${ev.text}`;
+        const t = world.topics.get(key);
+        if (t) (t.at = now), t.n++, (t.failed = !!ev.failed);
+        else {
+          if (world.topics.size >= TOPICS_MAX) world.topics.delete(world.topics.keys().next().value!);
+          world.topics.set(key, { from: ev.from_id, to: ev.to_id, topic: ev.text, first: now, at: now, n: 1, failed: !!ev.failed });
+        }
+      }
       // a failed publish: a short comet flagged `failed` (it sputters out half way, Fizzle.tsx)
       world.comets.push({ id: ++seq, run: ev.run_id, from: ev.from_id, to: ev.to_id || ev.from_id, start: now, dur: ev.failed ? 700 : 1300, text: ev.text, ...(ev.failed ? { failed: true } : {}) });
       world.focus = ev.to_id;
@@ -1068,6 +1090,9 @@ export function apply(ev: WorldEvent) {
       if (i) i.chat = [...i.chat, { role: ev.role, text: ev.text }].slice(-20);
       break;
     }
+    case "drives":
+      world.drives.set(`${ev.id}|${ev.target_run}`, { svc: ev.id, run: ev.target_run });
+      break;
     case "final": {
       const r = world.runs.get(ev.run_id);
       if (r) r.final = ev.text;
@@ -1288,6 +1313,8 @@ export function resetWorld() {
   world.primEdges.length = 0;
   world.backlogs.clear();
   world.resStats.clear();
+  world.topics.clear();
+  world.drives.clear();
   notify();
 }
 
