@@ -237,11 +237,11 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
 }
 
 // ------------------------------------------------------------------ order chip
-const CHIP_VERT = /* glsl */ `
+export const CHIP_VERT = /* glsl */ `
 varying vec2 vUv;
 void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 // rounded ticket in px space (uSize = w, h px): dark fill, coloured border (dashed when paper), strike when rejected
-const CHIP_FRAG = /* glsl */ `
+export const CHIP_FRAG = /* glsl */ `
 uniform vec2 uSize; uniform vec3 uColor; uniform float uA; uniform float uDash; uniform float uStrike;
 varying vec2 vUv;
 void main() {

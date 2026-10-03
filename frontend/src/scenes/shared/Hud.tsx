@@ -7,6 +7,8 @@ import { sendApproval, startLiveRun, useApproveAvailable, useRunAvailable, useRu
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
 import { decisionTint } from "./kit/DecisionGlyph";
+import { fmtMs, gaugeText, jobStateText, metricText } from "./prims";
+import { PrimDetail } from "./PrimPanel";
 import { STALE_TEXT, decisionText, getInstance, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
@@ -62,6 +64,40 @@ export function describe(e: WorldEvent): string {
       return `final answer · ${shortRun(e.run_id)}`;
     case "chat":
       return `${e.role === "user" ? "you" : world.instances.get(e.id)?.name ?? "agent"}: ${e.text}`;
+    case "session":
+      return e.phase === "start"
+        ? `${short(e.id)} · ${e.kind} session started`
+        : e.phase === "end"
+          ? `${short(e.id)} · session ended${e.outcome ? ` · ${e.outcome}` : ""}${e.reason ? ` (${e.reason})` : ""}`
+          : e.phase === "turn"
+            ? `${short(e.id)} · turn${e.role ? ` · ${e.role}` : ""}`
+            : `${short(e.id)} · ${Object.entries(e.gauges ?? {}).map(([k, v]) => gaugeText(k, v)).join(", ")}`;
+    case "stage":
+      return `${short(e.id)} · stage ${e.name} ${e.status}${e.ms !== undefined && e.status !== "running" ? ` · ${fmtMs(e.ms)}` : ""}`;
+    case "progress":
+      return `${short(e.id)} · ${Math.round(e.frac * 100)}%${e.label ? ` ${e.label}` : ""}`;
+    case "capacity":
+      return `${short(e.id)} · ${e.name} ${e.used}/${e.max}`;
+    case "rejected":
+      return `${short(e.id)} · rejected: ${e.reason}${e.status ? ` (${e.status})` : ""}${e.retry_after_ms ? ` · retry in ${fmtMs(e.retry_after_ms)}` : ""}`;
+    case "job":
+      return `job ${e.job_id} ${jobStateText(e.state)}${e.attempt > 1 ? ` #${e.attempt}` : ""}${e.at ? ` · ${e.at}` : ""}`;
+    case "deferred":
+      return e.phase === "open" ? `${short(e.id)} · awaiting ${e.label || "callback"}` : `${short(e.id)} · callback ${e.status || "ok"}${e.wait_ms ? ` after ${fmtMs(e.wait_ms)}` : ""}`;
+    case "fallback":
+      return `${short(e.id)} · fallback ${e.from} → ${e.to}${e.reason ? ` (${e.reason})` : ""}`;
+    case "gate":
+      return `${short(e.id)} · ${e.name} ${e.state}${e.attempts_left !== undefined ? ` · ${e.attempts_left} left` : ""}`;
+    case "backlog":
+      return `${e.topic} backlog ${e.depth}${e.lag_ms ? ` · lag ${fmtMs(e.lag_ms)}` : ""}`;
+    case "lifecycle":
+      return `${short(e.id)} · ${e.state}`;
+    case "metric":
+      return `${short(e.id)} · ${metricText(e.name, e)}`;
+    case "event":
+      return `${short(e.id)} · ${e.kind}${e.label ? ` ${e.label}` : ""}`;
+    case "resource_stats":
+      return `${e.resource} · ${e.calls} calls`;
   }
 }
 
@@ -283,6 +319,11 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
               {graph > 0 && (
                 <span className="hud-stat" title={`graph reads ${w.stats.graphReads} · writes ${w.stats.graphWrites}`}>
                   <b>{graph}</b> graph
+                </span>
+              )}
+              {w.stats.rejected > 0 && (
+                <span className="hud-stat hud-rejected" title="requests / work turned away by admission control or backpressure (429 / 503), not errors">
+                  rejected <b>{fmtK(w.stats.rejected)}</b>
                 </span>
               )}
               {halt && (
@@ -919,6 +960,7 @@ function AgentDetail({ i }: { i: Instance }) {
           </ul>
         </section>
       )}
+      <PrimDetail i={i} />
       {i.decisions.length > 0 && (
         <section>
           <h4>{i.hv ? "Interesting decisions" : "Decisions"}</h4>
