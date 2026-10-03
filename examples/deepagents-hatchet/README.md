@@ -215,7 +215,7 @@ calls instead, so the same code runs with or without a TypeSafe key and every de
 
 ```bash
 cp .env.example .env            # set one LLM key (+ AGENT_MODEL if not Gemini; see "LLM provider" below)
-docker compose up -d --build    # agentglow, falkordb, hatchet, 5 MCP servers, worker, trigger
+docker compose up -d --build    # agentglow, falkordb, hatchet, 6 MCP servers, desk feed + Redis, worker, trigger
 open http://localhost:8101      # scenes - press ▶ Run agents, or:
 docker compose exec worker uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
@@ -224,7 +224,9 @@ Hatchet UI: http://localhost:8180 (admin@example.com / Admin123!!) - you can als
 No other setup: the worker and trigger read the Hatchet API token from the `obs_hatchet_token` volume.
 "▶ Run agents" works because compose sets `AGENTGLOW_RUN_WEBHOOK=http://trigger:8300/run` on agentglow: its
 `POST /live/run {topic, workflow?}` forwards to the example's `trigger` service (`app/trigger_api.py`), which starts an
-`agent_smoke` (or `incident_triage`) run. Its `GET /run` lists both workflows, so the HUD shows a picker next to the button.
+`agent_smoke` run (or `incident_triage`, `vendor_consolidation`, `trading_desk` for `workflow` `incident`, `vendor`,
+`desk`). Its `GET /run` lists the four workflows, so the HUD shows a picker next to the button. HUD Approve / Reject
+works because compose also sets `AGENTGLOW_APPROVE_WEBHOOK=http://trigger:8300/approve`.
 Langfuse (optional): `./scripts/gen-obs-env.sh` once (generates its local secrets into `.env`), then
 `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d` → http://localhost:3100.
 

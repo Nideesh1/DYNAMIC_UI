@@ -32,8 +32,9 @@ agentglow.watch()                    # call once, before your agents run
 
 That's it. `watch()` reuses your global OpenTelemetry `TracerProvider` (Langfuse or other exporters keep working),
 or installs one, adds a `LiveSpanProcessor` that streams span **starts and ends** to the server in ~50 ms batches
-from a background thread (never blocks, drops silently if the server is down), and turns on OpenInference
-LangChain instrumentation and Hatchet instrumentation when those packages are installed.
+from a background thread (never blocks, drops silently if the server is down), and turns on the OpenInference
+LangChain and OpenAI Agents instrumentations, MCP trace-context propagation and Hatchet instrumentation when those
+packages are installed (extras: `[langchain]`, `[openai-agents]`, `[mcp]`, `[hatchet]`).
 
 ## What gets drawn
 
@@ -99,6 +100,9 @@ async def handle_call(call_id):                      # one asyncio task per phon
 | `agentglow.agent(name, final=None, task=None, parent=None)` | an agent; inside another agent (or `parent=`) it is a subagent, `task` = delegation text; `.llm()`, `.say()`, `.final()`, `.tool()`, `.mcp()`, `.graph()`, `.agent()` |
 | `agentglow.llm(model, tokens_in=None, tokens_out=None)` | an LLM turn (context manager, `.set_tokens(in, out)`); `a.llm(..., latency_ms=)` records a finished one |
 | `agentglow.tool(name, args=None)` / `agentglow.mcp(server, tool, resource, kind)` / `agentglow.graph(op, nodes)` | tool call / MCP or backend call / graph read or write on the current agent; `.result(value)` |
+| `agentglow.skill(name)` | a skill ring on the current agent while the block runs |
+| `agentglow.decision(kind, question, ...)` / `agentglow.decided(kind, question, result, p, latency_ms=)` | a fast structured decision (`choice` / `score` / `noul`; purpose `route` / `guard` / `check`): route fans, guard gates, check rings |
+| `agentglow.order(side, qty, price=None, status="would_place", dry_run=True)` | a BUY / SELL / YES / NO chip (`dry_run` = paper) |
 | `@agentglow.traced_agent("name")`, `@agentglow.traced_tool("name", capture_args=False)` | decorators for sync and async functions; `agentglow.current_agent()` inside |
 
 Text you pass (`say`, `final`, `task`, `args`) is shown in the UI after the secret scrub only: keep PHI/PII out of it.
@@ -111,16 +115,16 @@ agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/
 
 | | |
 |---|---|
-| `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None, api_key=None, app=None, broker=None, mcp=None, privacy=None, ignore=None, allow=(), allow_message_keys=(), scrub=None, propagate=None, backlog=False)` | `url` also from `AGENTGLOW_URL`, `api_key` from `AGENTGLOW_API_KEY` (sent as `x-api-key`); `app` / `broker` / `mcp` = backend mode (strict privacy by default) |
-| `--ingest-key K` / `AGENTGLOW_INGEST_KEY` | ingest endpoints (`/v1/live`, `/v1/traces`, `/v1/claude-code`, `/live/topology`) require `x-api-key: K` (or `Authorization: Bearer K`), else 401; comma-separate keys to rotate; unset = open (dev). OTel exporters: `OTEL_EXPORTER_OTLP_HEADERS="x-api-key=K"` |
+| `agentglow.watch(url=None, *, instrument=True, service_name=None, api_key=None, app=None, broker=None, mcp=None, privacy=None, ignore=None, ignore_defaults=None, allow=(), allow_message_keys=(), error_messages=False, scrub=None, pii_patterns=None, propagate=None, backlog=False)` | `url` from `AGENTGLOW_URL`, else `http://localhost:8100`; `api_key` from `AGENTGLOW_API_KEY` (sent as `x-api-key`); `app` / `broker` / `mcp` = backend mode (strict privacy by default) |
+| `--ingest-key K` / `AGENTGLOW_INGEST_KEY` | ingest endpoints (`/v1/live`, `/v1/traces`, `/v1/events`, `/v1/claude-code`, `/live/topology`) require `x-api-key: K` (or `Authorization: Bearer K`), else 401; comma-separate keys to rotate; unset = open (dev). OTel exporters: `OTEL_EXPORTER_OTLP_HEADERS="x-api-key=K"` |
 | `POST /v1/live` | span start/end batches from `watch()` |
 | `POST /v1/events` | flat events (one object or an array) for services and primitives, no OTel needed |
 | `POST /v1/traces` | standard OTLP/HTTP (protobuf or JSON) - point any OTel SDK or Collector here (ended spans only) |
 | `GET /live/stream` | SSE world events; new viewers get MCP topology + runs still in progress |
 | `GET /live/graph` | graph sample for the scenes from FalkorDB (`--falkor` / `AGENTGLOW_FALKOR_URL`), else an empty graph |
 | `POST /v1/claude-code` | Claude Code HTTP hooks → its main agent + subagents in 3D (see `examples/claude-code`) |
-| `GET /live/health` | status |
-| `POST /live/run` `{topic, scope?}` | optional: forwards to `AGENTGLOW_RUN_WEBHOOK` (your trigger endpoint) and returns its JSON, e.g. `{run_id}`; health reports `run: true` and the UI shows "▶ Run agents" only when it is set |
+| `GET /live/health` | `{ok, version, ui, run, approve, auth, ingest_auth, prompts}` (+ counts for a valid viewer) |
+| `POST /live/run` `{topic, scope?, workflow?}` | optional: forwards to `AGENTGLOW_RUN_WEBHOOK` (your trigger endpoint) and returns its JSON, e.g. `{run_id}`; health reports `run: true` and the UI shows "▶ Run agents" only when it is set. `GET /live/run` proxies the webhook's `GET` (`{workflows: [{id, label, topic}]}`) for the HUD's workflow picker |
 | `POST /live/approve` `{run_id, agent_id?, step?, approve, note?}` | optional: forwards a human's approve / reject of an open wait to `AGENTGLOW_APPROVE_WEBHOOK`; health reports `approve: true` and the HUD shows Approve / Reject on agents waiting on a human only when it is set (docs/SPEC.md) |
 
 Embed in your own React app: `npm i agentglow` → `<AgentScene theme="neural" source="http://localhost:8100" />`.

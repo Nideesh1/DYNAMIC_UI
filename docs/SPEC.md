@@ -22,11 +22,15 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
 |---|---|---|
 | `backend/` | Python package `agentglow`: server + `watch()` + CLI. Built UI copied into `backend/agentglow/static/` | PyPI `agentglow` |
 | `frontend/` | React + react-three-fiber: 7 themes + HUD. Two builds: **app** (→ backend static) and **library** (`<AgentScene/>`) | npm `agentglow` |
+| `frontend/cli/` | `agentglow` CLI: Claude Code setup, server start through uv | npm `agentglow` (bin) |
 | `examples/deepagents-hatchet/` | Hatchet + deepagents + MCP + FalkorDB, instrumented only via `agentglow.watch()` | - |
-| `docker-compose.yml` | agentglow + example stack (Hatchet, FalkorDB; Langfuse under profile `langfuse`) | - |
+| `examples/*` | other stacks: fastapi-faststream, node-proxy, quickstart, langgraph, openai-agents, custom-loop, react-embed, claude-code | - |
+| `plugin/`, `skills/agentglow/` | Claude Code plugin (hooks, server start, `/agentglow:open`) and the agentglow skill | git (plugin marketplace) |
+| `docker-compose.yml` | agentglow (host port 8101) + example stack (Hatchet, FalkorDB; Langfuse under profile `langfuse`) | - |
 
 ## Backend (`backend/`, package `agentglow`)
-- `agentglow serve [--host 0.0.0.0] [--port 8100] [--secret S]` - standalone FastAPI app. Run ONE per environment
+- `agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor URL] [--secret S] [--ingest-key K]` (env `AGENTGLOW_HOST`,
+  `AGENTGLOW_PORT`, `AGENTGLOW_FALKOR_URL`, `AGENTGLOW_SECRET`, `AGENTGLOW_INGEST_KEY`) - standalone FastAPI app. Run ONE per environment
   (k8s: Deployment replicas 1 + Service). In-memory state, no Redis.
 - Endpoints:
   - `POST /v1/live` - JSON batch `[{"kind":"start"|"end","span":{...}}]` from `watch()` (real-time starts).
@@ -36,12 +40,17 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
   - `GET /live/stream` - SSE world events. On connect: replay MCP topology + events of runs still in progress. Keepalive 15s.
     Filtered per viewer by scope/run (see "Scopes & auth").
   - `POST /live/topology` - `{server, resources:[{name, kind}]}` → `mcp_register` (also `agentglow.register_mcp(...)`).
-  - `GET /live/graph` - optional graph sample `{nodes:[{id,name,kind}],links:[{source,target}]}`; FalkorDB provider when `AGENTGLOW_FALKOR_URL`/`--falkor` set, else 404 → UI uses its built-in sample.
+  - `GET /live/graph` - optional graph sample `{nodes:[{id,name,kind}],links:[{source,target}]}`; FalkorDB provider when `AGENTGLOW_FALKOR_URL`/`--falkor` set (graph name = the URL path, else `AGENTGLOW_FALKOR_GRAPH`, default `demo`), else an empty graph `{nodes: [], links: []}` → UI uses its built-in sample.
+  - `GET /live/run` / `POST /live/run`, `POST /live/approve` - optional run / approve webhooks (see "Scopes & auth").
   - `GET /live/health`; static UI at `/`, `/<theme>`, assets.
+  - Ingest bodies may be gzip (`content-encoding: gzip`).
 - Span JSON (normalized): `{trace_id, span_id, parent_span_id, name, start_time_ms, end_time_ms|null, status: ok|error|unset, attributes:{}}`,
   plus, when known, `kind` (`internal|server|client|producer|consumer`), `service` (resource `service.name`) and `links`
   (`[{trace_id, span_id}]`): watch() and both OTLP decoders fill them; the mapper uses them only for "Backend services".
-- `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None, api_key=None)`:
+- `agentglow.watch(url=None, *, instrument=True, service_name=None, api_key=None, app=None, broker=None, mcp=None,
+  privacy=None, ignore=None, ignore_defaults=None, allow=(), allow_message_keys=(), error_messages=False, scrub=None,
+  pii_patterns=None, propagate=None, backlog=False)` (url: `AGENTGLOW_URL`, else `http://localhost:8100`; returns the
+  TracerProvider):
   uses the existing global TracerProvider if it's an SDK provider (keeps Langfuse etc.), else creates one;
   adds `LiveSpanProcessor(url)` (on_start + on_end → background-thread batched POST to `/v1/live`, ~50 ms,
   never blocks, drops on failure); if `instrument`, enables OpenInference LangChain instrumentation (covers
@@ -49,7 +58,7 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
   to the SDK's own trace processors) and Hatchet instrumentation when those packages are installed and not
   already instrumented, and OpenInference MCP trace-context propagation when `openinference-instrumentation-mcp` is
   installed. Idempotent. Also exports `agentglow.otel.LiveSpanProcessor`, `agentglow.register_mcp`.
-  `watch(app=, broker=, mcp=, service_name=)`: see "Backend services".
+  `watch(app=, broker=, mcp=, service_name=)` and the privacy / noise arguments: see "Backend services".
 
 ## Scopes & auth
 Show each user only their own agents. A run's **scope** is a string (user id, tenant, team) set by the app; viewers
@@ -84,7 +93,7 @@ buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion 
   `Authorization: Bearer <token>` (401 if missing, invalid or expired; never accepted in a query param). The filter
   comes only from the token. A scope/run header or `?run=` that contradicts the token is 403; it may only narrow a
   dimension the token leaves open (an admin token plus `X-AgentGlow-Scope` = view as that scope).
-  `/live/health` without a token returns liveness only (`ok, version, ui, run, approve, auth`); with a token, counts for
+  `/live/health` without a token returns liveness only (`ok, version, ui, run, approve, auth, ingest_auth, prompts`); with a token, counts for
   that filter (`buffered`, `open_runs` (agent runs; the long-lived backend `services` run is not counted), plus
   `scope`/`run_id`); a bad token is 401.
 - `/live/stream` is plain `text/event-stream` over GET: works with `fetch()` + a stream reader (headers), and with
@@ -92,7 +101,10 @@ buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion 
   Every buffered event carries `seq` (per server instance, increasing) and is sent with `id: <epoch>-<seq>`; a
   reconnect with `Last-Event-ID` (the app client and `EventSource` send it) replays only newer events, so llm tokens and
   calls of in-progress runs are not applied twice. An id from another epoch (server restarted) gets the full replay.
-- `POST /live/run` `{topic, scope?}` forwards `{"topic", "scope"}` to the webhook (`scope` omitted when unknown).
+- `POST /live/run` `{topic, scope?, workflow?}` (optional `AGENTGLOW_RUN_WEBHOOK`; 404 without it) forwards
+  `{"topic", "scope"?, "workflow"?}` to the webhook (`scope` omitted when unknown, `workflow` max 64 chars) and returns
+  its JSON. `GET /live/run` proxies `GET <webhook>` → `{workflows: [{id, label, topic}]}` (max 20; empty when the
+  webhook lists none): the HUD's workflow picker next to "Run agents".
   Secure: scope from the token (a different body `scope` is 403). Dev: `X-AgentGlow-Scope` header, else body `scope`.
 - `POST /live/approve` `{run_id, agent_id?, step?, approve: bool, note?}` (optional `AGENTGLOW_APPROVE_WEBHOOK`; 404
   without it; health `approve: true` makes the HUD show Approve / Reject on agents waiting on a human / approval):
@@ -106,7 +118,7 @@ buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion 
 **Ingest key** (who may post spans; independent of the viewer secret).
 - Server: `AGENTGLOW_INGEST_KEY` env or `agentglow serve --ingest-key K`. Comma-separated keys are all valid (rotation:
   add the new key, move producers over, drop the old one). Unset = open ingest (dev, unchanged).
-- When set, `POST /v1/live`, `/v1/traces` (OTLP JSON and protobuf), `/v1/claude-code` and `/live/topology` require
+- When set, `POST /v1/live`, `/v1/traces` (OTLP JSON and protobuf), `/v1/events`, `/v1/claude-code` and `/live/topology` require
   `x-api-key: <key>`; `Authorization: Bearer <key>` is also accepted for exporters that only send that. Compared in
   constant time (`hmac.compare_digest`) against every key; never accepted as a query param. Missing or wrong = 401
   (`/v1/claude-code` answers at once; Claude Code treats non-2xx as a non-blocking error and carries on).
@@ -311,6 +323,7 @@ SDK provider = no-op. Context in contextvars (asyncio tasks created inside inher
 | `decided(kind, question, result, p, ..., latency_ms=0, important=False, scope=None)` / `Agent.decided(...)` | `decision <kind>` (backdated) | one finished decision in one call; `important=True` sets `agentglow.decision.important`, `scope="global"` sets `agentglow.decision.scope` (both also on `decision(...)`) |
 | `order(side, qty, price=None, status="would_place", instrument=None, dry_run=True, reason=None)` / `Agent.order(...)` | `order <side>` (finished at once) | the "Orders" attributes |
 | `@traced_agent(name)`, `@traced_tool(name, capture_args=False)` | per call | as `agent` / `tool`; args recorded only with `capture_args=True` |
+| `current_agent()` | - | the manual agent (or primitive session) of the current context, or None |
 
 A span that raises ends with status error (run → failed). Text in `say`/`final`/`task`/`args` passes the Privacy
 scrub (secrets only): callers must keep PHI/PII out of it. Example: `examples/custom-loop/`.
@@ -443,6 +456,9 @@ run, LLM turn, tool call or request of its own).
 | event | `agentglow.event(kind, label=None, **fields)` (numbers / bools / short strings; `order(...)` keeps its own shape) | span `event <kind>`: `agentglow.event`=kind, `.event.label`, `.event.<field>` | `event` with `kind`, `label`, other fields | `event` (`fields` max 8) |
 | cache | `agentglow.cache(name, hit=True)` | signal `cache`: `.cache.name`, `.hit` | `cache` with `name`, `hit` | resource `<name>` (kind `cache`): `mcp` pulse (max one per owner+cache per 250 ms), hit rate in `resource_stats` |
 
+Work started later in a detached task or thread keeps its spawning request as the owner when that context is passed
+explicitly: `ctx = agentglow.capture()` in the request, then `session(..., parent=ctx)` / `job(..., parent=ctx)`.
+
 World event shapes (`ts` = epoch ms; `id` = owner instance id):
 ```
 session        {run_id, id, name, kind, phase: start|progress|turn|end, ref?, gauges?: {k: num}, role?, outcome?, reason?, ms?}
@@ -485,7 +501,7 @@ Events. HUD: `rejected N` (amber).
 
 ## Privacy
 One scrub (`backend/agentglow/scrub.py`) runs at the Hub ingestion boundary for every path (`/v1/live`, `/v1/traces`
-JSON + protobuf, `/v1/claude-code`; the hooks adapter also scrubs each payload before building spans):
+JSON + protobuf, `/v1/events`, `/v1/claude-code`; the hooks adapter also scrubs each payload before building spans):
 - Dropped identity keys: `user.email`, `user.id`, `user.account_id`, `user.account_uuid`, `organization.id`,
   `enduser.*`, any key containing `email`.
 - Dropped raw user prompts: `user_prompt*` (Claude Code traces), `gen_ai.prompt*`, `llm_request.context` unless it is
@@ -584,5 +600,5 @@ writes + cache reads); `tokens_out` = completion tokens. `llm` may carry `tokens
 carry the same `reason` / `until` (see "Waits and long-running runs").
 
 ## Frontend (`frontend/`, npm `agentglow`)
-- App build: gallery at `/`, `/<theme>`; data source = same origin `/live/stream` (`?source=<url>` override, `?sim=1` simulator, `?sim=hf` high-frequency simulator (30 market agents, ~100 decisions/s, paper orders), `?hud=0` hide HUD). Output copied to `backend/agentglow/static/`.
-- Library build: `export { AgentScene, THEMES }` - `<AgentScene theme="neural" source="http://…:8100" hud={true} sim={false} style className />`; react/react-dom are peerDependencies; ships types.
+- App build: gallery at `/`, `/<theme>`; data source = same origin `/live/stream` (`?source=<url>` override, `?sim=1` simulator, `?sim=hf` high-frequency simulator (30 market agents, ~100 decisions/s, paper orders), `?hud=0` hide HUD, `?run=<id>` one run). Output copied to `backend/agentglow/static/`.
+- Library build: `export { AgentScene, THEMES, THEME_INFO }` + types `AgentSceneProps`, `Theme`, `WorldEvent` - `<AgentScene theme="neural" source="http://…:8100" hud={true} sim={false|true|"hf"} scope run token style className />`; react/react-dom are peerDependencies; ships types. Extra entries: `agentglow/node` (Node.js `watch()`, `spanProcessor()`; see "Backend services") and `agentglow/pulse` (flat events), both without React / three.js; `agentglow/style.css`.

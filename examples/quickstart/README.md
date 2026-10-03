@@ -21,11 +21,11 @@ Put one key in `.env` (here or any parent folder). Pick the model with `AGENT_MO
 | Provider | `AGENT_MODEL` | Key |
 |---|---|---|
 | OpenAI (default) | `openai:gpt-5.6-luna` | `OPENAI_API_KEY` |
-| Anthropic | `anthropic:claude-sonnet-5` | `ANTHROPIC_API_KEY` |
+| Anthropic | `anthropic:claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
 | Google | `google_genai:gemini-3.8-flash` | `GEMINI_API_KEY` |
 
 ```bash
-AGENT_MODEL=anthropic:claude-sonnet-5 uv run main.py
+AGENT_MODEL=anthropic:claude-sonnet-5-5 uv run main.py
 ```
 
 Server somewhere else? Set `AGENTGLOW_URL=http://host:8100` (or pass it: `agentglow.watch(url)`).

@@ -24,20 +24,21 @@ const VERSION = (() => {
 
 const HELP = `agentglow ${VERSION}: watch Claude Code agents in 3D
 
-  npx agentglow setup [--port 8100]   (recommended) set up once: hooks in ~/.claude/settings.json,
-                                      server auto-starts with every \`claude\` session
-  npx agentglow status                server health, port, pid, whether hooks are installed
+  npx agentglow setup [--port 8100]   (recommended) set up once: hooks + traces env in ~/.claude/settings.json,
+                                      server starts at login (macOS/Linux) and with every \`claude\` session
+  npx agentglow status                server health + version, port, pid, whether hooks are installed
   npx agentglow open                  open the 3D view (http://localhost:8100/neural)
   npx agentglow stop                  stop the background server
-  npx agentglow remove                undo setup: remove the hooks and stop the server
+  npx agentglow remove                undo setup: remove the hooks, env and login item, stop the server
   npx agentglow claude [-- <args>]    try it without installing: one claude session with AgentGlow
   npx agentglow setup --capture-prompts
                                       also show your prompts next to Claude's replies in the agent panel
                                       (off by default; local server only, secrets redacted)
 
-
+Setup flags: --no-autostart (no login item: the server starts with each claude session), --no-open
 More: npx agentglow start [--background] [--port N]   (serve = start in the foreground)
-Env:  AGENTGLOW_URL (remote server), AGENTGLOW_API_KEY (ingest key), AGENTGLOW_CACHE_DIR
+      npx agentglow autostart [--remove]              (re)register or drop only the login item
+Env:  AGENTGLOW_URL (remote server), AGENTGLOW_API_KEY (ingest key), AGENTGLOW_PORT, AGENTGLOW_CACHE_DIR
 `;
 
 const DEFAULT_PORT = 8100;

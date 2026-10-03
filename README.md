@@ -57,11 +57,8 @@ Or install it as a Claude Code plugin (hooks, server auto-start, the skill and `
 ```
 Use the plugin or `npx agentglow setup`, not both for hooks (setup detects the plugin and adds only the traces env,
 which plugins cannot set; without it LLM pulses show 0 tokens). Details: [examples/claude-code](examples/claude-code#claude-code-plugin).
-Prefer asking Claude? Install the [agentglow skill](skills/agentglow) and say *"show my agents in 3D"*:
-```bash
-mkdir -p ~/.claude/skills/agentglow && curl -fsSL \
-  https://raw.githubusercontent.com/Nideesh1/agentglow/main/skills/agentglow/SKILL.md -o ~/.claude/skills/agentglow/SKILL.md
-```
+Prefer asking Claude? Say *"show my agents in 3D"*: the plugin includes the [agentglow skill](skills/agentglow), or
+install the skill alone ([Using AgentGlow with Claude Code / AI agents](#using-agentglow-with-claude-code--ai-agents)).
 
 ### 2. Python agents (LangChain, LangGraph, deepagents, OpenAI Agents SDK, Hatchet)
 ```bash
@@ -133,6 +130,16 @@ fails once and retries, a postmortem), **Vendor consolidation** (long-running, d
 Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d`.
 
 ▶ [Watch the demo in HD](docs/media/hero.mp4)
+
+## Using AgentGlow with Claude Code / AI agents
+
+The [agentglow skill](skills/agentglow/SKILL.md) teaches Claude Code (or any agent that reads skills) to set up and use
+AgentGlow: watch Claude Code, instrument Python agents, FastAPI / FastStream / FastMCP and Node services, send events
+over HTTP or OTLP, embed `<AgentScene/>`, run the demo stack and troubleshoot. It ships in the plugin, or install it
+alone (SKILL.md + its [references](skills/agentglow/references)) with the snippet in
+[skills/agentglow/README.md](skills/agentglow/README.md). Then ask e.g. *"instrument this FastAPI + FastStream repo
+with AgentGlow"*. Other agents: [llms.txt](llms.txt) indexes the docs. Working on AgentGlow itself? Read
+[CLAUDE.md](CLAUDE.md) (also [AGENTS.md](AGENTS.md)).
 
 ## Generic primitives
 
@@ -313,7 +320,7 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
 | [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts), no code |
 
-Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
+Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5-5`, `google_genai:gemini-3.8-flash`.
 
 ## Production
 
@@ -338,5 +345,9 @@ uv build --package agentglow --out-dir dist         # sdist + wheel
 | `backend/` | Python package `agentglow`: server, `watch()`, OTel → agent mapping, Claude Code hooks |
 | `frontend/` | the 3D scenes; npm package `agentglow` + the app bundled into the Python package |
 | `examples/` | real agent stacks instrumented with one line |
+| `plugin/`, `skills/` | the Claude Code plugin and the agentglow skill |
+| `docs/SPEC.md` | the contract: endpoints, span -> world event mapping, attributes, privacy |
+
+Contributor notes (layout, tests, conventions, release): [CLAUDE.md](CLAUDE.md).
 
 MIT licensed.

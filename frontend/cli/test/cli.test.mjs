@@ -347,10 +347,20 @@ test("plugin hooks.json = the generated http hooks on 8100 + the ensure-server S
   assert.deepEqual(rest, claudeSettings(baseUrl({ port: 8100 })).hooks);
 });
 
-test("plugin skill is a copy of skills/agentglow/SKILL.md", { skip: !fs.existsSync(path.join(repo, "plugin")) }, () => {
-  const a = fs.readFileSync(path.join(repo, "skills", "agentglow", "SKILL.md"), "utf8");
-  const b = fs.readFileSync(path.join(repo, "plugin", "skills", "agentglow", "SKILL.md"), "utf8");
-  assert.equal(b, a, "run: cp skills/agentglow/SKILL.md plugin/skills/agentglow/SKILL.md");
+test("plugin skill is a copy of skills/agentglow (SKILL.md + references/)", { skip: !fs.existsSync(path.join(repo, "plugin")) }, () => {
+  const src = path.join(repo, "skills", "agentglow");
+  const dst = path.join(repo, "plugin", "skills", "agentglow");
+  const fix = "run: rm -rf plugin/skills/agentglow/references && cp skills/agentglow/SKILL.md plugin/skills/agentglow/ && cp -R skills/agentglow/references plugin/skills/agentglow/";
+  assert.equal(fs.readFileSync(path.join(dst, "SKILL.md"), "utf8"), fs.readFileSync(path.join(src, "SKILL.md"), "utf8"), fix);
+  const list = (d) => (fs.existsSync(d) ? fs.readdirSync(d).filter((f) => f.endsWith(".md")).sort() : []);
+  const refs = list(path.join(src, "references"));
+  assert.deepEqual(list(path.join(dst, "references")), refs, fix);
+  for (const f of refs) {
+    assert.equal(fs.readFileSync(path.join(dst, "references", f), "utf8"), fs.readFileSync(path.join(src, "references", f), "utf8"), `${f}: ${fix}`);
+  }
+  // every reference SKILL.md links to exists (progressive disclosure must not dangle)
+  const skill = fs.readFileSync(path.join(src, "SKILL.md"), "utf8");
+  for (const [, ref] of skill.matchAll(/\]\((references\/[^)]+)\)/g)) assert.ok(fs.existsSync(path.join(src, ref)), ref);
 });
 
 test("enabledAgentglowPlugins finds only enabled agentglow@* ids", () => {

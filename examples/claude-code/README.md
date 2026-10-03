@@ -9,7 +9,9 @@ npx agentglow setup        # once
 claude                     # then just use Claude Code as usual
 ```
 `setup` merges the hooks + traces of [settings.json](settings.json) into `~/.claude/settings.json` (backup first),
-adds a `SessionStart` hook that starts the AgentGlow server whenever `claude` starts, starts the server now and opens
+adds a `SessionStart` hook that starts the AgentGlow server whenever `claude` starts, on macOS / Linux registers a
+login item (launchd / `systemd --user`: the server starts at login and restarts on crash; `--no-autostart` skips it),
+starts the server now (replacing an older AgentGlow version still on the port) and opens
 **http://localhost:8100/neural**. Only Node 18+ is needed. Hooks load at session start, so restart any Claude Code
 session that was already open. Undo everything with `npx agentglow remove`.
 
@@ -48,10 +50,13 @@ Try the plugin for one session without installing: `claude --plugin-dir ./plugin
 | Command | What it does |
 |---|---|
 | `npx agentglow setup [--port 8100]` | install hooks + traces env + the auto-start `SessionStart` hook into `~/.claude/settings.json` (backup `settings.json.agentglow-backup-<time>` first; running it twice changes nothing), start the server, open `/neural` |
-| `npx agentglow status [--port 8100]` | is it installed, is the server up, where are the logs |
+| `npx agentglow setup --capture-prompts` | also keep your own prompts (secrets redacted, max 2000 chars) and show them next to Claude's replies; local server only, off by default |
+| `npx agentglow setup --no-autostart` | no login item; the server starts with each `claude` session (the default on Windows) |
+| `npx agentglow status [--port 8100]` | CLI and server versions, is the server up (port, pid), are the hooks installed (or from the plugin), login item, prompt capture |
 | `npx agentglow open [--port 8100]` | open the 3D view |
 | `npx agentglow stop [--port 8100]` | stop a server the CLI started in the background |
-| `npx agentglow remove` | uninstall and stop the server: remove exactly what `setup` added (hooks whose URL contains `/v1/claude-code`, its env keys, the auto-start hook); everything else stays |
+| `npx agentglow remove` | uninstall and stop the server: remove exactly what `setup` added (hooks whose URL contains `/v1/claude-code`, its env keys, the auto-start hook, the login item); everything else stays |
+| `npx agentglow autostart [--remove]` | (re)register or drop only the login item |
 | `npx agentglow start [--port 8100] [--background]` | run the server (foreground by default); `serve` is an alias |
 | `npx agentglow claude [--port 8100] [--no-open] [-- <claude args>]` | try mode: start/reuse the server, open `/neural`, run `claude --settings <temp file> <claude args>`; exits with Claude's exit code and leaves the server running |
 
@@ -62,14 +67,18 @@ How the server starts: if something healthy answers `/live/health` on the port i
 `agentglow serve` from PyPI (same version as the npm package) through `uvx`, `uv`, or, when neither is installed, a
 standalone uv it downloads once from the official GitHub release (checksum-verified) into its cache
 (`~/Library/Caches/agentglow` on macOS, `~/.cache/agentglow` on Linux, `%LOCALAPPDATA%\agentglow\Cache` on Windows;
-override with `AGENTGLOW_CACHE_DIR`). The first run downloads Python + dependencies (about 30-60s). Server logs and
-the pidfile live in the same folder.
+override with `AGENTGLOW_CACHE_DIR`). The first run downloads Python + dependencies (about 30-60s). Server logs
+(`server-<port>.log`) and the pidfile live in the same folder; a login-item server logs to
+`~/Library/Logs/agentglow.log` (macOS) or `journalctl --user -u agentglow` (Linux). If uv's cached PyPI index does not
+know a just-released version yet, the CLI refreshes it once, then falls back to the latest `agentglow`.
 
 | Variable | Effect |
 |---|---|
 | `AGENTGLOW_URL` | use this server (e.g. a shared `https://agentglow.yourco.com`) instead of starting one; hooks + traces point at it |
 | `AGENTGLOW_API_KEY` | ingest key; the hooks send it as `x-api-key`, and the CLI also sets `OTEL_EXPORTER_OTLP_HEADERS` for the traces |
 | `AGENTGLOW_CACHE_DIR` | where uv, logs and pidfiles go |
+| `AGENTGLOW_PORT` | default port instead of 8100 (same as `--port`) |
+| `AGENTGLOW_PY_SPEC` | the Python server to run (default `agentglow==<CLI version>`; a path to a `backend/` checkout runs it editable) |
 
 ## Wiring the hooks by hand
 

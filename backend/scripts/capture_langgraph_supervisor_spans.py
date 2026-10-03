@@ -6,7 +6,7 @@
 
     # stream to a running server instead of (also) capturing; any init_chat_model spec:
     ... python backend/scripts/capture_langgraph_supervisor_spans.py --live http://127.0.0.1:8139 \
-        --model anthropic:claude-sonnet-5 --no-save      # (+ --with langchain-anthropic)
+        --model anthropic:claude-sonnet-5-5 --no-save      # (+ --with langchain-anthropic)
 
 `create_supervisor` routes between two `create_react_agent(..., name=...)` workers (researcher, analyst) with fake
 local tools via its `transfer_to_<worker>` handoff tools. Spans come from agentglow.watch() (OpenInference LangChain).

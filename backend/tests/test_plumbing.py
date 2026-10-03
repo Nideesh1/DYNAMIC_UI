@@ -476,3 +476,11 @@ def test_strict_privacy_keeps_primitive_attributes():
         if k.startswith("agentglow."):
             assert out[k] == a[k], k
     assert "http.request.header.authorization" not in out and "user.email" not in out
+
+
+def test_pii_patterns_accept_strings():
+    from agentglow.plumbing import Policy
+    p = Policy()
+    p.configure(privacy="strict", ignore=None, allow=None, allow_message_keys=None, error_messages=False,
+                scrub=None, pii_patterns=[(r"ORD-\d+", "[order]")], apps=[])
+    assert all(hasattr(rx, "sub") for rx, _ in p.patterns)
