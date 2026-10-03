@@ -7,7 +7,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { mcpGlow, TYPE_COLOR, waitSeconds, world, type Comet, type McpCall } from "../shared/world";
+import { mcpGlow, TYPE_COLOR, waitSeconds, world, type Comet, type McpCall, cometOn, cometPos } from "../shared/world";
 import { agentLive, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
 import { isScout, nodeWorld, reduced } from "./layout";
 import { isExpanded, lod } from "../shared/lod";
@@ -166,14 +166,14 @@ function CometMesh({ comet }: { comet: Comet }) {
   const hot = useMemo(() => new THREE.Color(color).multiplyScalar(4), [color]);
   useFrame(() => {
     const now = performance.now();
-    const t = Math.min(1, (now - comet.start) / comet.dur);
+    const t = cometPos(comet, now);
     const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
     const a = agentLive(comet.from);
     const b = agentLive(comet.to);
     if (!ref.current || !a || !b) return;
     _w.copy(a);
     arcPoint(_w, b, e, 1.2 + a.distanceTo(b) * 0.15, ref.current.position);
-    ref.current.scale.setScalar(t >= 1 ? 0.001 : 1);
+    ref.current.scale.setScalar(cometOn(comet, now) ? 1 : 0.001);
   });
   return (
     <Trail width={2.2} length={7} color={color} attenuation={(w) => w * w} decay={1.2}>

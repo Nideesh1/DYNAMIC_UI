@@ -111,6 +111,8 @@ export interface Label3DProps {
    */
   declutter?: LabelKind | false;
   ref?: Ref<Label3DHandle>;
+  /** text that changes over time (e.g. a job's elapsed timer): re-read ~2x/s and re-texted when it changes */
+  live?: (() => LabelLine) | null;
   /** extra objects in billboard space (decorations) */
   children?: ReactNode;
 }
@@ -328,6 +330,7 @@ function Label3DInner(props: Label3DProps) {
       mainColor: new THREE.Color(),
       subColor: new THREE.Color(),
       tmp: new THREE.Color(),
+      liveAt: 0,
       wp: new THREE.Vector3(),
       q: new THREE.Quaternion(),
       hasSub: false,
@@ -553,6 +556,10 @@ function Label3DInner(props: Label3DProps) {
     const b = bb.current;
     if (!o || !b) return;
     const q = P.current;
+    if (q.live) {
+      const t = performance.now();
+      if (t - s.liveAt > 500) (s.liveAt = t), api.setLines(q.live(), q.secondary ?? null);
+    }
     if (s.cur !== s.target) {
       if (q.fadeMs <= 0) s.cur = s.target;
       else {

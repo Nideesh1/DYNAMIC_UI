@@ -20,6 +20,9 @@ agentglow.watch(AGENTGLOW_URL, broker=broker, service_name="orders-worker")
 app = FastStream(broker)
 db = aioredis.from_url(REDIS_URL, decode_responses=True)
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
+# SLOW_RATE (default 0): share of orders whose handling takes 20-40 s (a long job: it shows as a node ringing the
+# worker with a running timer); handled concurrently so the fast ones keep flowing
+SLOW_RATE = float(os.environ.get("SLOW_RATE", "0"))
 
 
 async def fraud_check(order: dict) -> str:
@@ -39,8 +42,18 @@ async def fraud_check(order: dict) -> str:
         return "high" if random.random() < 0.05 else "low"
 
 
-@broker.subscriber(stream=STREAM)
+async def slow_reconcile(order: dict) -> None:
+    """A long job: polls Redis every few seconds for 20-40 s (its calls are drawn on the job node)."""
+    end = asyncio.get_running_loop().time() + random.uniform(20, 40)
+    while asyncio.get_running_loop().time() < end:
+        await asyncio.sleep(random.uniform(2, 4))
+        await db.hget(f"order:{order['order_id']}", "status")
+
+
+@broker.subscriber(stream=STREAM, max_workers=16 if SLOW_RATE > 0 else 1)
 async def handle(order: dict) -> None:
+    if SLOW_RATE and random.random() < SLOW_RATE:
+        await slow_reconcile(order)
     risk = await fraud_check(order) if int(order.get("qty", 1)) >= 6 else "low"
     if risk == "high":
         raise RuntimeError(f"order {order['order_id']} held for review")  # an error: red flash on the worker

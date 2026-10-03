@@ -387,3 +387,65 @@ def test_live_client_spans_with_attributes_only_at_end():
     runs = types(evs, "run")
     assert {r["run_id"] for r in runs} == {"services", chat["trace_id"]}  # the poll made no run; the LLM call still does
     assert types(evs, "llm")[0]["tokens_in"] == 5
+
+
+# ---------------------------------------------------------------------- long-running requests -> job nodes
+def _consume(topic="mkt:tick", service="orders-worker", **kw):
+    return span(f"{topic} process", kind="consumer", service=service, **{"messaging.system": "redis", "messaging.destination.name": topic}, **kw)
+
+
+def test_long_request_becomes_job_owning_its_calls():
+    m = Mapper()
+    req = _consume(t1=T + 20_000)
+    evs = m.feed("start", {**req, "end_time_ms": None, "status": "unset"})
+    assert not types(m.tick(T + backend.JOB_MS - 1), "spawn")  # not yet: still a plain open request
+    tick = m.tick(T + backend.JOB_MS)
+    (sp,) = types(tick, "spawn")
+    jid = f"job:{req['span_id']}"
+    assert sp == {"type": "spawn", "run_id": "services", "id": jid, "agent": "mkt:tick", "parent_id": "svc:orders-worker",
+                  "subagent": True, "job": True, "since": T, "ts": T + backend.JOB_MS}
+    assert {"type": "agent", "run_id": "services", "id": jid, "status": "thinking", "ts": T + backend.JOB_MS} in tick
+    (st,) = types(tick, "service_stats")
+    assert st["inflight"] == 1 and st["n"] == 0
+    # calls inside the job are owned by it while it runs
+    db = span("GET", kind="client", parent=req["span_id"], t0=T + 5000, t1=T + 5005, **{"db.system": "redis"})
+    llm = span("chat", kind="client", parent=req["span_id"], t0=T + 6000, t1=T + 7000, **{"gen_ai.operation.name": "chat", "gen_ai.usage.input_tokens": 5})
+    evs = run(m, db, llm)
+    assert {e["id"] for e in types(evs, "mcp")} == {jid}
+    assert types(evs, "llm")[0]["id"] == jid
+    # the end: exit done, then the usual request on the service
+    evs = m.feed("end", req)
+    assert types(evs, "exit") == [{"type": "exit", "run_id": "services", "id": jid, "status": "done", "ts": T + 20_000}]
+    (rq,) = types(evs, "request")
+    assert rq["id"] == "svc:orders-worker" and rq["ms"] == 20_000
+    assert types(m.tick(T + 21_000), "service_stats")[0]["inflight"] == 0  # cleared once
+    assert "inflight" not in (types(m.tick(T + 22_000), "service_stats") or [{}])[0]
+
+
+def test_failed_job_and_short_requests_unchanged():
+    m = Mapper()
+    req = http(path="/reports", code=500, t1=T + 9000)
+    m.feed("start", {**req, "end_time_ms": None, "status": "unset"})
+    assert types(m.tick(T + 4000), "spawn")[0]["agent"] == "GET /reports"
+    assert types(m.feed("end", req), "exit")[0]["status"] == "failed"
+    # a request ending before JOB_MS: no node, exactly as before
+    m2 = Mapper()
+    evs = run(m2, http(t0=T, t1=T + 2500))
+    evs += m2.tick(T + 3000) + m2.tick(T + 9000)
+    assert [e["agent"] for e in types(evs, "spawn")] == ["orders-api"] and not types(evs, "exit")
+    assert all("inflight" not in e for e in types(evs, "service_stats"))
+
+
+def test_job_nodes_capped_per_service_and_replayed():
+    m = Mapper()
+    reqs = [_consume(t0=T + i) for i in range(backend.MAX_JOBS + 3)]
+    for r in reqs:
+        m.feed("start", {**r, "end_time_ms": None, "status": "unset"})
+    tick = m.tick(T + 60_000)
+    assert len(types(tick, "spawn")) == backend.MAX_JOBS
+    assert types(tick, "service_stats")[0]["inflight"] == backend.MAX_JOBS + 3
+    snap = m.svc.snapshot()
+    assert sum(1 for e in snap if e["type"] == "spawn" and e.get("job")) == backend.MAX_JOBS
+    # one ends: the next waiting long request gets a node
+    m.feed("end", {**reqs[0], "end_time_ms": T + 61_000})
+    assert len(types(m.tick(T + 62_000), "spawn")) == 1

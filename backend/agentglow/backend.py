@@ -7,6 +7,7 @@ exactly as before (a service only appears once it has backend spans).
 |---|---|
 | a service (OTel resource `service.name`, or `agentglow.service`) | one long-lived agent per service in the run `services` (`services:<scope>` when scoped), spawned on its first request, persistent across requests |
 | a request: SERVER span with HTTP/RPC attributes, or a handled message: CONSUMER span with `messaging.system` (not a `create` span) | a `request` event (pulse) on the service agent; aggregated per service into `service_stats` once per tick (`42 req/s · 2% 5xx · p50 18ms`) |
+| a request still open after JOB_MS (a long-running handler) | a "job" subagent of the service named after the route / topic (at most MAX_JOBS live per service), owning the calls inside it until it ends (`exit` done / failed, then the usual `request`); `service_stats.inflight` = requests open 1 s or more |
 | PRODUCER span (`messaging.destination.name`) -> CONSUMER span of another service (OTel parent or link) | `message` comet producer service -> consumer service, text = the topic / stream |
 | an agent span (`agentglow.agent(...)`, GenAI invoke_agent, ...) inside a request | a short-lived subagent of the service (at most MAX_TASKS live per service; more run as the service itself) |
 | CLIENT span with `db.system` or HTTP inside a request | `mcp` call/result on the synthetic `backend` group, resource = the system (`redis`, `postgresql`, `payments:9100`) |
@@ -42,6 +43,10 @@ COMET_MIN_MS = 250  # per (from, to, topic) edge
 CALL_MIN_MS = 250  # per (agent, server, resource)
 LINK_MS = 10_000  # a consumer waits this long for its producer span (other process, other batch)
 PRUNE_MS = 30_000  # ended spans of a service run are forgotten after this long
+JOB_MS = int(os.environ.get("AGENTGLOW_JOB_MS", "3000"))  # a request open this long becomes a job node
+MAX_JOBS = int(os.environ.get("AGENTGLOW_SERVICE_MAX_JOBS", "8"))  # live job nodes per service (more are only counted)
+INFLIGHT_MS = 1000  # `inflight` counts requests open at least this long (not every request that spans a tick)
+JOB_STALE_MS = int(os.environ.get("AGENTGLOW_JOB_STALE_MS", str(3600 * 1000)))  # an open request never ended: forgotten
 FORGET_MS = int(os.environ.get("AGENTGLOW_SERVICE_IDLE_MS", str(3600 * 1000)))  # idle service -> exit + forget
 LABEL_BAD_RE = re.compile(r"[^A-Za-z0-9:_./@-]+")
 DB_KIND = {"snowflake": "warehouse", "bigquery": "warehouse", "redshift": "warehouse", "clickhouse": "warehouse",
@@ -167,6 +172,9 @@ class Svc:
     calm_streak: int = 0
     win: _Win = field(default_factory=_Win)
     tasks: set = field(default_factory=set)  # live task subagent ids
+    open: dict = field(default_factory=dict)  # span id -> open request Span (in flight)
+    jobs: dict = field(default_factory=dict)  # job agent id -> [spawn event, status event] (live job nodes)
+    inflight: int = 0  # in-flight count sent in the last service_stats
 
 
 class Services:
@@ -225,7 +233,8 @@ class Services:
     def snapshot(self) -> list[dict]:
         """`run started` + `spawn` + status of every live service (a new viewer gets them after they left the buffer)."""
         live = {sv.run for sv in self.svcs.values()}
-        return [ev for rid, ev in self.run_started.items() if rid in live] + [e for sv in self.svcs.values() for e in (sv.spawn, sv.status) if e]
+        return [ev for rid, ev in self.run_started.items() if rid in live] + [e for sv in self.svcs.values() for e in (sv.spawn, sv.status) if e] + \
+            [e for sv in self.svcs.values() for j in sv.jobs.values() for e in j if e]
 
     # ------------------------------------------------------------------ spans
     def start_entry(self, s: "Span", kind: str, d: dict, out: list) -> None:
@@ -233,6 +242,8 @@ class Services:
         aid = self.ensure(self.service_name(d), a.get("agentglow.scope") or a.get("agentglow.run.scope"), s.start, out)
         s.alias = s.svc = aid
         s.entry = kind
+        if s.end is None:
+            self.svcs[aid].open[s.id] = s
         if kind == "message":
             topic = topic_of(s.name, a)
             ids = [s.parent] + [str(lk.get("span_id")) for lk in d.get("links") or [] if isinstance(lk, dict)]
@@ -276,6 +287,12 @@ class Services:
         a, ts = s.attrs, s.end or s.start
         code = http_code(a)
         error = s.status == "error" or (code is not None and code >= 500)
+        sv = self.svcs.get(s.svc or "")
+        if sv is not None:
+            sv.open.pop(s.id, None)
+        if s.alias and s.alias.startswith("job:"):
+            self._end_job(s.alias, sv, "failed" if error else "done", ts, out)
+            s.alias = s.svc
         ev = {"type": "request", "run_id": s.run, "id": s.svc, "service": self.svcs[s.svc].name if s.svc in self.svcs else "",
               "name": request_name(s.entry, s.name, a), "kind": s.entry}
         if code is not None:
@@ -337,6 +354,27 @@ class Services:
             return False
         sv.tasks.add(agent_id)
         return True
+
+    def _promote(self, sv: Svc, s: "Span", now: int, out: list) -> None:
+        """A request open for JOB_MS: a job subagent of its service, owning the calls inside it from now on."""
+        from .mapper import Agent
+
+        jid = f"job:{s.id}"
+        ev = {"type": "spawn", "run_id": sv.run, "id": jid, "agent": request_name(s.entry or "", s.name, s.attrs) or "job",
+              "parent_id": sv.id, "subagent": True, "job": True, "since": s.start, "ts": now}
+        self.m.agents[jid] = Agent(ev["agent"], sv.run)
+        out.append(ev)
+        n = len(out)
+        self.m._thinking(jid, sv.run, out, now)
+        sv.jobs[jid] = [ev, out[-1] if len(out) > n else None]
+        s.alias = jid
+
+    def _end_job(self, jid: str, sv: Svc | None, status: str, ts: int, out: list) -> None:
+        run = sv.run if sv is not None else RUN
+        out.append({"type": "exit", "run_id": run, "id": jid, "status": status, "ts": ts})
+        if sv is not None:
+            sv.jobs.pop(jid, None)
+        self.m.agents.pop(jid, None)
 
     def span_ended(self, s: "Span") -> None:
         self.ended.append((s.end or s.start, s.id))
@@ -406,8 +444,16 @@ class Services:
         window = 1000 if self.last_flush is None else max(1, min(10_000, now - self.last_flush))
         self.last_flush = now
         for aid, sv in list(self.svcs.items()):
+            for s in list(sv.open.values()):
+                if now - s.start > JOB_STALE_MS:  # its end never came (process gone): forget it
+                    del sv.open[s.id]
+                    if s.alias and s.alias.startswith("job:"):
+                        self._end_job(s.alias, sv, "done", now, out)
+                elif now - s.start >= JOB_MS and s.alias == aid and len(sv.jobs) < MAX_JOBS:
+                    self._promote(sv, s, now, out)
             w = sv.win
-            if w.n:
+            inflight = sum(1 for s in sv.open.values() if now - s.start >= INFLIGHT_MS)
+            if w.n or inflight or sv.inflight:
                 top = sorted(w.routes.items(), key=lambda kv: -kv[1])
                 routes = dict(top[:MAX_ROUTES])
                 rest = sum(c for _, c in top[MAX_ROUTES:])
@@ -416,12 +462,15 @@ class Services:
                 out.append({"type": "service_stats", "run_id": sv.run, "id": aid, "service": sv.name, "window_ms": window,
                             "n": w.n, "errors": w.errors, "codes": dict(sorted(w.codes.items())), "p50_ms": _pct(w.ms, 0.5),
                             "p95_ms": _pct(w.ms, 0.95), "routes": routes, "ts": now})
+                if inflight or sv.inflight:  # open requests (long handlers); sent until it drops back to 0
+                    out[-1]["inflight"] = inflight
+                sv.inflight = inflight
             if sv.busy:
                 sv.calm_streak = sv.calm_streak + 1 if w.n * 1000 / window <= HV_RATE else 0
                 if sv.calm_streak >= CALM_WINDOWS:
                     sv.busy, sv.calm_streak = False, 0
             sv.win = _Win()
-            if now - sv.last_ts > FORGET_MS:  # idle for long: the service leaves (it comes back on its next request)
+            if now - sv.last_ts > FORGET_MS and not sv.open:  # idle for long: the service leaves (it comes back on its next request)
                 out.append({"type": "exit", "run_id": sv.run, "id": aid, "status": "done", "ts": now})
                 del self.svcs[aid]
                 self.m.agents.pop(aid, None)

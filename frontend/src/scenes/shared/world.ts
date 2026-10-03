@@ -27,12 +27,14 @@ export type WorldEvent =
   | { type: "run"; run_id: string; status: "started" | "renamed" | "completed" | "failed"; topic: string; workflow: string; ts: number }
   // "waiting": the step is paused in a wait (approval, durable sleep, ...); `reason` = what it waits on, `until` = epoch ms
   | { type: "step"; run_id: string; step: StepName; status: "running" | "waiting" | "done" | "failed"; reason?: string; until?: number; ts: number }
-  | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; ts: number }
+  // `job`: a long-running request of the service `parent_id` (docs/SPEC.md "Backend services"), open since `since` (epoch ms)
+  | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; job?: boolean; since?: number; ts: number }
   | { type: "exit"; run_id: string; id: string; status: "done" | "failed"; ts: number }
   | { type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; reason?: string; until?: number; ts: number }
   // tokens_in = ALL prompt tokens (cached included); tokens_cached / tokens_cache_write are subsets of it, never added
   | { type: "llm"; run_id: string; id: string; tokens_in: number; tokens_out: number; tokens_cached?: number; tokens_cache_write?: number; latency_ms: number; ts: number }
-  | { type: "message"; run_id: string; from_id: string; to_id: string; text: string; ts: number }
+  // `failed`: a publish that raised (backend services): the comet fizzles out instead of arriving
+  | { type: "message"; run_id: string; from_id: string; to_id: string; text: string; ts: number; failed?: boolean }
   | { type: "tool"; run_id: string; id: string; tool: string; args_preview: string; ts: number }
   | { type: "graph"; run_id: string; id: string; op: "read" | "write"; nodes: string[]; ts: number }
   | { type: "final"; run_id: string; text: string; ts: number }
@@ -52,7 +54,7 @@ export type WorldEvent =
   // `hv` = an error sent individually while the service's requests are aggregated in `service_stats`
   | { type: "request"; run_id: string; id: string; service: string; name: string; kind: "http" | "rpc" | "message" | "event"; status?: number; error: boolean; ms: number; ts: number; hv?: boolean }
   // one per service per ~1 s window: requests, errors, status classes ("2xx": n), latency, top routes
-  | { type: "service_stats"; run_id: string; id: string; service: string; window_ms: number; n: number; errors: number; codes: Record<string, number>; p50_ms: number; p95_ms: number; routes: Record<string, number>; ts: number }
+  | { type: "service_stats"; run_id: string; id: string; service: string; window_ms: number; n: number; errors: number; codes: Record<string, number>; p50_ms: number; p95_ms: number; routes: Record<string, number>; ts: number; instances?: number; inflight?: number }
   // an order action (paper when dry_run) by agent instance `id`
   | { type: "order"; run_id: string; id: string; side: string; qty: number; price?: number; status: OrderStatus; instrument: string; dry_run: boolean; reason?: string; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
@@ -76,7 +78,7 @@ const ORDERS_KEPT = 8;
  * High-volume decisions, per agent (from `decision_stats`): smoothed (EMA) so the halo and its label never flicker.
  * `seg` = smoothed share of each outcome category, in HALO_CATS order.
  */
-export type HvStats = { at: number; bump: number; bumpDeny: boolean; rate: number; deny: number; p50: number; p95: number; seg: number[]; provider: string; n: number; windows: number; unit?: "req" | "msg" };
+export type HvStats = { at: number; bump: number; bumpDeny: boolean; rate: number; deny: number; p50: number; p95: number; seg: number[]; provider: string; n: number; windows: number; unit?: "req" | "msg"; instances?: number; inflight?: number };
 /** outcome categories of a decision halo arc: allow, deny, check yes, check no, route result slots 0..3, other */
 export const HALO_CATS = ["allow", "deny", "yes", "no", "r0", "r1", "r2", "r3", "other"] as const;
 export const HALO_COLORS = ["#4ade80", "#fb3b5c", "#5eead4", "#fbbf24", "#60a5fa", "#c084fc", "#f472b6", "#facc15", "#94a3b8"];
@@ -106,9 +108,20 @@ export function haloText(h: HvStats): string {
   const r = h.rate >= 10 ? Math.round(h.rate) : Math.round(h.rate * 10) / 10;
   const d = h.deny * 100;
   const dt = `${d > 0 && d < 1 ? "<1" : Math.round(d)}%`;
-  if (h.unit) return `${r} ${h.unit}/s · ${dt} ${h.unit === "req" ? "5xx" : "err"} · p50 ${Math.round(h.p50)}ms`;
+  if (h.unit) return `${r} ${h.unit}/s · ${dt} ${h.unit === "req" ? "5xx" : "err"} · ${h.inflight ? `${h.inflight} in flight` : `p50 ${Math.round(h.p50)}ms`}`;
   return `${h.provider} ${r}/s · ${dt} deny · p50 ${Math.round(h.p50)}ms`;
 }
+/** `2m14s` / `38s` / `1h05m` */
+export function elapsedText(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+}
+/** a job's name label: `mkt:tick · 2m14s` (frozen at its end) */
+export const jobText = (i: Instance) => (i.job ? `${i.name} · ${elapsedText((i.job.end || Date.now()) - i.job.since)}` : i.name);
+/** a job's end flash 0..1 (green done / red failed), ~1.2 s */
+export const flashMix = (i: Instance, now = performance.now()) => (i.flash ? Math.max(0, 1 - (now - i.flash.at) / 1200) : 0);
 /** One decision on one agent; `at` (performance.now()) = when its glyph starts (staggered so a burst reads one by one). */
 export type DecisionUse = Omit<Extract<WorldEvent, { type: "decision" }>, "type" | "run_id" | "id"> & {
   at: number;
@@ -257,6 +270,10 @@ export type Instance = {
   /** backend service agent: requests / errors handled (from `service_stats`) */
   svcN?: number;
   svcErr?: number;
+  /** a long-running request of a service shown as its subagent: started / ended (epoch ms, end 0 while open) */
+  job?: { since: number; end: number };
+  /** a job just ended: its halo flashes green (ok) / red (performance.now()) */
+  flash?: { at: number; ok: boolean };
 };
 /** A declared wait: what it waits on ("approval", "sleep", an event key) and its deadline / wake-up (epoch ms, 0 = none). */
 export type Wait = { reason: string; until: number };
@@ -369,7 +386,17 @@ export function stepChips(r: Run, max = MAX_STEP_CHIPS): { shown: StepName[]; mo
   const cut = n > max ? max - 1 : n; // the "+N" chip takes the last place
   return { shown: r.stepOrder.slice(0, cut), more: n - cut };
 }
-export type Comet = { id: number; run: string; from: string; to: string; start: number; dur: number; text: string };
+export type Comet = { id: number; run: string; from: string; to: string; start: number; dur: number; text: string; failed?: boolean };
+/** a failed comet (a publish that raised) sputters out half way: it stalls here and is gone at FIZZLE_END of its life */
+export const FIZZLE_STALL = 0.55;
+export const FIZZLE_END = 0.8;
+/** path parameter (0..1, before a theme's easing) of a comet: a failed one decelerates to the midpoint and stops */
+export function cometPos(c: Comet, now = performance.now()): number {
+  const u = Math.max(0, (now - c.start) / c.dur);
+  return c.failed ? 0.5 * Math.min(1, u / FIZZLE_STALL) : Math.min(1, u);
+}
+/** the comet head is still drawn (a failed one never arrives: no arrival flash) */
+export const cometOn = (c: Comet, now = performance.now()) => (now - c.start) / c.dur < (c.failed ? FIZZLE_END : 1);
 /** External MCP servers agents call (persistent "satellites"; registered on first use). */
 export type McpResource = { name: string; kind: ResourceKind; activeAt: number; inflight: number; calls: number };
 export type McpServer = { name: string; color: string; slot: number; activeAt: number; calls: number; inflight: number; resources: Map<string, McpResource> };
@@ -700,6 +727,7 @@ export function apply(ev: WorldEvent) {
         orders: [],
         chat: [],
         wait: null,
+        ...(ev.job ? { job: { since: ev.since ?? ev.ts, end: 0 } } : {}),
       });
       world.stats.spawned++;
       world.focus = ev.id;
@@ -712,6 +740,10 @@ export function apply(ev: WorldEvent) {
         i.status = ev.status;
         i.wait = null;
         i.doneAt = now;
+        if (i.job) {
+          i.job.end = ev.ts;
+          i.flash = { at: now, ok: ev.status === "done" };
+        }
         // stays dimmed until its run ends; no known (or an already ended) run, or a subagent replayed (e.g. on
         // page refresh) already genuinely old in real wall-clock time: fade right away instead of waiting again.
         // ev.ts and Date.now() are both real epoch ms (backend's now_ms() = time.time()*1000) - safe to compare
@@ -754,7 +786,8 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "message":
-      world.comets.push({ id: ++seq, run: ev.run_id, from: ev.from_id, to: ev.to_id, start: now, dur: 1300, text: ev.text });
+      // a failed publish: a short comet flagged `failed` (it sputters out half way, Fizzle.tsx)
+      world.comets.push({ id: ++seq, run: ev.run_id, from: ev.from_id, to: ev.to_id || ev.from_id, start: now, dur: ev.failed ? 700 : 1300, text: ev.text, ...(ev.failed ? { failed: true } : {}) });
       world.focus = ev.to_id;
       world.focusAt = now;
       break;
@@ -900,7 +933,15 @@ export function apply(ev: WorldEvent) {
       world.stats.requests += ev.n;
       world.stats.errors += ev.errors;
       const i = world.instances.get(ev.id);
-      if (!i || ev.n <= 0) break;
+      if (!i) break;
+      if (ev.inflight !== undefined && i.hv) i.hv.inflight = ev.inflight;
+      if (ev.n <= 0) {
+        // only long requests in flight: keep the halo (and its `N in flight` label) up
+        if (!ev.inflight) break;
+        if (i.hv) i.hv.at = now;
+        else i.hv = { at: now, bump: 0, bumpDeny: false, rate: 0, deny: 0, p50: 0, p95: 0, seg: SEG_SCRATCH.map((_, k) => (k === 8 ? 1 : 0)), provider: "msg", n: 0, windows: 0, unit: "msg", inflight: ev.inflight };
+        break;
+      }
       const c = ev.codes;
       const http = Object.keys(c).length > 0;
       const ok = http ? (c["1xx"] ?? 0) + (c["2xx"] ?? 0) + (c["3xx"] ?? 0) : ev.n - ev.errors;
@@ -916,7 +957,7 @@ export function apply(ev: WorldEvent) {
       const unit = http ? "req" : "msg";
       const h = i.hv;
       if (!h || now - h.at > HV_QUIET_MS + HV_FADE_MS || !h.unit) {
-        i.hv = { at: now, bump: h?.bump ?? 0, bumpDeny: h?.bumpDeny ?? false, rate, deny, p50: ev.p50_ms, p95: ev.p95_ms, seg: seg.map((x) => x / tot), provider: unit, n: ev.n, windows: h ? h.windows : 0, unit };
+        i.hv = { at: now, bump: h?.bump ?? 0, bumpDeny: h?.bumpDeny ?? false, rate, deny, p50: ev.p50_ms, p95: ev.p95_ms, seg: seg.map((x) => x / tot), provider: unit, n: ev.n, windows: h ? h.windows : 0, unit, inflight: ev.inflight ?? h?.inflight };
       } else {
         const k = HV_ALPHA;
         h.at = now;
@@ -929,6 +970,7 @@ export function apply(ev: WorldEvent) {
         h.unit = unit;
         h.windows++;
       }
+      i.hv!.instances = ev.instances ?? 1; // replicas of this service (`×2` on the halo label)
       i.svcN = (i.svcN ?? 0) + ev.n;
       i.svcErr = (i.svcErr ?? 0) + ev.errors;
       break;

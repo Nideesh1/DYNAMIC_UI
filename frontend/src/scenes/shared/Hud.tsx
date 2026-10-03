@@ -7,7 +7,7 @@ import { sendApproval, startLiveRun, useApproveAvailable, useRunAvailable, useRu
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
 import { decisionTint } from "./kit/DecisionGlyph";
-import { STALE_TEXT, decisionText, getInstance, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
+import { STALE_TEXT, decisionText, getInstance, jobText, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -37,7 +37,7 @@ export function describe(e: WorldEvent): string {
     case "llm":
       return e.tokens_in || e.tokens_out ? `${short(e.id)} · LLM ${e.tokens_in}→${e.tokens_out} tok` : `${short(e.id)} · thinking…`; // no usage (e.g. Claude Code hooks): no fake 0→0
     case "message":
-      return `${short(e.from_id)} → ${short(e.to_id)}: ${e.text}`;
+      return e.failed ? `${short(e.from_id)} ✕ ${e.text}: publish failed` : `${short(e.from_id)} → ${short(e.to_id)}: ${e.text}`;
     case "tool":
       return `${short(e.id)} · ${e.tool}(${e.args_preview})`;
     case "graph":
@@ -57,7 +57,7 @@ export function describe(e: WorldEvent): string {
     case "request":
       return `${short(e.id)} · ${e.name}${e.status !== undefined ? ` ${e.status}` : ""}${e.error ? " ERROR" : ""} · ${Math.round(e.ms)}ms`;
     case "service_stats":
-      return `${short(e.id)} · ${e.n} requests in ${Math.round(e.window_ms)}ms`;
+      return `${short(e.id)} · ${e.n} requests in ${Math.round(e.window_ms)}ms${e.instances && e.instances > 1 ? ` · ×${e.instances}` : ""}`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
     case "chat":
@@ -810,6 +810,7 @@ function runWaitText(run: Run): string {
   return s ? chipState(run, s)[1] : "";
 }
 
+const LINEAGE_MAX = 12;
 function AgentDetail({ i }: { i: Instance }) {
   const w = useWorld();
   const canApprove = useApproveAvailable() && w.mode === "live";
@@ -817,6 +818,8 @@ function AgentDetail({ i }: { i: Instance }) {
   const chips = run?.hasSteps ? stepChips(run) : null;
   const parent = getInstance(i.parent);
   const children = [...w.instances.values(), ...w.archive.values()].filter((c) => c.parent === i.id);
+  // a long-lived service has hundreds of finished tasks / jobs: live ones first, then the newest finished, capped
+  const lineage = children.length <= LINEAGE_MAX ? children : [...children.filter((c) => !isDone(c)), ...children.filter(isDone).reverse()].slice(0, LINEAGE_MAX);
   const pending = [...w.mcpPending.values()].filter((p) => p.instance === i.id);
   return (
     <div className="ap-detail" style={{ ["--c" as string]: TYPE_COLOR[i.type] }}>
@@ -874,11 +877,24 @@ function AgentDetail({ i }: { i: Instance }) {
               ↑ spawned by {short(parent.id)}
             </button>
           )}
-          {children.map((c) => (
+          {lineage.map((c) => (
             <button key={c.id} className="ap-chip-link" style={{ ["--c" as string]: TYPE_COLOR[c.type] }} onClick={() => selectInstance(c.id)}>
               ↓ {short(c.id)} {isDone(c) ? "✓" : ""}
             </button>
           ))}
+          {children.length > lineage.length && <p className="ap-more">+{children.length - lineage.length} more finished</p>}
+        </section>
+      )}
+      {children.some((c) => c.job && !c.job.end) && (
+        <section>
+          <h4>In flight{i.hv?.inflight ? ` · ${i.hv.inflight}` : ""}</h4>
+          {children
+            .filter((c) => c.job && !c.job.end)
+            .map((c) => (
+              <button key={c.id} className="ap-chip-link" style={{ ["--c" as string]: "#fbbf24" }} onClick={() => selectInstance(c.id)}>
+                {jobText(c)}
+              </button>
+            ))}
         </section>
       )}
       {i.skills.size > 0 && (

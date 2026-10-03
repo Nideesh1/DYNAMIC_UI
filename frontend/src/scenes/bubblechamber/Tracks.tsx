@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { showLabel } from "../shared/lod";
-import { TYPE_COLOR, energy, isDeny, world } from "../shared/world";
+import { TYPE_COLOR, energy, isDeny, world, jobText, cometOn, cometPos } from "../shared/world";
 import { agentLive, fit, kit, type AgentSlotProps } from "../shared/kit";
 import {
   AMBER,
@@ -54,8 +54,8 @@ import {
 const TAU = Math.PI * 2;
 /** seconds a decay product takes to fly from the vertex to its home */
 export const FLY_S = 0.85;
-/** bubble life (s) */
-const LIFE = 4.6;
+/** bubble life (s): long enough that a particle's track reads as a curl next to its labels */
+const LIFE = 6.5;
 const hitMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, transparent: true, opacity: 0 });
 const _o = new THREE.Vector3();
 const _c = new THREE.Vector3();
@@ -244,8 +244,8 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
     if (inst.status === "failed") s.col.lerp(RED, 0.5);
     const speed = s.rc + s.rg + (flying ? 1 : 0);
     if (!s.stopped) {
-      const kb = (flying ? 1.2 : done ? 0.45 : thinking ? 1.0 : 0.55) * (flying ? 1 : 1 - 0.85 * s.move);
-      s.trail.step(p, 0.07 * vs, 0.095 * vs, s.col, kb, flying ? LIFE + 1 : LIFE, t, 10);
+      const kb = (flying ? 1.5 : done ? 0.7 : thinking ? 1.55 : 0.95) * (flying ? 1 : 1 - 0.85 * s.move);
+      s.trail.step(p, 0.065 * vs, 0.13 * vs, s.col, kb, flying ? LIFE + 1 : LIFE, t, 10);
       if (done && speed < 0.015) s.stopped = true;
     }
     if (!done && s.stopped) (s.stopped = false), s.trail.reset();
@@ -312,6 +312,7 @@ export function Particle({ agent, selected, onSelect }: AgentSlotProps) {
         <Label3D
           ref={label}
           text={`${inst.name}${kx !== undefined ? ` ${Number(kx) + 1}` : ""}`}
+            live={inst.job ? () => jobText(inst) : null}
           color={TYPE_COLOR[inst.type]}
           size={inst.subagent ? 0.22 : 0.28}
           letterSpacing={0.02}
@@ -371,8 +372,8 @@ export function Lineage() {
       const pa = agentLive(c.from);
       const pb = agentLive(c.to);
       if (!pa || !pb) continue;
-      const u = clamp01((now - c.start) / c.dur);
-      if (u >= 1) continue;
+      const u = cometPos(c, now);
+      if (!cometOn(c, now)) continue;
       let tr = trails.get(c.id);
       if (!tr) trails.set(c.id, (tr = new Trail()));
       curl(pa, pb, c.id % 2 ? 0.22 : -0.22, _c);

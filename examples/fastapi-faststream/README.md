@@ -27,7 +27,9 @@ uv run python load.py --rps 50 --seconds 60                              # in an
 ```
 Open http://localhost:8100/neural. Other server: `AGENTGLOW_URL=http://127.0.0.1:8178 uv run python demo.py`.
 Ports (env): `API_PORT` 8191, `PAYMENTS_PORT` 8192, `MCP_PORT` 8193, `REDIS_URL` redis://localhost:6392.
-`FAIL_RATE` (default 0.02) = share of orders the API fails with a 500. With `OPENAI_API_KEY` (and `openai` installed)
+`FAIL_RATE` (default 0.02) = share of orders the API fails with a 500. `SLOW_RATE` (default 0; try 0.05) = share of orders the worker
+handles slowly (20-40 s): each one open past 3 s (`AGENTGLOW_JOB_MS`) becomes a job node ringing `orders-worker`
+(`orders · 27s`), the halo label counts `N in flight`. With `OPENAI_API_KEY` (and `openai` installed)
 the fraud check calls `OPENAI_MODEL` (default gpt-4.1-mini) instead of the stub.
 
 Each process can also run alone: `uv run python -m app.api`, `-m app.worker`, `-m app.payments`, `-m app.mcp_server`,

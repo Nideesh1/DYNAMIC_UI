@@ -253,6 +253,14 @@ function recompute(now: number) {
   // pass 1: selected + clicked lane, then at most one auto-picked run per lane (spread focus across lanes);
   // pass 2: fill what's left of the budget.
   laneTaken.fill(0);
+  // the backend services run (long-lived, a few service agents + their tasks / jobs) always stays expanded and
+  // costs no budget: the agent runs next to it are grouped as if it weren't there
+  for (const id of runOrder)
+    if (world.runs.get(id)?.workflow === "services") {
+      prio.set(id, -1);
+      nExp++;
+      laneTaken[laneOfRun(id)]++;
+    }
   for (let pass = 0; pass < 2; pass++)
     for (const id of runOrder) {
       const p = prio.get(id)!;

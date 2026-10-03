@@ -12,7 +12,7 @@ import { Bloom, EffectComposer, Noise, Vignette } from "@react-three/postprocess
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GraphLabel3D, Label3D, type Label3DHandle } from "../shared/Label3D";
-import { mcpGlow, STEP_SLOTS, slotLabel, slotStatus, stepChips, TYPE_COLOR, useWorld, world, type AgentType } from "../shared/world";
+import { mcpGlow, STEP_SLOTS, slotLabel, slotStatus, stepChips, TYPE_COLOR, useWorld, world, type AgentType, jobText } from "../shared/world";
 import { KitScene, fit, kit, kitRoleU, ResourceWire, runLocal, useKitGalaxy, type AgentSlotProps, type BackendSlotProps, type GraphSlotProps, type McpServerSlotProps, type RunSlotProps } from "../shared/kit";
 import { FlowEngine, NEB_R, PULSAR_Y, REDUCED } from "./engine";
 import "./flow.css";
@@ -255,7 +255,7 @@ function FocusLabel() {
     el.current?.setOpacity(show ? 1 : 0);
     if (!s || !s.inst || !g.current || !el.current) return;
     g.current.position.set(s.x, s.y + 1.25 * Math.max(0.85, fit.scale), s.z);
-    const txt = s.inst.name + " · " + s.inst.status;
+    const txt = (s.inst.job ? jobText(s.inst) : s.inst.name) + " · " + s.inst.status;
     if (txt !== last.current) {
       last.current = txt;
       el.current.setText(txt);

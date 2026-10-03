@@ -8,7 +8,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
-import { energy, hash01, lingerMs, presence, TYPE_COLOR, world } from "../shared/world";
+import { energy, hash01, lingerMs, presence, TYPE_COLOR, world, jobText } from "../shared/world";
 import { showLabel } from "../shared/lod";
 import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import { isScout, reduced } from "./layout";
@@ -161,7 +161,7 @@ export function Orb({ agent, selected, onSelect }: AgentSlotProps) {
         const k = id.split(":")[2];
         const nm = `${inst.name}${k !== undefined ? ` ${Number(k) + 1}` : ""}`;
         label.current.setText(m2 === "born" ? `+ ${nm}` : m2 === "done" ? `${nm} done` : m2 === "failed" ? `× ${nm}` : nm);
-      }
+      } else if (m2 === "name" && inst.job) label.current.setText(jobText(inst)); // elapsed timer (no-op unless changed)
       const o = m2 === "born" ? 1 : m2 === "name" ? 0.85 : Math.max(0, 1 - exitT * 1.6);
       lk.current += ((showLabel(id) ? 1 : 0) - lk.current) * 0.12;
       label.current.setOpacity(o * lk.current * Math.min(1, age / 0.4));
