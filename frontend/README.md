@@ -220,7 +220,7 @@ backoff on its own. Changing `scope`, `run` or `token` reconnects and clears the
 | `constellation` | A night sky. Delegation draws constellation lines between agent stars. |
 | `atom`    | An atom. Agents are electrons; subagents orbit their parent. |
 | `bubblechamber` | A bubble chamber. Agents curl as particle tracks; a spawn decays into a V. |
-| `fireworks` | A night show over the water. Agents burst as star shells, subagents as secondary bursts. |
+| `fireworks` | A night show in an open starry sky. Agents streak in like shooting stars and burst as star shells, subagents as secondary bursts. |
 
 | | | |
 |:-:|:-:|:-:|

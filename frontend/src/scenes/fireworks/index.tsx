@@ -1,34 +1,34 @@
 /**
- * /fireworks - "Fireworks over the water" (scene-kit theme, custom "show" preset on the xy plane).
- * Every top-level agent goes up as a rocket from the water line and bursts into a star shell where the kit puts
- * it (subagents are secondary shells thrown off their parent's burst, branching upward); shells hang and sparkle
+ * /fireworks - "Fireworks in the night sky" (scene-kit theme, custom "show" preset on the xy plane).
+ * Every top-level agent streaks in across the open sky as a shooting star and bursts into a star shell where the kit
+ * puts it (subagents are secondary shells thrown off their parent's burst, branching upward); shells hang and sparkle
  * while the agent lives, crackle on LLM calls (by tokens) and when busy (decision halos), spit comets on tool
  * calls, pop a red salute on a deny, pull in to a pulsing ember while waiting and fall away as a willow when done.
- * MCP servers are Catherine wheels on poles with their backends as lanterns; the knowledge graph is a drift of
+ * MCP servers are Catherine wheels hanging free in the sky with their backends as drifting lanterns; the knowledge graph is a drift of
  * embers at the side (only when the session has a graph); a final answer is a gold crossette finale.
- * All sparks are one GPU ring buffer (Sky.tsx SparkField); the water reflects the live shells.
+ * All sparks are one GPU ring buffer (Sky.tsx SparkField). No ground or water: an open starry sky all the way round.
  */
 import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { KitScene } from "../shared/kit";
 import { Embers } from "./Embers";
-import { EMBER_RX, horizonExtents, show } from "./fx";
+import { EMBER_RX, show } from "./fx";
 import { Lantern, Trails, Wheel } from "./Ground";
 import { Finale, RunSite } from "./Runs";
 import { Branches, Shell } from "./Shells";
 import { Backdrop, SparkField } from "./Sky";
 
-// full 360 orbit round the vertical axis (the backdrop turns with the camera); the polar range keeps the camera
-// above the water and below the zenith
+// full 360 orbit round the vertical axis (the star field turns with the camera); a moderate polar range keeps the
+// shells (laid out on a vertical plane) readable from above and below
 const CONTROLS = {
-  minPolarAngle: Math.PI * 0.36,
-  maxPolarAngle: Math.PI * 0.6,
+  minPolarAngle: Math.PI * 0.3,
+  maxPolarAngle: Math.PI * 0.68,
 };
 
 export default function Scene() {
   return (
     <KitScene
       title="fireworks · night show"
-      subtitle="Each agent goes up as a rocket and bursts into a star shell (subagents = secondary bursts) · shells crackle on LLM calls · ✦ comets on tool calls · red salute = deny · ember = waiting · willow = done · ◎ MCP Catherine wheels with backend lanterns · graph = embers"
+      subtitle="Each agent streaks in as a shooting star and bursts into a star shell (subagents = secondary bursts) · shells crackle on LLM calls · ✦ comets on tool calls · red salute = deny · ember = waiting · willow = done · ◎ MCP Catherine wheels with backend lanterns · graph = embers"
       preset={show}
       plane="xy"
       camera={{ position: [0, 0, 34], fov: 46, far: 1200 }}
@@ -45,7 +45,6 @@ export default function Scene() {
       Backend={Lantern}
       GraphResource={Embers}
       cluster={{ radius: 1.5, variant: "stars", glowGain: 0.9 }}
-      extents={horizonExtents}
       PostFX={
         <EffectComposer multisampling={0}>
           <Bloom mipmapBlur intensity={0.85} luminanceThreshold={0.3} luminanceSmoothing={0.3} radius={0.65} />

@@ -1,7 +1,6 @@
 /**
- * Runs (scene-kit RunMarker slot): each run is one firing position of the show: a glowing mortar on the water line
- * below its shells (where its rockets go up from), a faint run-colored haze of smoke behind its bursts, and the
- * program caption above (topic; Hatchet steps only when the run has them). The final answer is the run's finale:
+ * Runs (scene-kit RunMarker slot): each run is one part of the show: a faint run-colored haze of smoke behind its
+ * bursts and the program caption above (topic; Hatchet steps only when the run has them). The final answer is the run's finale:
  * a big gold crossette ring over the root shell, with a short caption.
  */
 import { useFrame } from "@react-three/fiber";
@@ -10,14 +9,12 @@ import * as THREE from "three";
 import { Label3D, runStepsLine, type Label3DHandle } from "../shared/Label3D";
 import { RUN_LINGER_MS, useWorld, world, type Run } from "../shared/world";
 import { agentLive, kit, type RunSlotProps } from "../shared/kit";
-import { BUDGET, GOLD, KIND_GLITTER, KIND_SMOKE, KIND_SPARK, SMOKE, WHITE, clamp01, easeOut, glowTexture, pyro, reduced, spriteMat, stage } from "./fx";
+import { BUDGET, GOLD, KIND_GLITTER, KIND_SMOKE, KIND_SPARK, SMOKE, WHITE, clamp01, easeOut, glowTexture, pyro, reduced, spriteMat } from "./fx";
 
 export function RunSite({ run: kr }: RunSlotProps) {
   const col = useMemo(() => new THREE.Color(kr.color), [kr.color]);
-  const m = useMemo(() => ({ haze: spriteMat(glowTexture(), "#000"), mortar: spriteMat(glowTexture(), "#000"), glint: spriteMat(glowTexture(), "#000") }), []);
+  const m = useMemo(() => ({ haze: spriteMat(glowTexture(), "#000") }), []);
   const haze = useRef<THREE.Sprite>(null);
-  const mortar = useRef<THREE.Sprite>(null);
-  const glint = useRef<THREE.Sprite>(null);
   const label = useRef<THREE.Group>(null);
   const s = useMemo(() => ({ x: 0, fresh: true }), []);
   useFrame(({ clock }) => {
@@ -33,31 +30,18 @@ export function RunSite({ run: kr }: RunSlotProps) {
       haze.current.scale.set(w * 2.6 + 5, h * 2.6 + 4, 1);
       m.haze.color.copy(col).multiplyScalar(0.045 * grow * fade * (0.9 + 0.1 * Math.sin(t * 0.4 + kr.index)));
     }
-    // firing position: under the run's top-level shells (the frame centre when it has none yet)
+    // caption over the run's top-level shells (the frame centre when it has none yet)
     let sx = 0;
     let nx = 0;
     for (const a of kit.agents.values()) if (a.run === kr && a.depth === 0) (sx += a.live.x), nx++;
     const x = nx ? sx / nx : kr.origin.x;
     s.x = s.fresh ? x : s.x + (x - s.x) * 0.06;
     s.fresh = false;
-    const live = run && run.status === "started" ? 1 : 0.4;
-    if (mortar.current) {
-      mortar.current.position.set(s.x, stage.horizon + 0.05, 0);
-      mortar.current.scale.set(1.6, 0.5, 1);
-      m.mortar.color.copy(col).lerp(GOLD, 0.4).multiplyScalar(0.55 * live * grow * fade * (0.85 + 0.15 * Math.sin(t * 3 + kr.index)));
-    }
-    if (glint.current) {
-      glint.current.position.set(s.x, stage.horizon + 0.05, 0.01);
-      glint.current.scale.setScalar(0.32);
-      m.glint.color.copy(WHITE).lerp(GOLD, 0.5).multiplyScalar(0.9 * live * grow * fade);
-    }
     label.current?.position.set(s.x, kr.origin.y + h + 0.6, 0);
   });
   return (
     <>
       <sprite ref={haze} material={m.haze} renderOrder={-4} />
-      <sprite ref={mortar} material={m.mortar} />
-      <sprite ref={glint} material={m.glint} />
       <group ref={label}>{kr.run && <RunLabel run={kr.run} />}</group>
     </>
   );

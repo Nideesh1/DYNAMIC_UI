@@ -1,8 +1,10 @@
 /**
  * Agents are star shells (scene-kit Agent slot). The kit decides where each shell hangs (`agent.pos`) and how big
  * it is (`agent.scale`); the shell adds a slow drift on `live`.
- *   spawn     -> a top-level agent's rocket climbs from the water line (spark trail) and BURSTS at its spot; a
- *                subagent is a secondary shell thrown off its parent's burst (a short comet, then a smaller burst)
+ *   spawn     -> a top-level agent's shell streaks in across the sky like a shooting star (a long shallow arc from
+ *                off-screen, from a direction picked per run, glittering head + a lingering sparkling tail) and
+ *                BURSTS at its spot; a subagent is a secondary shell thrown off its parent's burst (a short comet,
+ *                then a smaller burst)
  *   alive     -> the burst settles into a gently turning, twinkling shell of stars with petal streaks
  *   LLM call  -> the shell crackles (strobing glitter thrown off the stars), more and longer with more tokens
  *   tool call -> a little comet spits out of the shell; MCP calls draw a light trail to the wheel (Ground.tsx)
@@ -13,11 +15,11 @@
  * Parent -> child = a faint smoke trail along the branch; messages = comets riding it (Branches).
  */
 import { useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { showLabel } from "../shared/lod";
-import { TYPE_COLOR, energy, haloMix, isDeny, lingerMs, world, jobText, cometOn, cometPos } from "../shared/world";
+import { TYPE_COLOR, energy, hash01, haloMix, isDeny, lingerMs, world, jobText, cometOn, cometPos } from "../shared/world";
 import { agentLive, fit, type AgentSlotProps } from "../shared/kit";
 import {
   BUDGET,
@@ -43,7 +45,6 @@ import {
   clamp01,
   easeInOut,
   glowTexture,
-  lights,
   pointScale,
   lineMat,
   pyro,
@@ -51,32 +52,41 @@ import {
   ringTexture,
   shellMats,
   spriteMat,
-  stage,
   starTexture,
-  type Light,
 } from "./fx";
 
 /** rocket climb (s) for a top-level agent, comet flight for a subagent */
-const CLIMB_S = 1.0;
+/** shooting-star flight (top level) and thrown-comet flight (subagent), seconds */
+const SHOOT_S = 1.7;
 const THROW_S = 0.5;
 /** shell radius per unit of agent.scale */
 export const SHELL_R = 1.5;
 const hitMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, transparent: true, opacity: 0 });
 const _v = new THREE.Vector3();
-const _w = new THREE.Vector3();
 const _c = new THREE.Color();
 const rnd = Math.random;
 const _a = new THREE.Vector3();
-/** point on the launch path at q (0..1): rocket = decelerating climb with a little wobble; thrown shell = arc */
-function flightPath(q: number, isSub: boolean, from: THREE.Vector3, ctrl: THREE.Vector3, to: THREE.Vector3, seed: number, out: THREE.Vector3) {
+/** point on the launch path at q (0..1): both are arcs; the shooting star glides in and eases into its burst */
+function flightPath(q: number, isSub: boolean, from: THREE.Vector3, ctrl: THREE.Vector3, to: THREE.Vector3, out: THREE.Vector3) {
   q = Math.max(0, q);
-  const e = isSub ? 1 - (1 - q) * (1 - q) : 1 - Math.pow(1 - q, 2.2);
-  if (isSub) return bezier(from, ctrl, to, e, out);
-  out.lerpVectors(from, to, e).x += Math.sin(q * 9 + seed * 7) * 0.05;
-  return out;
+  const e = isSub ? 1 - (1 - q) * (1 - q) : 1 - Math.pow(1 - q, 1.8);
+  return bezier(from, ctrl, to, e, out);
 }
-/** rocket tail: segments sampled along the last stretch of the flight path */
-const TAIL = 10;
+/**
+ * Where a top-level shell's shooting star comes from, relative to its burst: a direction picked per run (any bearing
+ * round the vertical axis, so it reads from every orbit angle, always from above), a little varied per agent, far
+ * enough out to start off-screen. Writes the start into `from` and the arc's control point into `ctrl`.
+ */
+function shootFrom(c: THREE.Vector3, runSeed: number, seed: number, dist: number, from: THREE.Vector3, ctrl: THREE.Vector3) {
+  const phi = runSeed * Math.PI * 2 + (seed - 0.5) * 0.5;
+  const D = dist * (0.85 + seed * 0.2);
+  from.set(c.x + Math.cos(phi) * D, c.y + D * (0.42 + runSeed * 0.12), c.z + Math.sin(phi) * D * 0.7);
+  // a shallow arc that sags a little toward the end (the head drops into its burst)
+  ctrl.copy(from).add(c).multiplyScalar(0.5);
+  ctrl.y += D * 0.12;
+}
+/** launch tail: segments sampled along the last stretch of the flight path */
+const TAIL = 18;
 function tailGeo() {
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(TAIL * 6), 3));
@@ -141,14 +151,11 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
       waitK: 0,
       selK: 0,
       from: new THREE.Vector3(),
-      light: { p: new THREE.Vector3(), c: new THREE.Color().copy(col), k: 0 } as Light,
+      ctrl: new THREE.Vector3(),
+      aimed: false,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => {
-    lights.add(s.light);
-    return () => void lights.delete(s.light);
-  }, [s]);
 
   useFrame(({ clock }) => {
     const now = performance.now();
@@ -162,48 +169,53 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
     const c = agent.live;
     const isSub = !!inst.parent && agent.depth > 0;
 
-    // ---- launch: rocket from the water line (top level) or a comet thrown off the parent (subagent)
-    const flight = isSub ? THROW_S : CLIMB_S;
+    // ---- launch: a shooting star across the sky (top level) or a comet thrown off the parent (subagent)
+    const flight = isSub ? THROW_S : SHOOT_S;
     if (s.launch && s.burstAt < 0) {
       const u = (now - inst.bornAt) / 1000 / flight;
       if (u >= 1) s.burstAt = now;
       else {
         const pp = isSub ? agentLive(inst.parent!) : undefined;
-        if (pp) s.from.copy(pp);
-        else s.from.set(c.x + (seed - 0.5) * 0.6, stage.horizon, c.z);
-        if (isSub) bow(s.from, c, 0.4 * sc, 0.6 * sc, _w);
-        flightPath(u, isSub, s.from, _w, c, seed, _v);
+        if (pp) {
+          s.from.copy(pp);
+          bow(s.from, c, 0.4 * sc, 0.6 * sc, s.ctrl);
+        } else if (!s.aimed) {
+          // aimed once (from the camera distance at launch) so the arc doesn't wobble while the camera fits
+          s.aimed = true;
+          shootFrom(c, hash01(agent.run.id, 3), seed, Math.max(12, camera.position.length()), s.from, s.ctrl);
+        }
+        flightPath(u, isSub, s.from, s.ctrl, c, _v);
+        // the head: a glittering white-gold star, fading in as it enters the frame
+        const enter = isSub ? 1 : clamp01(u / 0.12);
         if (rocket.current) {
           rocket.current.visible = true;
           rocket.current.position.copy(_v);
-          rocket.current.scale.setScalar(isSub ? 0.5 : 0.7);
+          rocket.current.scale.setScalar((isSub ? 0.5 : 1.15) * (reduced ? 1 : 0.85 + 0.15 * Math.sin(t * 37 + seed * 9)));
         }
-        m.rocket.color.copy(GOLD).lerp(WHITE, 0.5).multiplyScalar(1.4);
-        // the glowing tail: the last stretch of the path, fading toward the bottom
+        m.rocket.color.copy(GOLD).lerp(WHITE, 0.6).multiplyScalar(1.5 * enter);
+        // the glowing tail: the last stretch of the path, fading toward its end
         const TP = m.tailGeo.getAttribute("position") as THREE.BufferAttribute;
         const TC = m.tailGeo.getAttribute("color") as THREE.BufferAttribute;
-        const span = isSub ? 0.3 : 0.2;
+        const span = isSub ? 0.3 : 0.32;
         for (let i = 0; i < TAIL; i++)
           for (let e2 = 0; e2 < 2; e2++) {
             const f = (i + e2) / TAIL; // 0 = tail end, 1 = head
-            flightPath(u - span * (1 - f), isSub, s.from, _w, c, seed, _a);
+            flightPath(u - span * (1 - f), isSub, s.from, s.ctrl, c, _a);
             const vi = i * 2 + e2;
             TP.setXYZ(vi, _a.x, _a.y, _a.z);
-            const k = f * f * 1.1;
+            const k = f * f * (isSub ? 1.1 : 1.6) * enter;
             TC.setXYZ(vi, GOLD.r * k, GOLD.g * k * 0.92, GOLD.b * k * 0.8);
           }
         TP.needsUpdate = true;
         TC.needsUpdate = true;
         if (tail.current) tail.current.visible = true;
-        // the spark trail: falls off the head and dies quickly
-        const n = (isSub ? 2 : 5) * BUDGET;
+        // the sparkling trail: glitter shed along the path behind the head that hangs, sinks and fades
+        const n = (isSub ? 2 : 9) * BUDGET * enter;
         for (let k = 0; k < n; k++) {
-          flightPath(u - rnd() * 0.04, isSub, s.from, _w, c, seed, _a);
-          P.emit(_a.x, _a.y, _a.z, (rnd() - 0.5) * 0.9, -0.3 - rnd() * 1.2, (rnd() - 0.5) * 0.2, 2.2, 2.0, 0.35 + rnd() * 0.55, 0.06, rnd() < 0.3 ? WHITE : GOLD, 0.95, rnd() < 0.4 ? KIND_GLITTER : KIND_SPARK);
+          flightPath(u - rnd() * (isSub ? 0.04 : 0.025), isSub, s.from, s.ctrl, c, _a);
+          if (isSub) P.emit(_a.x, _a.y, _a.z, (rnd() - 0.5) * 0.9, -0.3 - rnd() * 1.2, (rnd() - 0.5) * 0.2, 2.2, 2.0, 0.35 + rnd() * 0.55, 0.06, rnd() < 0.3 ? WHITE : GOLD, 0.95, rnd() < 0.4 ? KIND_GLITTER : KIND_SPARK);
+          else P.emit(_a.x, _a.y, _a.z, (rnd() - 0.5) * 0.35, (rnd() - 0.5) * 0.35, (rnd() - 0.5) * 0.15, 1.6, 0.45, 0.9 + rnd() * 1.2, 0.08, rnd() < 0.4 ? WHITE : rnd() < 0.5 ? GOLD : col, 0.95, rnd() < 0.65 ? KIND_GLITTER : KIND_SPARK);
         }
-        s.light.p.copy(_v);
-        s.light.c.copy(GOLD);
-        s.light.k = 0.45;
       }
     }
     if (!s.launch || s.burstAt >= 0) {
@@ -371,11 +383,6 @@ export function Shell({ agent, selected, onSelect }: AgentSlotProps) {
       hit.current.position.copy(c);
       hit.current.scale.setScalar(Math.max(1e-4, R * 0.95));
     }
-    if (shown) {
-      s.light.p.copy(c);
-      s.light.c.copy(col).lerp(EMBER, s.waitK * 0.6);
-      s.light.k = (0.75 + e * 0.35 + Math.exp(-age * 1.5) * 1.0) * (1 - s.waitK * 0.5) * (1 - s.doneK * 0.75) * vis;
-    } else if (!s.launch) s.light.k = 0;
     labelG.current?.position.set(c.x, c.y - R * (1.05 - s.waitK * 0.35) - 0.28, c.z);
     label.current?.setOpacity(showLabel(inst.id) ? (shown ? clamp01(age * 2) : 0) * (alive ? 0.95 : 0.6) * (1 - vanish) : 0);
   });

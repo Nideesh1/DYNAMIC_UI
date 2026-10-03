@@ -1,8 +1,8 @@
 /**
  * Set pieces (scene-kit McpServer / Backend slots, placed by the kit at the sides of the show):
- *   MCP server -> a Catherine wheel on a pole standing on the water line: it turns slowly and glows in the
- *                 server color; while a call is in flight it spins up and throws sparks off its nozzles
- *   backend    -> a paper lantern hung beside its wheel; a call that targets it lights it and a little fountain
+ *   MCP server -> a Catherine wheel hanging free in the sky: it turns slowly and glows in the server color;
+ *                 while a call is in flight it spins up and throws sparks off its nozzles
+ *   backend    -> a sky lantern drifting beside its wheel; a call that targets it lights it and a little fountain
  *                 of sparks plays above it, with the tool name
  * Trails: a pending MCP call is a light trail from the agent's shell to the wheel (server color -> amber -> red
  * the longer it waits, with a comet head shedding sparks); the result is a bright comet flying back.
@@ -13,13 +13,13 @@ import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../shared/Label3D";
 import { hash01, mcpGlow, waitSeconds, world, type McpCall } from "../shared/world";
 import { agentLive, backendPos, serverPos, type BackendSlotProps, type McpServerSlotProps } from "../shared/kit";
-import { AMBER, BUDGET, CurvePool, GOLD, HeadPool, KIND_GLITTER, KIND_SPARK, RED, WHITE, bezier, bow, clamp01, easeInOut, easeOut, glowTexture, pyro, reduced, spriteMat, stage } from "./fx";
+import { AMBER, BUDGET, CurvePool, GOLD, HeadPool, KIND_GLITTER, KIND_SPARK, RED, WHITE, bezier, bow, clamp01, easeInOut, easeOut, glowTexture, pyro, reduced, spriteMat } from "./fx";
 
 const SPOKES = 8;
 const WHEEL_R = 0.85;
 const _p = new THREE.Vector3();
 
-/** McpServer slot: a Catherine wheel on a pole. */
+/** McpServer slot: a Catherine wheel hanging free in the sky. */
 export function Wheel({ mcp }: McpServerSlotProps) {
   const srv = mcp.srv;
   const col = useMemo(() => new THREE.Color(srv.color), [srv.color]);
@@ -43,16 +43,9 @@ export function Wheel({ mcp }: McpServerSlotProps) {
     g.setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
     return g;
   }, []);
-  const poleGeo = useMemo(() => {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
-    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
-    return g;
-  }, []);
   const m = useMemo(
     () => ({
       wheel: new THREE.LineBasicMaterial({ color: "#000", transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
-      pole: new THREE.LineBasicMaterial({ color: "#2a2d44", transparent: true, depthWrite: false, toneMapped: false }),
       halo: spriteMat(glowTexture(), "#000"),
       hub: spriteMat(glowTexture(), "#000"),
     }),
@@ -73,11 +66,6 @@ export function Wheel({ mcp }: McpServerSlotProps) {
     m.wheel.color.copy(col).lerp(WHITE, busy ? 0.45 : 0.1).multiplyScalar(busy ? 1.3 : 0.38 + act * 0.6);
     m.halo.color.copy(col).multiplyScalar(busy ? 0.32 : 0.06 + act * 0.18);
     m.hub.color.copy(WHITE).lerp(col, 0.4).multiplyScalar(busy ? 1.2 : 0.35 + act * 0.4);
-    // pole: from the hub down to the water line
-    const P = poleGeo.getAttribute("position") as THREE.BufferAttribute;
-    P.setXYZ(0, 0, -0.1, -0.05);
-    P.setXYZ(1, 0, Math.min(-0.2, stage.horizon - mcp.pos.y), -0.05);
-    P.needsUpdate = true;
     // sparks thrown off the nozzle tips, tangentially
     if (busy && !reduced) {
       const pz = pyro();
@@ -94,7 +82,6 @@ export function Wheel({ mcp }: McpServerSlotProps) {
   });
   return (
     <group ref={g}>
-      <lineSegments geometry={poleGeo} material={m.pole} frustumCulled={false} renderOrder={-2} />
       <sprite material={m.halo} scale={WHEEL_R * 5} />
       <group ref={spin}>
         <lineSegments geometry={geo} material={m.wheel} />
@@ -105,35 +92,33 @@ export function Wheel({ mcp }: McpServerSlotProps) {
   );
 }
 
-/** Backend slot: a paper lantern; a call aimed at it lights it and plays a little fountain above it. */
+/** Backend slot: a drifting sky lantern; a call aimed at it lights it and plays a little fountain above it. */
 export function Lantern({ mcp, backend }: BackendSlotProps) {
   const srv = mcp.srv;
   const res = backend.res;
-  const srvCol = useMemo(() => new THREE.Color(srv.color), [srv.color]);
   const warm = useMemo(() => new THREE.Color(srv.color).lerp(GOLD, 0.55), [srv.color]);
   const m = useMemo(
     () => ({
       body: new THREE.MeshBasicMaterial({ color: "#000", toneMapped: false }),
       halo: spriteMat(glowTexture(), "#000"),
-      cord: new THREE.LineBasicMaterial({ color: "#000", transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
     }),
     [],
   );
-  const cord = useMemo(() => new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute([0, 0.26, 0, 0, 0.55, 0], 3)), []);
   const g = useRef<THREE.Group>(null);
   const label = useRef<Label3DHandle>(null);
   const halo = useRef<THREE.Sprite>(null);
   const last = useRef("");
   useFrame(({ clock }) => {
     const now = performance.now();
-    g.current?.position.copy(backend.pos);
+    // a slow drift round its slot (small: the MCP trails end at the slot itself)
+    const tt = reduced ? 0 : clock.elapsedTime;
+    g.current?.position.set(backend.pos.x + Math.sin(tt * 0.37 + backend.k * 2.1) * 0.06, backend.pos.y + Math.sin(tt * 0.53 + backend.k * 1.3) * 0.09, backend.pos.z);
     const busy = res.inflight > 0;
     const act = mcpGlow(res.activeAt, now, 1.4);
     const flick = reduced ? 1 : 0.9 + 0.1 * Math.sin(clock.elapsedTime * 7 + backend.k * 3) * Math.sin(clock.elapsedTime * 3.1);
     const lit = busy ? 1 : 0.25 + act * 0.6;
     m.body.color.copy(warm).multiplyScalar((0.18 + lit * 0.75) * flick);
     m.halo.color.copy(warm).multiplyScalar((busy ? 0.45 : 0.06 + act * 0.25) * flick);
-    m.cord.color.copy(srvCol).multiplyScalar(0.25);
     halo.current?.scale.setScalar(busy ? 2.6 : 1.7 + act * 0.6);
     if (busy && !reduced && Math.random() < 0.7 * BUDGET) {
       const p = backend.pos;
@@ -155,7 +140,6 @@ export function Lantern({ mcp, backend }: BackendSlotProps) {
   return (
     <group ref={g}>
       <sprite ref={halo} material={m.halo} />
-      <lineSegments geometry={cord} material={m.cord} />
       <mesh geometry={LANTERN_GEO} material={m.body} scale={[0.2 * sz, 0.27 * sz, 0.2 * sz]} />
       <Label3D position={[0, -0.6, 0]} text={res.name} color={srv.color} size={0.2} opacity={0.55} pxRange={[7.5, 11.5]} />
     </group>
