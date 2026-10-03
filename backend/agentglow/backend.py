@@ -275,11 +275,14 @@ class Services:
     def end_entry(self, s: "Span", out: list) -> None:
         a, ts = s.attrs, s.end or s.start
         code = http_code(a)
-        error = s.status == "error" or (code is not None and code >= 500)
+        rejected = bool(a.get("agentglow.rejected"))  # agentglow.rejected(): backpressure, not an error (primitives.py)
+        error = not rejected and (s.status == "error" or (code is not None and code >= 500))
         ev = {"type": "request", "run_id": s.run, "id": s.svc, "service": self.svcs[s.svc].name if s.svc in self.svcs else "",
               "name": request_name(s.entry, s.name, a), "kind": s.entry}
         if code is not None:
             ev["status"] = code
+        if rejected:
+            ev["rejected"] = True
         ev.update(error=error, ms=max(0, ts - s.start), ts=ts)
         out += self.offer(ev)
 
@@ -380,7 +383,9 @@ class Services:
         w = sv.win
         w.n += 1
         w.errors += ev["error"]
-        if "status" in ev:
+        if ev.get("rejected"):
+            w.codes["rejected"] = w.codes.get("rejected", 0) + 1
+        elif "status" in ev:
             c = f"{ev['status'] // 100}xx"
             w.codes[c] = w.codes.get(c, 0) + 1
         w.ms.append(ev["ms"])
@@ -459,6 +464,8 @@ class Services:
         kind = str(e.get("event") or "request").lower()
         aid = self.ensure(name, scope, now, out)
         rid = self.run_id(scope)
+        if kind in self.m.prims.FLAT:  # generic primitives (primitives.py)
+            return out + self.m.prims.flat(e, kind, aid, rid, scope, now)
         ms = max(0, _int(e.get("duration_ms")) or 0)
         title = decision_text(e.get("name") or kind, 60)
         if kind == "message":

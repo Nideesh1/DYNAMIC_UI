@@ -26,7 +26,8 @@ def _default_url(url: str | None) -> str:
 
 
 def watch(url: str | None = None, *, instrument: bool = True, service_name: str | None = None,
-          api_key: str | None = None, app: Any = None, broker: Any = None, mcp: Any = None) -> TracerProvider:
+          api_key: str | None = None, app: Any = None, broker: Any = None, mcp: Any = None,
+          backlog: bool | float = False) -> TracerProvider:
     """Stream spans to agentglow. `api_key` (or env AGENTGLOW_API_KEY) is sent as `x-api-key` (server
     `--ingest-key`). Reuses the global SDK TracerProvider (keeps Langfuse/OTLP exporters), else
     creates and installs one. Instruments LangChain/LangGraph/deepagents, the OpenAI Agents SDK (OpenInference), Hatchet
@@ -37,7 +38,7 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
     per tool call; its DB / HTTP calls become its backends). With any of them, Redis / asyncpg / pymongo clients are
     instrumented too when their OTel instrumentations are installed (`pip install "agentglow[fastapi,faststream,redis]"`).
     `service_name` names this process's service (default: OTEL_SERVICE_NAME, the FastMCP / FastAPI name, else
-    `api` / `worker`)."""
+    `api` / `worker`). `backlog=True` (or seconds): sample the broker's Redis Streams backlog (primitives.py)."""
     url = _default_url(url)
     backend = app is not None or broker is not None or mcp is not None
     name = service_name or os.environ.get("OTEL_SERVICE_NAME") or _default_service(app, broker, mcp)
@@ -60,7 +61,18 @@ def watch(url: str | None = None, *, instrument: bool = True, service_name: str 
             _instrument(provider)
         if backend:
             _instrument_backend(provider, app, broker, mcp)
+        _watch_primitives(app, broker, backlog)
         return provider
+
+
+def _watch_primitives(app: Any, broker: Any, backlog: bool | float) -> None:
+    """Generic primitives (primitives.py): WebSocket routes = sessions; opt-in Redis Streams backlog sampler."""
+    from . import primitives
+
+    if app is not None:
+        _try("WebSocket sessions", lambda: primitives.watch_websockets(app))
+    if backlog and broker is not None:
+        _try("backlog sampler", lambda: primitives.sample_backlog(broker, every_s=3.0 if backlog is True else float(backlog)))
 
 
 def _default_service(app: Any, broker: Any, mcp: Any) -> str:

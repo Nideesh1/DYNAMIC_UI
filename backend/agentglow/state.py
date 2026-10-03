@@ -160,7 +160,8 @@ class Hub:
         done = {e["run_id"] for e in self.buffer if e.get("type") == "run" and e.get("status") in ("completed", "failed")}
         # long-lived services: their run start / spawn may have left the bounded buffer, the viewer still needs them
         first = self.buffer[0].get("seq", 0) if self.buffer else self.seq + 1
-        svc = [e for e in self.mapper.svc.snapshot() if after < e.get("seq", 0) < first and f.match(e, self.scope_of)]
+        svc = [e for e in self.mapper.svc.snapshot() + self.mapper.prims.snapshot()
+               if after < e.get("seq", 0) < first and f.match(e, self.scope_of)]
         return list(self.topology.values()) + svc + [e for e in self.buffer if e.get("seq", 0) > after and e.get("run_id") not in done
                                                      and f.match(e, self.scope_of)]
 
