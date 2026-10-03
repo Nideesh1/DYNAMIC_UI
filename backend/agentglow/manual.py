@@ -264,13 +264,15 @@ class Decision(_Span):
 
     def __init__(self, kind: str, question: str, result: Any = None, p: float | None = None, options: Any = None,
                  provider: str = "llm", purpose: str | None = None, target: str | None = None,
-                 parent: _Span | None = None, start_ns: int | None = None, important: bool = False) -> None:
+                 parent: _Span | None = None, start_ns: int | None = None, important: bool = False,
+                 scope: str | None = None) -> None:
         kind = str(kind).lower()
         super().__init__(f"decision {kind}", {"agentglow.decision": kind, "agentglow.decision.question": question,
                                               "agentglow.decision.provider": provider,
                                               "agentglow.decision.purpose": purpose,
                                               "agentglow.decision.target": target,
-                                              "agentglow.decision.important": True if important else None},
+                                              "agentglow.decision.important": True if important else None,
+                                              "agentglow.decision.scope": scope},
                          parent=parent, start_ns=start_ns)
         self.kind = kind
         self._attrs.update(self._outcome(result, p, options))
@@ -338,25 +340,27 @@ def skill(name: str, parent: _Span | None = None) -> Tool:
 
 def decision(kind: str, question: str, result: Any = None, p: float | None = None, options: Any = None,
              provider: str = "llm", purpose: str | None = None, target: str | None = None,
-             parent: _Span | None = None, important: bool = False) -> Decision:
+             parent: _Span | None = None, important: bool = False, scope: str | None = None) -> Decision:
     """`with agentglow.decision("choice", "route", provider="jev", purpose="route") as d: ...; d.record("haiku", 0.92,
     {"haiku": 0.92, "sonnet": 0.07})` - a fast structured decision by the current agent (kind: choice | score | noul;
     purpose: route | guard | check; target: e.g. the tool being gated). Latency = the block's duration.
     `question` is a short name (scrubbed, max 80 chars): do not put PHI/PII in it. `important=True`: always shown
-    individually, even when the agent decides so often that its decisions are aggregated (high-volume mode)."""
-    return Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, important=important)
+    individually, even when the agent decides so often that its decisions are aggregated (high-volume mode).
+    `scope="global"`: a desk-wide guard (e.g. a kill switch): a `no` halts everything below this agent, shown once."""
+    return Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, important=important,
+                    scope=scope)
 
 
 def decided(kind: str, question: str, result: Any, p: float | None = None, options: Any = None, provider: str = "llm",
             purpose: str | None = None, target: str | None = None, latency_ms: float = 0,
-            parent: _Span | None = None, important: bool = False) -> None:
+            parent: _Span | None = None, important: bool = False, scope: str | None = None) -> None:
     """Record one finished decision (backdated by `latency_ms`), e.g. after `jev.noul(...)` returned."""
     start = None
     if latency_ms:  # backdate, but never before the enclosing span started (keeps ended-span replay ordered)
         around = parent.span if parent is not None else trace.get_current_span()
         start = max(time.time_ns() - int(latency_ms * 1e6), getattr(around, "start_time", None) or 0)
     Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, start_ns=start,
-             important=important).start().end()
+             important=important, scope=scope).start().end()
 
 
 ORDER_STATUSES = ("would_place", "placed", "filled", "rejected", "cancelled")

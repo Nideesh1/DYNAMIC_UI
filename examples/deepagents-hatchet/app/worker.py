@@ -15,9 +15,11 @@ from . import demo_graph  # noqa: E402
 from . import email_mcp_server as email_mcp  # noqa: E402
 from . import erp_mcp_server as erp_mcp  # noqa: E402
 from . import github_mcp_server as gh_mcp  # noqa: E402
+from . import market_mcp_server as market_mcp  # noqa: E402
 from . import obs_mcp_server as obs_mcp  # noqa: E402
 from .incident import AGENT_FS, SKILLS, GroundedCheck, GuardRiskyTools, incident_triage  # noqa: E402
 from .mcp_server import RESOURCES, SERVER  # noqa: E402
+from .markets import TOPICS  # noqa: E402
 from .trading import form_view, market_watch, place_order, trading_desk  # noqa: E402
 from .tools import GRAPH_TOOLS, PLAN_TOOLS, VENDOR_READ_TOOLS, VENDOR_WRITE_TOOLS, WRITE_TOOLS, load_mcp_tools  # noqa: E402
 from .vendor import MODEL_ROUTES, RouteModel, slug, vendor_category, vendor_consolidation  # noqa: E402
@@ -123,6 +125,9 @@ async def lifespan():
     )
     writer = create_deep_agent(model=config.MODEL, tools=WRITE_TOOLS, system_prompt=WRITER, name="writer")
     print(f"agents ready · mcp tools: {[t.name for t in mcp_tools]}")
+    # trading desk: the analyst's market_data MCP server + the market graph (cities, stations, correlated markets)
+    agentglow.register_mcp(market_mcp.SERVER, market_mcp.RESOURCES, url=config.AGENTGLOW_URL)
+    print(f"market graph nodes: {demo_graph.seed_markets(TOPICS)}")
     yield {"researcher": researcher, "writer": writer, **(await incident_agents()), **(await vendor_agents())}
 
 

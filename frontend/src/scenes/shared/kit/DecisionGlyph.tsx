@@ -7,7 +7,11 @@
  *    (`luna 70%`); the winner ray snaps long, thick and bright with pulses travelling outward and an emphasized
  *    label; the losers stay short, thin and dim (labels still readable);
  *  - guard deny (noul, purpose "guard", result no): a red shockwave ring out of the agent, a big red X inside a
- *    shut ring, the agent's line to the target tool's MCP server flashes red, label `BLOCKED rollback_deploy · 97%`;
+ *    shut ring, the agent's line to the target tool's MCP server flashes red, label `BLOCKED rollback_deploy · 97%`.
+ *    One at a time on screen (BIG_DENY_MS): a deny while another one plays gets a compact mark instead (a small red
+ *    X badge on the agent, no label) and flashes the agent's decision halo red. At most LABEL_CAP decision labels
+ *    show at once across all agents (a full deny always gets its label); the other glyphs play without text. Desk-wide guards (`scope: "global"`)
+ *    never get a glyph: world.ts turns them into one halted state on the desk (kit/Halt.tsx);
  *  - guard allow: a small green tick and a small label (never distracting);
  *  - check (any other noul): a progress ring that fills to p (green yes, amber yes below 60%, red no),
  *    `grounded? yes 64%`;
@@ -17,7 +21,8 @@
  * declutter pass while they show (kit/labels.ts kind "decision"). A burst of decisions plays as a quick sequence
  * (DECISION_STAGGER_MS apart), each glyph on its own slightly larger ring (up to MAX_SLOTS at once).
  *
- * Billboarded, sized from the agent (kit agentRadius * agent.scale), mounted lazily on the agent's first decision,
+ * Billboarded, sized from the agent (kit agentRadius * agent.scale) but capped on screen (GLYPH_MAX_PX, the deny
+ * shockwave SHOCK_PX: a big agent close up never gets a giant blob), mounted lazily on the agent's first decision,
  * one shader quad per slot (additive, takes part in Bloom) + pooled labels, no per-frame allocations. Reduced motion:
  * no overshoot / shockwave / pulses, fades only.
  */
@@ -25,7 +30,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle, type LabelSeg } from "../Label3D";
-import { DECISION_SNAP_MS, decisionLife, decisionMix, hvActive, presence, world, type DecisionUse } from "../world";
+import { DECISION_SNAP_MS, decisionLife, decisionMix, hvActive, kindBadge, presence, providerBadge, world, type DecisionUse } from "../world";
 import { fit } from "./fit";
 import { labels } from "./labels";
 import { kit, reduced, serverPos, type KitAgent } from "./state";
@@ -49,8 +54,29 @@ const MAX_OPTS = 5;
 const RAY_START = 0.8;
 const winLen = (p: number) => 1.0 + 0.45 * p;
 const loseLen = (p: number) => 0.45 + 0.3 * p;
-/** quad half size in glyph units per glyph kind (the deny shockwave needs room) */
-const QUAD = [3.0, 4.4, 1.6, 1.7, 2.1];
+/** quad half size in glyph units per glyph kind (the deny's is set from its shockwave reach) */
+const QUAD = [3.0, 4.4, 1.6, 1.7, 2.1, 1.2];
+/** glyph unit (RING_K agent radii) on screen at most (css px): the X of a big agent close up stays a mark */
+const GLYPH_MAX_PX = 36;
+/** deny shockwave reach beyond the shut ring on screen (css px), clamped to SHOCK_K glyph units */
+const SHOCK_PX = 55;
+const SHOCK_K: [number, number] = [0.7, 2.7];
+/** a full deny glyph (shockwave + big X + label) plays alone this long; others meanwhile get the compact mark */
+const BIG_DENY_MS = 1400;
+const bigDeny = { until: 0, d: null as DecisionUse | null };
+/** decision labels on screen at once (all agents): a burst (every market deciding on the same tick) shows the glyphs,
+ *  but only the first LABEL_CAP get their text; a full deny always does */
+const LABEL_CAP = 3;
+const labeled: DecisionUse[] = [];
+function takeLabel(d: DecisionUse, now: number, force: boolean) {
+  for (let k = labeled.length - 1; k >= 0; k--) {
+    const x = labeled[k];
+    if (x.cut || now - x.at >= decisionLife(x)) labeled.splice(k, 1);
+  }
+  if (!force && labeled.length >= LABEL_CAP) return false;
+  labeled.push(d);
+  return true;
+}
 /** ease-out-back constants (overshoot ~6%) */
 const BACK = 1.0;
 const BACK3 = BACK + 1;
@@ -78,7 +104,7 @@ void main() { vP = position.xy * uQ; gl_Position = projectionMatrix * modelViewM
 const FRAG = /* glsl */ `
 uniform float uKind; uniform float uA; uniform float uS; uniform float uF; uniform float uR0; uniform float uT; uniform float uM;
 uniform float uOpt[${MAX_OPTS}]; uniform float uN; uniform float uWin; uniform float uStep; uniform float uRay;
-uniform float uLevel;
+uniform float uLevel; uniform float uShock;
 uniform vec3 uColor; uniform vec3 uCore;
 varying vec2 vP;
 const float PI = 3.14159265;
@@ -143,7 +169,7 @@ void main() {
       float tk = uT - 0.05 - float(k) * 0.2;
       if (tk > 0.0 && tk < 1.1 && uM > 0.5) {
         float e = 1.0 - pow(1.0 - tk / 1.1, 3.0);
-        float rr = r0 * 1.05 + 2.7 * e;
+        float rr = r0 * 1.05 + uShock * e;
         float ww = 0.09 * (1.0 - e) + 0.012;
         float fa = (1.0 - tk / 1.1) * (k == 0 ? 1.0 : 0.55);
         line += band(r - rr, ww, aa) * fa * 1.5;
@@ -151,6 +177,16 @@ void main() {
       }
     }
     core += exp(-r * 2.2) * uF * 0.9;
+  } else if (uKind > 4.5) {
+    // compact deny (another deny is playing): a small red X badge at the agent's upper right, a thin ring round it
+    vec2 c = vec2(0.72, 0.72) * r0;
+    vec2 q = p - c;
+    float s = 0.15 * (0.7 + 0.3 * uS);
+    vec2 qa = abs(q);
+    float x = band(abs(qa.x - qa.y) * 0.7071, 0.032, aa) * (1.0 - smoothstep(s, s + aa, max(qa.x, qa.y)));
+    float o = band(length(q) - s * 1.55, 0.02, aa);
+    line += (x * 1.2 + o * 0.7) * uS;
+    core += x * 0.5 * uS + exp(-length(q) * 9.0) * uF * 0.6;
   } else if (uKind < 2.5) {
     // guard allow: a small green tick at the agent's upper left
     vec2 c = vec2(-0.72, 0.72) * r0;
@@ -264,7 +300,7 @@ function mainLine(d: DecisionUse): LabelSeg[] {
   return [{ text: `${shortQ(d.question)} › `, color: DIM }, { text: d.result, color: c }, { text: ` ${pc(d.p)}`, color: TEXT }];
 }
 /** second line: provider badge + latency (speed is the point) */
-const subLine = (d: DecisionUse): LabelSeg[] => [{ text: d.provider, color: BADGE }, { text: ` · ${d.purpose || d.kind} · ${ms(d.ms)}`, color: DIM }];
+const subLine = (d: DecisionUse): LabelSeg[] => [{ text: providerBadge(d.provider), color: BADGE }, { text: ` · ${kindBadge(d.kind)} · ${d.purpose || ""}${d.purpose ? " · " : ""}${ms(d.ms)}`, color: DIM }];
 
 /** score level 0..1: the result's place among numeric options / a 1..5 scale, else its rank among the options */
 function levelOf(d: DecisionUse): number {
@@ -316,6 +352,8 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
       optP: new Array(MAX_OPTS).fill(0) as number[],
       ys: new Array(MAX_OPTS).fill(0) as number[],
       small: Array.from({ length: MAX_SLOTS }, () => false),
+      /** compact deny: no label line */
+      quiet: Array.from({ length: MAX_SLOTS }, () => false),
     }),
     [],
   );
@@ -348,6 +386,7 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
               uStep: { value: 0.3 },
               uRay: { value: 1 },
               uLevel: { value: 0.5 },
+              uShock: { value: 2.7 },
               uColor: { value: new THREE.Color(DECISION_COLOR) },
               uCore: { value: new THREE.Color("#ffffff") },
             },
@@ -373,10 +412,19 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
   useEffect(() => () => (mats.forEach((m) => m.dispose()), edgeMat.dispose()), [mats, edgeMat]);
 
   /** a slot gets a new decision: set its static uniforms + labels once */
-  const assign = (k: number, d: DecisionUse) => {
+  const assign = (k: number, d: DecisionUse, now: number) => {
     const sl = st.slots[k];
     const u = mats[k].uniforms;
-    const kind = kindOf(d);
+    let kind = kindOf(d);
+    // one full deny at a time on screen: the others get the compact mark and flash their halo
+    if (kind === 1) {
+      if (now < bigDeny.until && bigDeny.d !== d) {
+        kind = 5;
+        const h = agent.inst.hv;
+        if (h) (h.bump = now), (h.bumpDeny = true);
+      } else (bigDeny.until = now + BIG_DENY_MS), (bigDeny.d = d);
+    }
+    st.quiet[k] = kind === 5 || !takeLabel(d, now, kind === 1);
     sl.kind = kind;
     sl.server = kind === 1 ? denyServer(d, agent) : "";
     u.uKind.value = kind;
@@ -399,6 +447,7 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
     h?.setColor(tint);
     h?.setEmphasis(kind === 1);
     (small ? lbl.current[k] : lblS.current[k])?.setOpacity(0, true);
+    if (st.quiet[k]) h?.setOpacity(0, true);
     // a choice takes over the option ray labels
     if (kind === 0 && o.length && !d.hv) {
       st.optSlot = k;
@@ -450,17 +499,18 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
       if (k >= 0) {
         st.slots[k].d = d;
         used++;
-        assign(k, d);
+        assign(k, d, now);
       } else st.extra++;
     }
-    st.extraMix += ((st.extra > 0 ? 1 : 0) - st.extraMix) * 0.25;
+    let talk = false;
+    for (let q = 0; q < MAX_SLOTS; q++) if (st.slots[q].d && !st.quiet[q]) talk = true;
+    st.extraMix += ((st.extra > 0 && talk ? 1 : 0) - st.extraMix) * 0.25;
     if (st.extra > 0 && st.extra !== st.shownExtra) {
       st.shownExtra = st.extra;
       lbl.current[MAX_SLOTS]?.setText(cap === 1 ? `+${st.extra}` : `+${st.extra} more`);
     }
 
     const s = agent.scale;
-    const R = Math.max(radius, height * 0.55) * s * RING_K;
     CAM_UP.set(0, 1, 0).applyQuaternion(camera.quaternion);
     CAM_RIGHT.set(1, 0, 0).applyQuaternion(camera.quaternion);
     const pcam = camera as THREE.PerspectiveCamera;
@@ -468,6 +518,8 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
     if (kit.plane === "xz") V1.y += height * s * 0.5;
     const dist = V1.distanceTo(camera.position) || 1;
     const wpp = pcam.isPerspectiveCamera ? (2 * dist * Math.tan(THREE.MathUtils.degToRad(pcam.fov) / 2)) / (pcam.zoom * vp.height) : 0.01;
+    const R = Math.min(Math.max(radius, height * 0.55) * s * RING_K, GLYPH_MAX_PX * wpp * labels.pxk);
+    const shock = THREE.MathUtils.clamp((SHOCK_PX * wpp * labels.pxk) / R, SHOCK_K[0], SHOCK_K[1]);
     const pxOf = (sz: number, r: [number, number]) => THREE.MathUtils.clamp((sz * fit.label) / Math.max(wpp, 1e-6), r[0] * labels.pxk, r[1] * labels.pxk);
     // ray spread: adjacent loser tips at least one option-label line apart (in glyph units)
     const optLineW = (pxOf(OPT.size, OPT.px) * 1.8 + 12) * wpp; // plate height + declutter padding
@@ -497,13 +549,14 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
       u.uT.value = t / 1000;
       u.uStep.value = stepA;
       u.uRay.value = rayK;
+      u.uShock.value = shock;
       u.uR0.value = 1 + SLOT_GAP * ring;
       ring += sl.mix;
       base = Math.max(base, sl.kind === 4 ? 1.75 : sl.kind === 1 ? 1.45 : 1.3);
       if (sl.kind === 1 && t < EDGE_MS && sl.server) deny = sl;
       m.position.copy(V1);
       m.quaternion.copy(camera.quaternion);
-      const qk = sl.kind === 0 ? Math.max(QUAD[0], 1.4 + winLen(1) * rayK) : QUAD[sl.kind];
+      const qk = sl.kind === 0 ? Math.max(QUAD[0], 1.4 + winLen(1) * rayK) : sl.kind === 1 ? 1.05 * (1 + SLOT_GAP * MAX_SLOTS) + shock + 0.2 : QUAD[sl.kind];
       u.uQ.value = qk;
       m.scale.setScalar(R * qk);
     }
@@ -544,7 +597,9 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
       const mk = sl ? sl.mix : st.extraMix;
       if (g) g.position.copy(V1).addScaledVector(CAM_UP, -(b0 + y));
       const small = k < MAX_SLOTS && st.small[k];
-      (small ? lblS.current[k] : lbl.current[k])?.setOpacity(Math.min(1, mk * 1.6) * k0 * (small ? 0.85 : 1), true);
+      const quiet = k < MAX_SLOTS && st.quiet[k];
+      (small ? lblS.current[k] : lbl.current[k])?.setOpacity(quiet ? 0 : Math.min(1, mk * 1.6) * k0 * (small ? 0.85 : 1), true);
+      if (quiet) continue;
       const px = small ? pxOf(SMALL.size, SMALL.px) : pxOf(MAIN.size, MAIN.px);
       const lines = !sl || small ? 1 : 1.75;
       y += (px * 1.16 * lines + px * 0.7 + 6) * wpp * Math.min(1, mk * 2);

@@ -1,8 +1,8 @@
 """Synthetic weather event-contract markets for the trading_desk demo (app/trading.py). PAPER ONLY: made-up markets,
 a toy order book, no exchange connection anywhere.
 
-Prices are in cents (1..99), like a YES contract that pays 100 if the event happens (the shape of event-contract
-exchanges like Kalshi). Each market has a hidden true probability that drifts, a mid that slowly finds it, a spread
+Prices are in cents (1..99), like a YES contract that pays 100 if the event happens (the shape of an event-contract
+exchange). Each market has a hidden true probability that drifts, a mid that slowly finds it, a spread
 and a depth at the best price. Plain Python: the state is serializable, so a Hatchet task can pass it around.
 
 Also here: `sim_p`, the free local stub ("jev-sim") that answers the desk's gate questions when the real Jev rate cap
@@ -212,10 +212,14 @@ def guards(m: Market, *, killed: bool, desk_pnl: float, bucket_used: int, qty: i
     return min(qty, room), checks
 
 
-def feed_ok(started_at: float, now: float, every_s: float, outage_s: float = 6.0) -> bool:
-    """The simulated market-data feed: it goes stale for `outage_s` every `every_s` seconds (demo chaos; 0 = never).
-    Deterministic from the session start, so the desk and every market see the same outage."""
-    if every_s <= 0:
+def feed_ok(started_at: float, now: float, every_s: float, outage_s: float = 6.0, session_s: float = 60.0) -> bool:
+    """The simulated market-data feed (demo chaos): stale for `outage_s` every `every_s` seconds; `every_s` 0 = ONCE
+    per session at a random point in its middle (seeded by the session start), < 0 = never. Deterministic from the
+    session start, so the desk and every market see the same outage."""
+    if every_s < 0:
         return True
     t = now - started_at
+    if every_s == 0:
+        at = random.Random(int(started_at * 1000)).uniform(0.3, 0.65) * max(session_s, outage_s * 2)
+        return not (at <= t < at + outage_s)
     return t < every_s or (t % every_s) >= outage_s

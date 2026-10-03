@@ -127,14 +127,14 @@ def test_global_cap_and_least_interesting_dropped():
 
 def test_order_event_and_helper(cap):  # noqa: F811
     with agentglow.run(topic="t"):
-        with agentglow.agent("mm-KXHIGH") as a:
-            a.order("YES", 3, 0.42, instrument="KXHIGHNY-25OCT02-B70", reason="edge 6c")
+        with agentglow.agent("mm-temp-nyc") as a:
+            a.order("YES", 3, 0.42, instrument="TEMP-NYC-HI-42", reason="edge 6c")
             agentglow.order("sell", 1, status="rejected", dry_run=False)
     for evs in (live(cap), ended(cap)):
         ids = {e["agent"]: e["id"] for e in evs if e["type"] == "spawn"}
         o1, o2 = kinds(evs, "order")
-        assert o1 == {**o1, "id": ids["mm-KXHIGH"], "side": "yes", "qty": 3, "price": 0.42, "status": "would_place",
-                      "instrument": "KXHIGHNY-25OCT02-B70", "dry_run": True, "reason": "edge 6c"}
+        assert o1 == {**o1, "id": ids["mm-temp-nyc"], "side": "yes", "qty": 3, "price": 0.42, "status": "would_place",
+                      "instrument": "TEMP-NYC-HI-42", "dry_run": True, "reason": "edge 6c"}
         assert o2["status"] == "rejected" and o2["dry_run"] is False and "price" not in o2 and "reason" not in o2
         assert not [e for e in evs if e["type"] in ("tool", "llm")]
 

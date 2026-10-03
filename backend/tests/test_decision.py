@@ -41,6 +41,17 @@ def test_helper_to_event(cap):  # noqa: F811
         assert not [e for e in evs if e["type"] in ("tool", "llm")]
 
 
+def test_global_scope(cap):  # noqa: F811
+    """`scope="global"` (a desk-wide guard, e.g. a kill switch) reaches the event; no scope -> no key."""
+    with agentglow.run(topic="t"):
+        with agentglow.agent("desk") as d:
+            d.decided("noul", "kill switch off", False, 1.0, provider="code", purpose="guard", scope="global")
+            d.decided("noul", "spread ok", True, 1.0, provider="code", purpose="guard")
+    for evs in (live(cap), ended(cap)):
+        g, o = decisions(evs)
+        assert g["scope"] == "global" and g["result"] == "no" and "scope" not in o
+
+
 def span(sid, parent, name, attrs, t0=1, t1=None):
     return {"trace_id": "T", "span_id": sid, "parent_span_id": parent, "name": name, "start_time_ms": t0,
             "end_time_ms": t1, "attributes": attrs}

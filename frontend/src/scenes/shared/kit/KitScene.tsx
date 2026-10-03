@@ -11,7 +11,7 @@ import { ClusterBalls, type ClusterBallProps, type ClusterColor } from "../Clust
 import { Hud } from "../Hud";
 import { LOD_LANES, lod, lodTick, type LodCluster } from "../lod";
 import { useSceneSetup, type Galaxy } from "../useSceneSetup";
-import { tick, useHasGraph } from "../world";
+import { tick, useHasGraph, world } from "../world";
 import { applyDim } from "./dim";
 import { FitCamera, setFitProfile, type FitProfile } from "./fit";
 import { LabelScope, labels, labelTick, type LabelScopeValue } from "./labels";
@@ -19,6 +19,7 @@ import { config, kitExtents, kitTick } from "./layout";
 import { SkillSigil } from "./SkillSigil";
 import { DecisionGlyph } from "./DecisionGlyph";
 import { DecisionHalos, HaloLabel, OrderChip } from "./HighVolume";
+import { HaltMark, haltMix } from "./Halt";
 import { PRESETS, type LayoutPreset, type PresetName } from "./presets";
 import { kit, type KitAgent, type KitBackend, type KitMcp, type KitRun, type Plane } from "./state";
 
@@ -160,8 +161,9 @@ function Dim({ agent, children }: { agent: KitAgent; children: ReactNode }) {
   const prev = useRef(0);
   useFrame(() => {
     if (!g.current) return;
-    applyDim(g.current, agent.dim, agent.inst.status === "failed", prev.current);
-    prev.current = agent.dim;
+    const red = world.halts.size ? haltMix(agent.id) : 0;
+    applyDim(g.current, agent.dim, agent.inst.status === "failed", prev.current, red);
+    prev.current = Math.max(agent.dim, red);
   });
   return <group ref={g}>{children}</group>;
 }
@@ -180,6 +182,7 @@ function Agents({ Agent, Edge, selected, onSelect, radius, height }: { Agent: Co
           <DecisionGlyph agent={a} radius={radius} height={height} />
           <HaloLabel agent={a} radius={radius} height={height} />
           <OrderChip agent={a} radius={radius} height={height} />
+          <HaltMark agent={a} radius={radius} height={height} />
         </AgentScope>
       ))}
       <DecisionHalos radius={radius} height={height} />

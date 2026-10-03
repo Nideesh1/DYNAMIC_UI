@@ -1,10 +1,12 @@
-"""trading_desk - a fast PAPER trading desk on synthetic weather event-contract markets (inspired by exchanges like
-Kalshi), orchestrated by Hatchet, with deepagents doing the slow thinking and fast Jev gates doing the rest.
+"""trading_desk - a fast PAPER trading desk on synthetic weather event-contract markets (the shape of an event-contract
+exchange), orchestrated by Hatchet, with deepagents doing the slow thinking and fast Jev gates doing the rest.
 No exchange connection anywhere: every order is `dry_run` (would_place / rejected).
 
   open_session   task: session state + N synthetic markets with toy order books (app/markets.py)
   run_markets    task: the `desk` agent fans out one CHILD run of `market_watch` per market (aio_run_many) and
-                 watches desk risk meanwhile: a simulated feed outage every DESK_OUTAGE_EVERY_S trips the kill switch
+                 watches desk risk meanwhile: a simulated feed outage (once per session by default, DESK_OUTAGE_EVERY_S)
+                 trips the kill switch. Desk-wide guards are `scope="global"` decisions: AgentGlow shows ONE halted
+                 desk instead of a red X on every market
   market_watch   DURABLE child task, one per market, ticking every DESK_TICK_S for DESK_TICKS ticks. Each tick, plain
                  Python: step the synthetic book -> ONE batched Jev call (app/decide.batch: quote_sane,
                  should_rethink, act|watch|skip or should_close; rate capped at JEV_MAX_RPS, overflow -> local
@@ -16,7 +18,9 @@ No exchange connection anywhere: every order is `dry_run` (would_place / rejecte
   form_view      child task started when should_rethink says so (cooldown DESK_THINK_COOLDOWN_S per market, at most
                  DESK_MAX_ANALYSTS per session: Hatchet concurrency + an in-process check so they never queue): a
                  deepagents `analyst` (AGENT_MODEL) with market tools and a `weather` subagent returns a typed
-                 FairView; the market trades on the latest view (until then on its quant signal)
+                 FairView; the market trades on the latest view (until then on its quant signal). Its tools use the
+                 `market_data` MCP server (order book, tick history, forecast: app/market_mcp_server.py) and the
+                 FalkorDB graph (correlated markets: read; the view: write)
   place_order    child task: the paper order (agentglow.order(..., dry_run=True))
   close_session  task: P&L summary (agentglow.final)
 
@@ -48,6 +52,7 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from pydantic import BaseModel, Field
 
 from . import decide
+from . import market_mcp_server as market_mcp
 from .config import MODEL
 from .markets import QUESTIONS, TOPICS, Limits, Market, Position, bucket, feed_ok, guards, sim_p
 from .workflow import hatchet, text_of
@@ -59,7 +64,7 @@ TICKS = int(os.environ.get("DESK_TICKS", "60"))
 TICK_S = float(os.environ.get("DESK_TICK_S", "1.0"))
 THINK_COOLDOWN_S = float(os.environ.get("DESK_THINK_COOLDOWN_S", "30"))
 HUMAN_TIMEOUT_S = float(os.environ.get("DESK_HUMAN_TIMEOUT_S", "8"))
-OUTAGE_EVERY_S = float(os.environ.get("DESK_OUTAGE_EVERY_S", "45"))
+OUTAGE_EVERY_S = float(os.environ.get("DESK_OUTAGE_EVERY_S", "0"))   # 0 = once per session, < 0 = never
 MAX_ANALYSTS = int(os.environ.get("DESK_MAX_ANALYSTS", "3"))
 SAFE_THRESHOLD = 0.8
 LIMITS = Limits()
@@ -78,8 +83,16 @@ def desk_pnl(sid: str) -> float:
     return sum(_desk(sid)["pnl"].values())
 
 
+def feed_fresh(started_at: float) -> bool:
+    return feed_ok(started_at, time.time(), OUTAGE_EVERY_S, session_s=TICKS * TICK_S)
+
+
 def killed(sid: str, started_at: float) -> bool:
-    return not feed_ok(started_at, time.time(), OUTAGE_EVERY_S) or desk_pnl(sid) <= -LIMITS.daily_loss_cap
+    return not feed_fresh(started_at) or desk_pnl(sid) <= -LIMITS.daily_loss_cap
+
+
+# desk-wide guards (AgentGlow `scope="global"`): a `no` halts every market, shown once on the desk
+DESK_GUARDS = {"kill switch off", "daily loss cap", "feed fresh"}
 
 
 # ---- inputs / outputs ---------------------------------------------------------------------------
@@ -156,17 +169,17 @@ async def desk_monitor(d, sid: str, started_at: float, stats: Counter) -> None:
     was = False
     while True:
         await asyncio.sleep(1.0)
-        feed = feed_ok(started_at, time.time(), OUTAGE_EVERY_S)
+        feed = feed_fresh(started_at)
         loss = desk_pnl(sid) > -LIMITS.daily_loss_cap
-        d.decided("noul", "feed healthy", feed, 1.0, provider="code", purpose="guard", target="kill switch")
-        d.decided("noul", "daily loss cap", loss, 1.0, provider="code", purpose="guard", target="kill switch")
         now = not (feed and loss)
-        if now != was:
+        if now != was:  # the switch itself first: it names the halt on the desk
             stats["kills" if now else "resets"] += 1
             d.decided("noul", "kill switch off", not now, 1.0, provider="code", purpose="guard", target="all markets",
-                      important=True)
+                      important=True, scope="global")
             d.say("KILL SWITCH ON: feed stale, no new orders" if now else "kill switch reset: trading resumed")
-            was = now
+        d.decided("noul", "feed healthy", feed, 1.0, provider="code", purpose="guard", target="kill switch", scope="global")
+        d.decided("noul", "daily loss cap", loss, 1.0, provider="code", purpose="guard", target="kill switch", scope="global")
+        was = now
 
 
 @trading_desk.task(parents=[open_session], execution_timeout=timedelta(seconds=TICKS * TICK_S + 900), retries=0)
@@ -217,7 +230,9 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
         st[ans.provider] += 1
 
     def code(a, q: str, ok: bool, target: str = "order") -> None:
-        a.decided("noul", q, ok, 1.0, provider="code", purpose="guard", target=target, important=not ok)
+        desk_wide = q in DESK_GUARDS  # shown once on the desk (halted), not as a red X on this market
+        a.decided("noul", q, ok, 1.0, provider="code", purpose="guard", target=target, important=not ok and not desk_wide,
+                  scope="global" if desk_wide else None)
         st["decisions"] += 1
         st["denies"] += 0 if ok else 1
 
@@ -303,7 +318,7 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
                 await close(a, "stop-loss")
                 s = m.state(sig)
 
-            if not feed_ok(input.started_at, time.time(), OUTAGE_EVERY_S):  # stale quotes: no gates, no orders
+            if not feed_fresh(input.started_at):  # stale quotes: no gates, no orders
                 code(a, "feed fresh", False, target="quote")
             else:
                 busy = thinking is not None and not thinking.done()
@@ -377,33 +392,90 @@ async def human_gate(ctx: DurableContext, input: MarketInput, ticker: str, side:
 
 # ---- form_view: the deepagents analyst ----------------------------------------------------------------
 ANALYST = ("You are the analyst on a paper trading desk for weather event contracts. You form a fair probability that "
-           "the event resolves YES. Call market_snapshot and price_history yourself, and delegate the forecast to your "
-           "`weather` subagent with the task tool. Weigh the forecast most, the market price second. Be terse.")
+           "the event resolves YES. Call market_snapshot, price_history and correlated_markets yourself, and delegate the "
+           "forecast to your `weather` subagent with the task tool. Weigh the forecast most, the market price second. "
+           "Then save_view with your numbers and return them. Be terse.")
 WEATHER = "You read the weather model for one market with weather_forecast and report its probability and caveats in one line."
 
+# market_data MCP tools (app/market_mcp_server.py), loaded once per worker process
+_market_tools: dict | None = None
+_market_lock = asyncio.Lock()
 
-def analyst_for(v: ViewInput):
-    """A deep agent with tools over THIS market's synthetic data (built per run: the data is the run's input)."""
+
+async def market_tools() -> dict:
+    global _market_tools
+    async with _market_lock:  # analysts start together: load once
+        if _market_tools is None:
+            from .config import MARKET_MCP_URL
+            from .tools import load_mcp_tools
+            _market_tools = {t.name: t for t in await load_mcp_tools(market_mcp.SERVER, MARKET_MCP_URL)}
+    return _market_tools
+
+
+async def analyst_for(v: ViewInput):
+    """A deep agent with tools over THIS market's synthetic data (built per run: the data is the run's input). The
+    numbers come from the run's input; the market_data MCP server shapes them (book, tick stats, forecast) and the
+    FalkorDB graph adds correlated markets and keeps the view."""
     from deepagents import create_deep_agent
 
-    @tool
-    async def market_snapshot() -> dict:
-        """The market now: mid price (cents), spread, depth at the best price, our quant signal, seconds to settlement, open position."""
-        return v.snapshot
+    from opentelemetry import context
+
+    from . import demo_graph as dg
+    from .tools import graph_span, set_nodes, tool_context
+
+    mcp = await market_tools()
+    snap = v.snapshot
+
+    async def via_mcp(name: str, args: dict):
+        """Call a market_data MCP tool under THIS tool's span (the MCP call belongs to the agent using the tool)."""
+        ctx = tool_context()
+        token = context.attach(ctx) if ctx is not None else None
+        try:
+            return await mcp[name].ainvoke(args)
+        finally:
+            if token is not None:
+                context.detach(token)
 
     @tool
-    async def price_history() -> list[float]:
-        """The last ~30 mid prices in cents, oldest first."""
-        return v.history
+    async def market_snapshot():
+        """The market now: mid price (cents), spread, depth, our quant signal, seconds to settlement, open position, and
+        the order book (3 levels each side) from the exchange feed."""
+        book = await via_mcp("order_book", {"ticker": v.ticker, "mid_cents": snap["mid_cents"],
+                                                "spread_cents": snap["spread_cents"], "depth": snap["depth"]})
+        return {**snap, "book": book}
 
     @tool
-    async def weather_forecast() -> dict:
-        """The weather model's probability for this market's event (synthetic)."""
-        return {"ticker": v.ticker, "event": bucket(v.ticker).lower(), "model_p": round(v.forecast_p, 3),
-                "spread_of_ensemble": 0.06, "issued": "this morning"}
+    async def price_history():
+        """Recent price stats from the tick history: last mid, change, high / low, volatility (cents)."""
+        return await via_mcp("history", {"ticker": v.ticker, "mids": v.history})
+
+    @tool
+    async def weather_forecast():
+        """The weather model's probability for this market's event (synthetic NWS forecast)."""
+        return await via_mcp("forecast", {"ticker": v.ticker, "model_p": v.forecast_p})
+
+    # graph tools: the FalkorDB client is blocking, so the query runs in a thread (never on the worker's event loop,
+    # which also ticks every market and heartbeats Hatchet)
+    @tool
+    async def correlated_markets() -> dict:
+        """Markets correlated with this one (same weather family or city) from the knowledge graph, with the desk's
+        latest fair view on each (if any)."""
+        with graph_span("read", dg.CORRELATED_Q) as span:
+            found = await asyncio.to_thread(dg.correlated, v.ticker)
+            set_nodes(span, [dg.market_node(v.ticker), *[r["market"] for r in found]])
+        return {"market": dg.market_node(v.ticker), "correlated": found}
+
+    @tool
+    async def save_view(fair_p: float, confidence: float, rationale: str) -> dict:
+        """Save your fair view of this market to the knowledge graph (the desk's other analysts read it)."""
+        with graph_span("write", dg.VIEW_Q) as span:
+            nodes = await asyncio.to_thread(dg.write_view, v.ticker, fair_p, confidence, rationale)
+            set_nodes(span, nodes)
+        return {"saved": nodes[0]}
 
     return create_deep_agent(
-        model=MODEL, tools=[market_snapshot, price_history], system_prompt=ANALYST, name="analyst",
+        model=MODEL, tools=[market_snapshot, price_history, correlated_markets, save_view], system_prompt=ANALYST,
+        name="analyst",
         subagents=[{"name": "weather", "description": "Reads the weather model forecast for this market.",
                     "system_prompt": WEATHER, "tools": [weather_forecast]}],
         response_format=FairView,
@@ -418,9 +490,9 @@ def analyst_for(v: ViewInput):
 )
 async def form_view(input: ViewInput, ctx: Context) -> dict:
     step_span(input.topic)
-    out = await analyst_for(input).ainvoke({"messages": [{"role": "user", "content": (
-        f"Market {input.ticker}. Form the fair YES probability: market_snapshot + price_history, and ask the weather "
-        "subagent for the forecast. Then return your view. Do not write files.")}]},
+    out = await (await analyst_for(input)).ainvoke({"messages": [{"role": "user", "content": (
+        f"Market {input.ticker}. Form the fair YES probability: market_snapshot, price_history and correlated_markets, "
+        "and ask the weather subagent for the forecast. Then save_view and return your view. Do not write files.")}]},
         config={"recursion_limit": 30, "configurable": {"thread_id": f"{ctx.workflow_run_id}:view"}})
     view = out.get("structured_response")
     if view is None:  # provider without structured output: keep the market's last view

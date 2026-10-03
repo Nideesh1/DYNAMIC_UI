@@ -2,7 +2,7 @@
  * Kit layout engine: kitTick() runs once per frame (after world tick() + lodTick()) and owns WHERE everything is:
  *   1. membership: which agents/runs are drawn (lod isExpanded / isRunExpanded), MCP servers/backends
  *   2. run-local agent coords (u along the run's side line, v along its axis): top-level agents on role slots
- *      (planner | researcher | writer), subagents fanned from their parent, seeded jitter, stable sibling slots
+ *      (planner | researcher | writer), subagents on full rings round their parent, seeded jitter, stable slots
  *   3. run anchors from the theme's preset (presets.ts), each run centred on its anchor
  *   4. cluster balls (grouped mode), core extents, periphery: MCP servers + backends and the side graph
  *   5. easing (~0.6s) of every position; agent `live` = eased home (themes add their own motion on top)
@@ -77,6 +77,8 @@ function mkRun(id: string): KitRun {
     tcv: 0,
     fresh: true,
     members: 0,
+    foot: 0,
+    tops: 0,
     u0: 0,
     u1: 0,
     v0: 0,
@@ -106,7 +108,9 @@ function mkAgent(inst: Instance): KitAgent {
     kit.runsVersion++;
   }
   const parent = inst.parent ? kit.agents.get(inst.parent) : undefined;
-  const depth = inst.subagent ? (parent ? parent.depth + 1 : 1) : 0;
+  // a top-level agent handed off from a SUBAGENT (e.g. a Hatchet child run's analyst started by a market agent) is
+  // drawn as that subagent's child, next to it; handoffs between top-level agents stay top-level
+  const depth = inst.subagent ? (parent ? parent.depth + 1 : 1) : parent && parent.depth > 0 ? parent.depth + 1 : 0;
   let sib: number;
   if (depth === 0) sib = lowestFree((o) => o.depth === 0 && o.inst.run === inst.run && o.inst.type === inst.type);
   else sib = lowestFree((o) => o.depth > 0 && o.inst.parent === inst.parent);
@@ -123,14 +127,32 @@ function mkAgent(inst: Instance): KitAgent {
     target: new THREE.Vector3(),
     pos: new THREE.Vector3(),
     live: new THREE.Vector3(),
-    scale: roleScale(inst) * fit.scale,
+    scale: kitScale(inst, depth) * fit.scale,
     depth,
     sib,
     sibs: 1,
     kidsMax: 0,
+    kidFoot: 0,
+    foot: 0,
+    rx: 0,
+    ry: 0,
+    rings: 0,
+    cell: 0,
+    ringOff: 0,
+    ringAt: -1,
     fresh: true,
     dim: isDone(inst) ? 1 : 0,
   };
+}
+
+/** size of an agent before fit.scale: parents big, subagents (and agents nested under one) small */
+const kitScale = (inst: Instance, depth: number) => (depth > 0 ? Math.min(roleScale(inst), 0.6) : roleScale(inst));
+/** members of a big top-level ring (a desk's markets) are the main actors on a spread-out screen: a bit bigger */
+const RING_BIG = 6;
+const RING_SCALE = 1.15;
+function agentScale(a: KitAgent) {
+  if (a.depth === 1 && a.sibs >= RING_BIG) return RING_SCALE;
+  return kitScale(a.inst, a.depth);
 }
 
 /** finished agents dim over ~this many seconds */
@@ -207,20 +229,167 @@ function orderRuns() {
 
 // ------------------------------------------------------------------ run-local agent layout
 
-/** siblings per fan row before a parent's subagents wrap into staggered rows */
-const FAN_ROW = 8;
+/**
+ * Subagents encircle their parent: a FULL ring (360 deg, evenly spaced by arc length), at every level. A top-level
+ * parent's ring is an ellipse in the free area's aspect when its run is the only one on screen (the main group fills
+ * the screen); other rings are circles
+ * with smaller gaps. More than RING_CAP siblings use concentric rings (alternate rings staggered half a step).
+ * Ring sizes are measured bottom-up first (footprints): a ring's gap fits its members' own rings, so nested rings
+ * never overlap their neighbours, and top-level agents of one run sit their footprints apart.
+ * A top-level ring starts so no member sits straight below the parent (its name label) and a single subagent goes
+ * down-right; a nested ring starts beside the line to the grandparent (that edge stays clear).
+ * Siblings keep their slot (sib) and the count only grows while the parent is visible (kidsMax): stable, eased.
+ */
+const RING_CAP = 16;
+/** neighbour gap on a top-level ring / a nested ring, in subGap units (an agent + its halo + name, with air) */
+const CELL_TOP = 2.6;
+const CELL_SUB = 1.45;
+/** gap between concentric rings, in neighbour gaps */
+const RING_DR = 0.9;
+/** footprint radius of a childless agent (local units, before fit.spread) */
+const FOOT = 1.3;
+const TAU = Math.PI * 2;
+/** arc-length table of the last ellipse asked for (equal spacing along the curve, not in angle) */
+const ARC_N = 96;
+const arc = { rx: 0, ry: 0, t: new Float64Array(ARC_N + 1) };
+/** parametric angle (ccw on screen from screen-right) at fraction f (0..1) of the ellipse's perimeter from the top */
+function ellipseAngle(f: number, rx: number, ry: number) {
+  if (rx !== arc.rx || ry !== arc.ry) {
+    arc.rx = rx;
+    arc.ry = ry;
+    let acc = 0;
+    arc.t[0] = 0;
+    for (let i = 1; i <= ARC_N; i++) {
+      const t = Math.PI / 2 + ((i - 0.5) / ARC_N) * TAU;
+      acc += Math.hypot(rx * Math.sin(t), ry * Math.cos(t));
+      arc.t[i] = acc;
+    }
+    for (let i = 1; i <= ARC_N; i++) arc.t[i] /= acc;
+  }
+  f -= Math.floor(f);
+  let i = 1;
+  while (i < ARC_N && arc.t[i] < f) i++;
+  const f0 = arc.t[i - 1], f1 = arc.t[i];
+  const k = f1 > f0 ? (f - f0) / (f1 - f0) : 0;
+  return Math.PI / 2 + ((i - 1 + k) / ARC_N) * TAU;
+}
+
+/** bottom-up: each agent's ring (rx/ry of its first ring, ring count) and footprint radius (unscaled local units) */
+/** the periphery columns beside the core are in use (MCP servers / the side graph shown) */
+function sidesUsed() {
+  if (config.preset.periphery !== "sides") return false;
+  if (kit.graphWanted && graphShown()) return true;
+  for (const m of kit.mcp.values()) if (m.wanted) return true;
+  return false;
+}
+
+function measureRings() {
+  const L = config.preset.local;
+  for (const a of kit.agents.values()) a.kidFoot = 0;
+  for (const r of kit.runs.values()) (r.foot = FOOT), (r.tops = 0);
+  for (const a of kit.agents.values()) if (a.depth === 0) a.run.tops++;
+  for (let d = 6; d >= 0; d--)
+    for (const a of kit.agents.values()) {
+      if (a.depth !== d && !(d === 6 && a.depth > 6)) continue;
+      const n = a.kidsMax;
+      if (!n) {
+        a.rx = a.ry = 0;
+        a.rings = 0;
+        a.foot = FOOT;
+      } else {
+        const top = a.depth === 0;
+        const m = Math.ceil(n / RING_CAP);
+        const per = Math.ceil(n / m);
+        const kid = Math.max(FOOT, a.kidFoot);
+        // a small ring keeps its members' own rings apart; a big one (a desk's markets) doesn't: their children
+        // start on the side away from the parent (ringOffset), outside the ring, and kitExtents keeps room for them
+        const cell = Math.max(L.subGap * (top ? CELL_TOP : CELL_SUB), n < RING_BIG ? kid * 2 + 0.6 : 0);
+        const r = Math.max(top ? L.fanLen * 1.3 : L.fanLen * 0.85, n > 1 ? (per * cell) / TAU : 0);
+        if (top && n > 1 && kit.runs.size === 1) {
+          // the main group (one run on screen): an ellipse in the free area's shape; a tilted ground plane
+          // foreshortens v on screen
+          // (a bit wider than the area: labels above / below the members take vertical room; rounder while MCP
+          // servers / the side graph take the columns beside the core)
+          const asp = THREE.MathUtils.clamp(fit.aspect * (sidesUsed() ? 0.8 : 1.15), 1, 2.4);
+          a.rx = r * Math.sqrt(asp);
+          a.ry = Math.max(cell * 0.6, r / Math.sqrt(asp)) * (kit.plane === "xz" ? bStretch : 1);
+        } else a.rx = a.ry = r;
+        a.rings = m;
+        a.cell = cell;
+        const grow = (m - 1) * cell * RING_DR;
+        a.foot = Math.max(a.rx, a.ry) + grow + kid;
+      }
+      const p = a.inst.parent ? kit.agents.get(a.inst.parent) : undefined;
+      if (p && a.depth > 0) p.kidFoot = Math.max(p.kidFoot, a.foot);
+      else if (a.depth === 0) a.run.foot = Math.max(a.run.foot, a.foot);
+    }
+}
+
+/** Ring angle (run-local u/v, v runs screen-down) at fraction f of the way round: a top-level ring from the top
+ *  (equal arc length on its ellipse), a nested ring from the line back to the grandparent. */
+function ringAngle(p: KitAgent, f: number, rx: number, ry: number) {
+  const gp = p.depth > 0 && p.inst.parent ? kit.agents.get(p.inst.parent) : undefined;
+  if (gp) return Math.atan2(gp.v - p.v, gp.u - p.u) + f * TAU;
+  const t = ellipseAngle(f, rx, ry); // ccw from screen-right; to u/v: (cos t, -sin t) -> angle -t
+  return -t;
+}
+/** run-local u/v angle of "screen down" for a run (its frame rotates on a ring of runs) */
+function downAngle(r: KitRun) {
+  const ca = Math.cos(r.targetAngle);
+  const sa = Math.sin(r.targetAngle);
+  let sx = -sa;
+  let sy = ca;
+  if (sx < -1e-3) (sx = -sx), (sy = -sy);
+  return Math.atan2(-sa, -sy);
+}
+const angDist = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+const FORBID: number[] = [];
+const FORBID_W: number[] = [];
+let frameNo = 0;
+/**
+ * Where a ring starts (a fraction of one step, same for every member): the offset whose members stay furthest from
+ * the parent's own lines: its name label (screen down), the edge back to its parent, and the run line its
+ * neighbours sit on (top-level agents of a multi-agent run). Searched once per parent per frame; ties keep 0.
+ */
+function ringOffset(p: KitAgent, cnt: number) {
+  if (p.ringAt === frameNo) return p.ringOff;
+  p.ringAt = frameNo;
+  FORBID.length = FORBID_W.length = 0;
+  FORBID.push(downAngle(p.run));
+  FORBID_W.push(1);
+  const gp = p.depth > 0 && p.inst.parent ? kit.agents.get(p.inst.parent) : undefined;
+  if (gp) FORBID.push(Math.atan2(gp.v - p.v, gp.u - p.u)), FORBID_W.push(1);
+  else if (p.run.tops > 1 || p.run.run?.hasSteps) FORBID.push(0, Math.PI), FORBID_W.push(0.8, 0.8);
+  const rx = Math.max(1e-3, p.rx);
+  const ry = Math.max(1e-3, p.ry);
+  let best = 0;
+  let bestS = -1;
+  for (let c = 0; c < 12; c++) {
+    const o = c / 12;
+    let sc = Infinity;
+    for (let k = 0; k < cnt && sc > bestS; k++) {
+      const t = ringAngle(p, (k + o) / cnt, rx, ry);
+      for (let q = 0; q < FORBID.length; q++) sc = Math.min(sc, angDist(t, FORBID[q]) / FORBID_W[q]);
+    }
+    if (sc > bestS + 1e-3) (bestS = sc), (best = o);
+  }
+  p.ringOff = best;
+  return best;
+}
 
 function placeLocal(a: KitAgent) {
   const L = config.preset.local;
   const sp = fit.spread;
   const inst = a.inst;
   if (a.depth === 0) {
-    let u = ROLE_SLOT[inst.type] * L.topGap;
+    // top-level agents of a run on a line (planner | researcher | writer), clear of the biggest one's rings
+    const gap = Math.max(L.topGap, a.run.foot + FOOT + 0.8);
+    let u = ROLE_SLOT[inst.type] * gap;
     let v = 0;
     if (a.sib) {
-      // a second researcher in one run: beside + slightly behind the first, never stacked
-      u += (a.sib % 2 ? 1 : -1) * L.topGap * 0.5;
-      v -= Math.ceil(a.sib / 2) * L.fanLen * 0.55;
+      // a second researcher in one run: beside + behind the first, never stacked
+      u += (a.sib % 2 ? 1 : -1) * gap * 0.5;
+      v -= Math.ceil(a.sib / 2) * Math.max(L.fanLen * 0.55, a.run.foot * 1.8);
     }
     a.u = (u + jit(a.id, 31) * 0.5) * sp;
     a.v = (v + jit(a.id, 32) * 0.4) * sp;
@@ -228,30 +397,31 @@ function placeLocal(a: KitAgent) {
   }
   const p = inst.parent ? kit.agents.get(inst.parent) : undefined;
   if (!p) return; // parent not drawn (collapsed / gone): keep the last spot
-  a.sibs = Math.max(1, p.kidsMax);
-  const deep = a.depth > 1 ? 0.75 : 1;
-  const shift = (L.subShift ?? 0) * deep;
-  if (L.fan === "stack") {
-    a.u = p.u + (shift + alt(a.sib) * 0.35 + jit(a.id, 31) * 0.4) * sp;
-    a.v = p.v + (L.fanLen + a.sib * L.stackGap) * deep * sp;
-  } else if (a.sibs > FAN_ROW) {
-    // many siblings (e.g. 30 market agents of one desk): staggered rows of a curved fan instead of one long line
-    const per = Math.max(FAN_ROW, Math.ceil(Math.sqrt(a.sibs * 2.2)));
-    const row = Math.floor(a.sib / per);
-    const col = a.sib - row * per;
-    const cnt = Math.min(per, a.sibs - row * per);
-    const off = col - (cnt - 1) / 2 + (row % 2 && cnt === per ? 0.5 : 0); // odd full rows staggered half a gap
-    const half = (per - 1) / 2 || 1;
-    a.u = p.u + (shift + off * L.subGap * 0.92 * deep + jit(a.id, 31) * 0.3) * sp;
-    a.v = p.v + (L.fanLen * deep + row * L.fanLen * 0.62 + (off / half) ** 2 * L.fanLen * 0.35 + jit(a.id, 32) * 0.3) * sp;
+  const n = (a.sibs = Math.max(1, p.kidsMax));
+  const m = Math.max(1, p.rings);
+  const j = a.sib % m; // ring (siblings go round-robin over the rings: every ring fills evenly)
+  const idx = Math.floor(a.sib / m);
+  const cnt = Math.floor(n / m) + (j < n % m ? 1 : 0);
+  const k = 1 + (j * p.cell * RING_DR) / Math.max(1e-3, Math.max(p.rx, p.ry));
+  const rx = p.rx * k;
+  const ry = p.ry * k;
+  let du: number, dv: number;
+  if (!p.inst.parent && cnt === 1 && m === 1) {
+    // a lone subagent of a top-level agent: down-right (clear of its name below and the run line / label)
+    du = Math.SQRT1_2 * rx;
+    dv = Math.SQRT1_2 * ry;
   } else {
-    const off = a.sib - (a.sibs - 1) / 2;
-    a.u = p.u + (shift + off * L.subGap * deep + jit(a.id, 31) * 0.45) * sp;
-    a.v = p.v + (L.fanLen * deep + Math.abs(off) * 0.3 + jit(a.id, 32) * 0.45) * sp;
+    const o = ringOffset(p, cnt);
+    const t = ringAngle(p, (idx + o + (j % 2) * 0.5) / cnt, rx, ry);
+    du = Math.cos(t) * rx;
+    dv = Math.sin(t) * ry;
   }
+  a.u = p.u + du * sp;
+  a.v = p.v + dv * sp;
 }
 
 function layoutAgents() {
+  measureRings();
   // depth order: parents before children (depth is small)
   for (let d = 0; d < 6; d++) for (const a of kit.agents.values()) if (a.depth === d || (d === 5 && a.depth >= 5)) placeLocal(a);
   // run footprints (padded) + centroids
@@ -491,6 +661,7 @@ export function kitTick(now = performance.now()) {
     }
   syncMembership();
   orderRuns();
+  frameNo++;
 
   // fit: weighted count of what's drawn
   // (exiting agents still count until they have faded out: an exit never zooms in right away)
@@ -506,7 +677,7 @@ export function kitTick(now = performance.now()) {
   for (const m of kit.mcp.values()) if (m.wanted) mcp++;
   // content signature: any change (spawn, exit, fade-out, grouping, run, resource) restarts FitCamera's batch window
   fitTick(now, n + clusters * 1.5, kit.agents.size + alive * 1e3 + clusters * 1e6 + kit.runs.size * 1e8 + mcp * 1e10 + (kit.graphWanted ? 1e13 : 0));
-  for (const a of kit.agents.values()) a.scale = roleScale(a.inst) * fit.scale;
+  for (const a of kit.agents.values()) a.scale = agentScale(a) * fit.scale;
 
   layoutAgents();
   layoutRuns();
@@ -580,6 +751,10 @@ export function kitTick(now = performance.now()) {
   g.scale = (g.radius / Math.max(1e-3, g.natural)) * Math.max(0.001, g.mix);
 }
 
+/** framing headroom for an agent's labels (css px): a decision label below it, the halo label above */
+const LABEL_BELOW_PX = 46;
+const LABEL_ABOVE_PX = 18;
+
 /** MCP server / backend fade in / out length (s). */
 const MCP_FADE_S = 0.9;
 
@@ -587,7 +762,16 @@ const MCP_FADE_S = 0.9;
 export function kitExtents(visit: (p: THREE.Vector3, r: number) => void, agentRadius: number, agentHeight = 0) {
   const up = kit.plane === "xz" && agentHeight > 0;
   for (const a of kit.agents.values()) {
-    visit(a.target, agentRadius * a.scale);
+    // a big ring's member with children (an analyst next to its market): room for them all round, kept while the
+    // member is drawn (kidsMax never shrinks), so children coming and going never re-frame the camera
+    const kids = a.depth === 1 && a.sibs >= RING_BIG && a.kidsMax > 0 ? (a.foot - FOOT) * fit.spread : 0;
+    visit(a.target, agentRadius * a.scale + kids);
+    // room for its decision label below and its halo label above (px-sized: world size at the fitted distance)
+    const r = agentRadius * a.scale * 1.3;
+    planePoint(a2(a.target), b2(a.target) - r - (LABEL_BELOW_PX * fit.wpp) / fit.foreshorten, _x);
+    visit(kit.plane === "xz" ? _x.setY(a.target.y) : _x, 0);
+    planePoint(a2(a.target), b2(a.target) + r + (LABEL_ABOVE_PX * fit.wpp) / fit.foreshorten, _x);
+    visit(kit.plane === "xz" ? _x.setY(a.target.y) : _x, 0);
     // tall agents on a ground plane (towers, trees, machines): their top must stay in view too
     if (up) visit(_x.copy(a.target).setY(a.target.y + agentHeight * a.scale), agentRadius * a.scale * 0.6);
   }

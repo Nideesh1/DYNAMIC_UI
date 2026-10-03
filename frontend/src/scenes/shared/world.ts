@@ -45,7 +45,7 @@ export type WorldEvent =
   // (ordinal level) or noul (yes / no); p = probability of `result`, options = top 5 {name, p}, ms = latency
   // `hv`: sent while the agent is in high-volume mode (its decisions are aggregated in `decision_stats`); `why` = what
   // made it interesting (important | deny | flip | low_p)
-  | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; ms: number; ts: number; hv?: boolean; why?: string }
+  | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; scope?: string; ms: number; ts: number; hv?: boolean; why?: string }
   // high-volume mode: one per agent per ~1 s window (docs/SPEC.md "Decisions" > "High volume")
   | { type: "decision_stats"; run_id: string; id: string; window_ms: number; n: number; by_purpose: DecisionStatsByPurpose; p50_ms: number; p95_ms: number; providers: Record<string, number>; ts: number }
   // an order action (paper when dry_run) by agent instance `id`
@@ -146,8 +146,15 @@ export const pct = (p?: number) => (p === undefined ? "" : ` ${Math.round(p * 10
 /** short text for a decision: `jev · route → haiku 92%`, `guard: deny rollback_deploy 97%` */
 export function decisionText(d: { kind: string; question: string; result: string; p?: number; provider: string; purpose?: string; target?: string }): string {
   if (d.kind === "noul" && d.purpose === "guard") return `guard: ${d.result === "no" ? "deny" : "allow"} ${d.target || d.question}${pct(d.p)}`;
-  return `${d.provider} · ${d.purpose || d.question} → ${d.result}${pct(d.p)}`;
+  return `${providerBadge(d.provider)} · ${d.purpose || d.question} → ${d.result}${pct(d.p)}`;
 }
+
+/** friendly decision-kind badge (display only; events and docs keep the raw kind) */
+export const kindBadge = (kind: string) => (kind === "noul" ? "YES/NO" : kind === "score" ? "SCORE" : "PICK");
+/** friendly high-volume reason tag (`why`) */
+export const whyBadge = (why: string) => ({ important: "key", flip: "changed mind", low_p: "unsure", deny: "DENY" })[why] ?? why;
+/** provider badge: code guards read as a rule */
+export const providerBadge = (p: string) => (p === "code" ? "rule" : p);
 
 /** `YES 3 @ 42c`, `SELL 10 @ 101.5` (prices below 1 read as cents) */
 export function orderText(o: { side: string; qty: number; price?: number; status?: string }): string {
@@ -431,7 +438,66 @@ export const world = {
   selected: null as string | null,
   /** the server answered 401 for this scope/run/token (the HUD shows a notice; no simulator fallback) */
   unauthorized: false,
+  /** desk-wide halts (global-scope guard denies, see Halt), keyed by the owning agent */
+  halts: new Map<string, Halt>(),
 };
+
+/**
+ * A desk-wide halt: a guard decision with `scope: "global"` (docs/SPEC.md "Decisions") said no, e.g. a kill switch.
+ * Owned by the topmost agent that reports global guards (a desk), drawn ONCE on it (red, `HALTED · <reason>`) instead
+ * of a red X on every agent below it; their own global denies only flash their halos. Ends when every global guard
+ * the owner said no to says yes again, or the owner / its run ends.
+ */
+export type Halt = { id: string; run: string; reason: string; since: number; end: number; qs: Map<string, boolean> };
+/** agents that sent a global-scope decision (halt owners are the topmost of them) */
+const globalBy = new Set<string>();
+/** the halt owner for a global decision of `id`: its topmost ancestor that reports global guards itself */
+function haltOwner(id: string): string {
+  let own = id;
+  let cur = world.instances.get(id);
+  for (let k = 0; cur?.parent && k < 32; k++) {
+    if (globalBy.has(cur.parent)) own = cur.parent;
+    cur = world.instances.get(cur.parent);
+  }
+  return own;
+}
+/** a halt reason from a guard question: `kill switch off` -> `kill switch` */
+const reasonOf = (q: string) => q.replace(/\s*(\?|\bok\b|\boff\b|\bon\b)\s*$/i, "").trim() || q;
+function globalDecision(ev: Extract<WorldEvent, { type: "decision" }>, now: number): boolean {
+  globalBy.add(ev.id);
+  const own = haltOwner(ev.id);
+  if (own !== ev.id) return false; // under a halt owner: the owner shows the state
+  if (ev.kind !== "noul" || ev.purpose !== "guard") return true;
+  let h = world.halts.get(own);
+  const deny = ev.result === "no";
+  if (!h || h.end) {
+    if (!deny) return true;
+    h = { id: own, run: ev.run_id, reason: "", since: now, end: 0, qs: new Map() };
+    world.halts.set(own, h);
+  }
+  h.qs.set(ev.question, deny);
+  if (deny && (!h.reason || ev.why === "important")) h.reason = reasonOf(ev.question);
+  if (![...h.qs.values()].some(Boolean)) h.end = now;
+  return true;
+}
+/** the halt shown on agent `id` right now (also while it fades out after the end), if any */
+export function haltOn(id: string, now = performance.now()): Halt | undefined {
+  const h = world.halts.get(id);
+  if (!h) return undefined;
+  const i = world.instances.get(id);
+  if (!h.end && (!i || i.exitAt)) h.end = now;
+  if (h.end && now - h.end > HALT_FADE_MS) {
+    world.halts.delete(id);
+    return undefined;
+  }
+  return h;
+}
+export const HALT_FADE_MS = 900;
+/** some agent is halted now (HUD chip) */
+export function haltedNow(now = performance.now()): Halt | undefined {
+  for (const h of world.halts.values()) if (haltOn(h.id, now) && !h.end) return h;
+  return undefined;
+}
 const ARCHIVE_MAX = 500;
 
 let seq = 0;
@@ -721,11 +787,20 @@ export function apply(ev: WorldEvent) {
         a.p95 += ev.ms;
       }
       if (!i) break;
+      // desk-wide guards (scope "global"): the owner shows ONE halted state (Halt), no glyph; below it a global deny
+      // only flashes the halo. Both stay in the agent's decision list.
+      let hide = false;
+      if (ev.scope === "global") {
+        const owner = globalDecision(ev, now);
+        if (!owner && isDeny(ev) && i.hv) (i.hv.bump = now), (i.hv.bumpDeny = true);
+        hide = owner || isDeny(ev);
+      }
       const last = i.decisions[i.decisions.length - 1];
       const { type: _t, run_id: _r, id: _i, ...d } = ev;
       // high volume: no stagger (one glyph per agent at a time) and at most HV_GLYPHS_MAX on screen
-      const use: DecisionUse = { ...d, hv, at: hv || !last ? now : Math.max(now, last.at + DECISION_STAGGER_MS) };
-      if (hv && !admitHv(use, now) && i.hv) {
+      const use: DecisionUse = { ...d, hv, at: hv || hide || !last ? now : Math.max(now, last.at + DECISION_STAGGER_MS) };
+      if (hide) use.hidden = true;
+      else if (hv && !admitHv(use, now) && i.hv) {
         i.hv.bump = now;
         i.hv.bumpDeny = isDeny(use);
       }
@@ -1053,6 +1128,8 @@ export function resetWorld() {
   world.hasGraphAt = 0;
   world.graphRuns.clear();
   world.graphAt = 0;
+  world.halts.clear();
+  globalBy.clear();
   notify();
 }
 

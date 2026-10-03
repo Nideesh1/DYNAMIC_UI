@@ -21,10 +21,13 @@ const FADE = 0.45;
 /** red tint mixed in for failed agents at dim = 1 */
 const TINT = 0.32;
 const RED = new THREE.Color("#ef4444");
+/** red mixed in while the agent is halted (desk-wide halt, kit/Halt.tsx) */
+const HALT_TINT = 0.75;
 
 type Saved = {
   k: number; // dim 0..1 for this draw
   failed: boolean;
+  red: number; // halt tint 0..1 (a desk-wide halt on this agent)
   on: boolean; // values saved and must be restored
   color: THREE.Color;
   emissive: THREE.Color;
@@ -46,7 +49,7 @@ type AnyMat = THREE.Material & {
 
 function before(this: THREE.Object3D, renderer: THREE.WebGLRenderer, _s: THREE.Scene, _c: THREE.Camera, _g: THREE.BufferGeometry, material: THREE.Material) {
   const d = this.userData[KEY] as Saved | undefined;
-  if (!d || d.k <= 0.002 || Array.isArray(material)) return;
+  if (!d || (d.k <= 0.002 && d.red <= 0.002) || Array.isArray(material)) return;
   const m = material as AnyMat;
   const f = 1 - DARKEN * d.k;
   d.hasColor = !!m.color?.isColor;
@@ -54,12 +57,14 @@ function before(this: THREE.Object3D, renderer: THREE.WebGLRenderer, _s: THREE.S
     d.color.copy(m.color!);
     m.color!.multiplyScalar(f);
     if (d.failed) m.color!.lerp(RED, TINT * d.k * 0.6);
+    if (d.red > 0.002) m.color!.lerp(RED, HALT_TINT * d.red);
   }
   d.hasEmissive = !!m.emissive?.isColor;
   if (d.hasEmissive) {
     d.emissive.copy(m.emissive!);
     m.emissive!.multiplyScalar(f);
     if (d.failed) m.emissive!.lerp(RED, TINT * d.k * 0.4);
+    if (d.red > 0.002) m.emissive!.lerp(RED, HALT_TINT * d.red);
     d.ei = m.emissiveIntensity ?? 1;
   }
   // save both before scaling either (LineMaterial maps .opacity onto its `opacity` uniform)
@@ -91,6 +96,7 @@ function after(this: THREE.Object3D, renderer: THREE.WebGLRenderer, _s: THREE.Sc
 
 let curK = 0;
 let curFailed = false;
+let curRed = 0;
 function tag(o: THREE.Object3D) {
   if (o.userData.kitNoDim) return;
   const r = o as THREE.Mesh;
@@ -98,25 +104,27 @@ function tag(o: THREE.Object3D) {
     let d = o.userData[KEY] as Saved | undefined;
     if (!d) {
       if (o.onBeforeRender !== noop) return; // someone else's hook (troika text): leave it alone
-      d = { k: 0, failed: false, on: false, color: new THREE.Color(), emissive: new THREE.Color(), hasColor: false, hasEmissive: false, ei: 1, op: 1, uop: 1 };
+      d = { k: 0, failed: false, red: 0, on: false, color: new THREE.Color(), emissive: new THREE.Color(), hasColor: false, hasEmissive: false, ei: 1, op: 1, uop: 1 };
       o.userData[KEY] = d;
       o.onBeforeRender = before as THREE.Object3D["onBeforeRender"];
       o.onAfterRender = after as THREE.Object3D["onAfterRender"];
     }
     d.k = curK;
     d.failed = curFailed;
+    d.red = curRed;
   }
   const c = o.children;
   for (let i = 0; i < c.length; i++) tag(c[i]);
 }
 
 /**
- * Apply the finished look to a slot subtree for this frame. Cheap when nothing is dimmed: the walk only runs while
- * k > 0 or on the frame it returns to 0 (pass the previous k as `prev`).
+ * Apply the finished look (and the red halt tint, `red` 0..1) to a slot subtree for this frame. Cheap when nothing
+ * is dimmed: the walk only runs while k or red > 0 or on the frame they return to 0 (pass the previous max as `prev`).
  */
-export function applyDim(root: THREE.Object3D, k: number, failed: boolean, prev: number) {
-  if (k <= 0.002 && prev <= 0.002) return;
+export function applyDim(root: THREE.Object3D, k: number, failed: boolean, prev: number, red = 0) {
+  if (k <= 0.002 && red <= 0.002 && prev <= 0.002) return;
   curK = k;
   curFailed = failed;
+  curRed = red;
   tag(root);
 }

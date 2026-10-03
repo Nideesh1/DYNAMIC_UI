@@ -91,6 +91,16 @@ services:
     depends_on: [agentglow]
     restart: unless-stopped
 
+  mcp_market:   # `market_data` MCP server (:8205/mcp) → Exchange feed / Tick history DB / NWS forecast API (simulated), trading desk demo
+    image: agentglow-example-deepagents-hatchet:local
+    build: *example-build
+    command: ["uv", "run", "python", "-m", "app.market_mcp_server"]
+    environment:
+      AGENTGLOW_URL: http://agentglow:8100
+      AGENTGLOW_API_KEY: ${AGENTGLOW_INGEST_KEY:-}
+    depends_on: [agentglow]
+    restart: unless-stopped
+
   worker:       # Hatchet worker running the deepagents workflows `agent_smoke`, `incident_triage`, `vendor_consolidation`, `trading_desk`
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
@@ -103,6 +113,7 @@ services:
       GITHUB_MCP_URL: http://mcp_github:8202/mcp
       ERP_MCP_URL: http://mcp_erp:8203/mcp
       EMAIL_MCP_URL: http://mcp_email:8204/mcp
+      MARKET_MCP_URL: http://mcp_market:8205/mcp
       DEMO_SLEEP_S: ${DEMO_SLEEP_S:-20}                 # vendor demo: durable sleep between negotiation rounds
       APPROVAL_TIMEOUT_S: ${APPROVAL_TIMEOUT_S:-1800}   # vendor demo: auto-approve after 30 min
       # trading desk demo (paper only, see the example README): session size, analyst cooldown, human gate, Jev cap
@@ -112,7 +123,7 @@ services:
       DESK_THINK_COOLDOWN_S: ${DESK_THINK_COOLDOWN_S:-30}
       DESK_MAX_ANALYSTS: ${DESK_MAX_ANALYSTS:-3}
       DESK_HUMAN_TIMEOUT_S: ${DESK_HUMAN_TIMEOUT_S:-8}
-      DESK_OUTAGE_EVERY_S: ${DESK_OUTAGE_EVERY_S:-45}
+      DESK_OUTAGE_EVERY_S: ${DESK_OUTAGE_EVERY_S:-0}     # feed outage -> kill switch: 0 = once per session, N = every N s, -1 = never
       JEV_MAX_RPS: ${JEV_MAX_RPS:-5}                    # hard cap on real Jev requests/s; overflow -> local jev-sim
       FALKOR_HOST: falkordb
       AGENT_MODEL: ${AGENT_MODEL:-google_genai:gemini-3.8-flash}   # provider:model (google_genai / openai / anthropic)
@@ -143,6 +154,7 @@ services:
       mcp_github: {condition: service_started}
       mcp_erp: {condition: service_started}
       mcp_email: {condition: service_started}
+      mcp_market: {condition: service_started}
       obs_hatchet_engine: {condition: service_started}
       obs_hatchet_token: {condition: service_completed_successfully}
     restart: unless-stopped

@@ -144,3 +144,58 @@ def write_plan(name: str, summary: str, vendors: list[str]) -> list[str]:
             rows(PLAN_LINK_Q, {"n": name, "v": v})
             linked.append(v)
     return linked
+
+
+# ---- trading desk demo: weather markets, their cities + stations, correlated markets (idempotent MERGEs) -------
+CITIES = {"nyc": "New York", "chi": "Chicago", "den": "Denver", "bos": "Boston", "mia": "Miami", "sea": "Seattle",
+          "phx": "Phoenix", "hou": "Houston", "lax": "Los Angeles", "sfo": "San Francisco", "atl": "Atlanta",
+          "pdx": "Portland", "msp": "Minneapolis", "dal": "Dallas", "okc": "Oklahoma City"}
+FAMILY = {"rain": "precip", "storm": "precip", "hail": "precip", "snow": "snow", "temp": "temp", "wind": "wind", "fog": "wind"}
+
+
+def market_node(topic: str) -> str:
+    """`rain-nyc` / `RAIN-NYC-42` -> `Market rain-nyc` (a ticker's topic bucket)."""
+    parts = topic.lower().split("-")
+    return "Market " + "-".join(parts[:3] if parts[0] == "temp" else parts[:2])
+
+
+def seed_markets(topics: list[str]) -> int:
+    """Market -IN-> City -OBSERVED_BY-> Station; markets of one weather family (rain / storm / hail ...) or one city
+    are CORRELATED_WITH each other."""
+    ms = []
+    for t in topics:
+        parts = t.split("-")
+        city = CITIES.get(parts[1], parts[1].upper())
+        m = market_node(t)
+        ms.append((m, FAMILY.get(parts[0], parts[0]), city))
+        rows("MERGE (m:Entity:Market {name: $m}) SET m.kind = 'Market', m.family = $f "
+             "MERGE (c:Entity:City {name: $c}) SET c.kind = 'City' "
+             "MERGE (s:Entity:Station {name: $s}) SET s.kind = 'Station' "
+             "MERGE (m)-[:IN]->(c) MERGE (c)-[:OBSERVED_BY]->(s)",
+             {"m": m, "f": ms[-1][1], "c": city, "s": f"Station K{parts[1].upper()}"})
+    for i, (a, fa, ca) in enumerate(ms):
+        for b, fb, cb in ms[i + 1:]:
+            if fa == fb or ca == cb:
+                rows("MATCH (a:Market {name: $a}), (b:Market {name: $b}) MERGE (a)-[:CORRELATED_WITH]->(b)", {"a": a, "b": b})
+    return len(ms)
+
+
+CORRELATED_Q = (
+    "MATCH (m:Market {name: $m})-[:CORRELATED_WITH]-(o:Market)-[:IN]->(c:City) "
+    "RETURN o.name AS market, c.name AS city, o.last_view AS last_view LIMIT 6"
+)
+VIEW_Q = (
+    "MATCH (m:Market {name: $m}) SET m.last_view = $p "
+    "MERGE (v:Entity:View {name: $v}) SET v.kind = 'View', v.fair_p = $p, v.confidence = $c, v.rationale = $r "
+    "MERGE (v)-[:ON]->(m)"
+)
+
+
+def correlated(topic: str) -> list[dict]:
+    return rows(CORRELATED_Q, {"m": market_node(topic)})
+
+
+def write_view(ticker: str, fair_p: float, confidence: float, rationale: str) -> list[str]:
+    m, v = market_node(ticker), f"View {ticker}"
+    rows(VIEW_Q, {"m": m, "v": v, "p": round(float(fair_p), 3), "c": round(float(confidence), 3), "r": rationale[:300]})
+    return [v, m]
