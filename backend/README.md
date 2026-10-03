@@ -52,6 +52,23 @@ Optional attributes you can set on your own spans: `agentglow.agent` (mark a spa
 
 Announce MCP servers before they are called: `agentglow.register_mcp("analytics", {"snowflake": "warehouse", "spark": "spark"})`.
 
+## Your whole backend (0.4.0)
+
+```python
+agentglow.watch(app=fastapi_app)                 # FastAPI / Starlette (mounted sub-apps too): service node + req/s halo
+agentglow.watch(broker=faststream_broker)        # FastStream: publish -> consume comets between services
+agentglow.watch(mcp=fastmcp_server)              # FastMCP: its DB / HTTP calls become its backends
+agentglow.pulse("billing", "invoice.paid", status=200, duration_ms=12)   # no OTel: POST /v1/events in the background
+```
+DB / cache / HTTP calls become resource nodes, requests open past 3 s become job nodes with a timer, replicas show as
+`×N`, failed publishes fizzle. Backend mode is **strict privacy by default**: only route templates, methods, status
+codes, hosts, DB system / operation, message destinations, model names, token counts and `agentglow.*` labels leave the
+process (`privacy="standard"`, `allow=`, `allow_message_keys=`, `ignore=`, `scrub=` to tune; docs/SPEC.md "Privacy").
+
+Generic primitives for what a trace does not say: `session`, `stage`, `progress`, `capacity`, `rejected`, `pool` /
+`lease`, `inference`, `job`, `link` / `complete`, `fallback`, `gate`, `backlog`, `lifecycle`, `metric`, `event`,
+`cache`, `mark_error` / `mark_outcome`. One call each, numbers / ids / short labels only (docs/SPEC.md "Generic primitives").
+
 ## Hand-written agent loops (manual API)
 
 No framework? Wrap your own loop. Each call is a plain OpenTelemetry span with the hint attributes below, so it works
@@ -94,9 +111,10 @@ agentglow serve [--host 0.0.0.0] [--port 8100] [--falkor redis://localhost:6379/
 
 | | |
 |---|---|
-| `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None, api_key=None)` | `url` also from `AGENTGLOW_URL`, `api_key` from `AGENTGLOW_API_KEY` (sent as `x-api-key`) |
+| `agentglow.watch(url="http://localhost:8100", *, instrument=True, service_name=None, api_key=None, app=None, broker=None, mcp=None, privacy=None, ignore=None, allow=(), allow_message_keys=(), scrub=None, propagate=None, backlog=False)` | `url` also from `AGENTGLOW_URL`, `api_key` from `AGENTGLOW_API_KEY` (sent as `x-api-key`); `app` / `broker` / `mcp` = backend mode (strict privacy by default) |
 | `--ingest-key K` / `AGENTGLOW_INGEST_KEY` | ingest endpoints (`/v1/live`, `/v1/traces`, `/v1/claude-code`, `/live/topology`) require `x-api-key: K` (or `Authorization: Bearer K`), else 401; comma-separate keys to rotate; unset = open (dev). OTel exporters: `OTEL_EXPORTER_OTLP_HEADERS="x-api-key=K"` |
 | `POST /v1/live` | span start/end batches from `watch()` |
+| `POST /v1/events` | flat events (one object or an array) for services and primitives, no OTel needed |
 | `POST /v1/traces` | standard OTLP/HTTP (protobuf or JSON) - point any OTel SDK or Collector here (ended spans only) |
 | `GET /live/stream` | SSE world events; new viewers get MCP topology + runs still in progress |
 | `GET /live/graph` | graph sample for the scenes from FalkorDB (`--falkor` / `AGENTGLOW_FALKOR_URL`), else an empty graph |

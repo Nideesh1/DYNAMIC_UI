@@ -13,18 +13,30 @@
 </div>
 
 Agents spawn as glowing shapes, pulse on every LLM call, fan out to subagents, query MCP servers and databases,
-and fade when they finish. One line of Python. Works with **LangChain, LangGraph, deepagents, OpenAI Agents SDK,
-Hatchet, MCP**, and **Claude Code** itself.
+and fade when they finish. Since 0.4.0 the backend around them shows up too: services, requests, queues, jobs and
+resources, in the same scene. One line of Python (or Node). Works with **LangChain, LangGraph, deepagents, OpenAI
+Agents SDK, Hatchet, MCP, FastAPI, FastStream, Next.js / Node**, and **Claude Code** itself.
 
-## What's new in 0.3.0
+## What's new in 0.4.0: watch your whole backend
 
-- **Fast decisions:** route / guard / check decisions from TypeSafe Jev (or Laya, an LLM judge, plain code) drawn as snaps on the agent, with a HUD rate chip.
-- **High-volume mode:** busy agents switch to decision halos and the server aggregates per second, so 100+ decisions/s stays readable at 60 fps (`?sim=hf` to see it).
-- **Long-running runs:** Hatchet durable waits keep a run open and show `waiting on approval`; an **Approve / Reject** button can resolve them through your webhook.
-- **New demos** in the docker stack: incident triage, vendor consolidation (long), trading desk (paper, fast), all deepagents + Hatchet.
-- **Models:** deepagents model strings, OpenAI GPT-5.6 on the Responses API, Gemini, Amazon Bedrock Mantle.
-- **Accurate tokens:** one convention everywhere (input includes cached, cached shown separately); no double counts on re-delivery or reconnect.
-- **Claude Code:** subagents that started before a server restart still show up.
+- **Your whole backend:** `watch(app=)` / `watch(broker=)` / `watch(mcp=)` turn FastAPI, FastStream and FastMCP processes
+  into long-lived service nodes with a `req/s · 5xx · p50` halo, publish -> consume comets labelled with the topic,
+  DB / cache / HTTP calls as resource nodes, replicas as `×N`, failed publishes that fizzle mid-flight, and requests
+  still open after 3 s as job nodes with a running timer.
+- **Generic primitives:** sessions, stages, progress, capacity, rejections, worker / GPU pools, non-LLM inference,
+  business-id jobs across processes, late callbacks, fallbacks, gates, broker backlog, lifecycle, metrics, events and
+  caches. One Python call each, an OTel attribute contract for any language, and a `/v1/events` form ([table](#generic-primitives)).
+- **Strict privacy by default** in backend mode: only an allow-list of structural attributes leaves your process
+  (no bodies, headers, URLs with ids, SQL, payloads, prompts or exception messages), plus a server backstop. See
+  [Security & privacy](#security--privacy).
+- **Node.js / Next.js:** `import { watch } from "agentglow/node"` traces incoming requests and `fetch` calls and joins
+  your Python services' traces.
+- **7 themes**, now with **bubble chamber** (particle tracks curling in a magnetic field) and **fireworks**.
+- **Trading desk flagship:** a market feed service, a FastStream tick stream, an MCP market-data server with
+  auto-discovered backends, a Postgres paper ledger and a deepagents desk with human Approve / Reject, all in one scene.
+
+Earlier releases: 0.3.0 added fast decisions, high-volume halos, durable waits with Approve / Reject and the
+incident / vendor / desk demos ([release notes](https://github.com/Nideesh1/agentglow/releases)).
 
 ## Get started
 
@@ -74,40 +86,84 @@ async with agentglow.run(topic="Inbound call", scope=clinic_id):
 Nested `agentglow.agent(...)` = subagent; also `agentglow.mcp(...)`, `agentglow.graph(...)`, `@agentglow.traced_agent`,
 `@agentglow.traced_tool`. See [examples/custom-loop](examples/custom-loop).
 
-### 4. Your whole backend (FastAPI, FastStream, MCP servers, anything that can POST)
+### 4. Your whole backend (FastAPI, FastStream, FastMCP, Node, anything that can POST)
 ```bash
 uv add "agentglow[fastapi,faststream,redis,mcp]"
 ```
+**FastAPI** (each service = one long-lived node; requests = pulses + a req/s halo; mounted sub-apps included):
 ```python
-agentglow.watch(app=fastapi_app)          # API: each service = a long-lived agent, requests = pulses + a req/s halo
-agentglow.watch(broker=faststream_broker) # worker: publish -> consume = a comet between services, labelled with the topic
-agentglow.watch(mcp=fastmcp_server)       # MCP server: its Redis / Postgres / HTTP calls show up as its backends
-agentglow.pulse("billing", "invoice.paid", status=200, duration_ms=12)  # ad-hoc events, no OTel needed
+app = FastAPI(title="orders-api")
+agentglow.watch(app=app)
 ```
-DB / cache / HTTP calls light up resource nodes, 5xx and exceptions flash red, LLM calls and agents inside a request
-show on (or under) their service. Pure agent traces look exactly as before. No Python? POST flat events:
+**FastStream** (publish -> consume = a comet between services, labelled with the topic):
+```python
+broker = RedisBroker(REDIS_URL)
+agentglow.watch(broker=broker, service_name="orders-worker", backlog=True)  # backlog: sample the stream's depth / lag
+```
+**FastMCP** (an MCP server; its Redis / Postgres / HTTP calls become its backends):
+```python
+mcp = FastMCP("market-data")
+agentglow.watch(mcp=mcp)
+```
+**Node / Next.js** (`npm i agentglow` + the OpenTelemetry peers, see [frontend/README.md](frontend/README.md#nodejs-services)):
+```ts
+import { watch } from "agentglow/node";
+watch({ service: "web-bff" });          // Next.js: inside register() in instrumentation.ts, when NEXT_RUNTIME === "nodejs"
+```
+**No OTel at all:** `pulse()` from Python, or POST flat events from anything:
+```python
+agentglow.pulse("billing", "invoice.paid", status=200, duration_ms=12)
+```
 ```bash
 curl -X POST localhost:8100/v1/events -H 'content-type: application/json' \
   -d '{"service": "checkout", "event": "request", "name": "POST /pay", "status": 200, "duration_ms": 42}'
 ```
-Node.js (Next.js backend-for-frontend, Express, Fastify): `import { watch } from "agentglow/node"; watch({ service: "web-bff" })`
-traces requests and `fetch` calls, and links them into your Python API's traces
-([frontend/README.md](frontend/README.md#nodejs-services), [examples/node-proxy](examples/node-proxy)).
-JS / TS events: `import { pulse } from "agentglow/pulse"; await pulse("http://localhost:8100", { service: "checkout", name: "POST /pay" })`.
-See [examples/fastapi-faststream](examples/fastapi-faststream) and docs/SPEC.md "Backend services".
+JS / TS: `import { pulse } from "agentglow/pulse"`. LLM calls and agents inside a request show on (or under) their
+service; pure agent traces look exactly as before. Examples: [fastapi-faststream](examples/fastapi-faststream),
+[node-proxy](examples/node-proxy); details in [docs/SPEC.md "Backend services"](docs/SPEC.md#backend-services-backend-backendpy).
 
 ### 5. The full demo stack (Hatchet + deepagents + MCP + FalkorDB)
 ```bash
 cp .env.example .env                 # add one LLM key (OpenAI, Anthropic or Gemini) - that's all the setup
 docker compose up                    # then open http://localhost:8101 and press ▶ Run agents
 ```
-Pick a workflow next to the button: **Churn brief** (plan, research, write) or **Incident triage** (a runbook skill,
-parallel steps across two MCP servers, a review that fails once and retries, a postmortem).
+Pick a workflow next to the button: **Trading desk** (the flagship: feed service, tick stream, MCP market data, paper
+ledger, Approve / Reject), **Incident triage** (a runbook skill, parallel steps across two MCP servers, a review that
+fails once and retries, a postmortem), **Vendor consolidation** (long-running, durable waits) or **Churn brief**.
 Optional Langfuse side by side: `./scripts/gen-obs-env.sh` then `LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d`.
 
 ▶ [Watch the demo in HD](docs/media/hero.mp4)
 
+## Generic primitives
+
+Small building blocks for what a trace alone does not say. Each is a plain OTel span (no SDK provider = no-op), carries
+numbers, ids and short labels only, and has a `/v1/events` form ([docs/SPEC.md](docs/SPEC.md#generic-primitives-backend-primitivespy)).
+
+| Primitive | Python | In the scene |
+|---|---|---|
+| session | `with agentglow.session("support chat", kind="ws") as s:` | a live node with a timer, turns and gauges (WebSocket routes automatic with `watch(app=)`) |
+| stage | `with agentglow.stage("decode"):` | `decode` on the owner's status line; parallel stages show together |
+| progress | `agentglow.progress(3, 10)` | a progress arc with an ETA |
+| capacity | `agentglow.capacity("slots", used=3, max=4)` | `cap 3/4` gauge |
+| rejected | `agentglow.rejected("busy", retry_after=2)` | amber flash; the 429 / 503 is backpressure, not an error |
+| pool | `async with agentglow.pool("whisper", size=2, kind="gpu").lease():` | a resource node with `2/4 busy · wait 12ms` |
+| inference | `with agentglow.inference("whisper-small", units=12.5, unit="audio_s"):` | a model resource with call pulses and RTF |
+| job | `agentglow.job(order_id, state="queued")` / `with agentglow.job(order_id, attempt=2):` | one `job:<id>` node across processes: queued, running, retrying #2, done, dead |
+| link / complete | `agentglow.link(charge_id)` ... `agentglow.complete(charge_id)` | `awaiting` on the caller, a green edge when the webhook completes it |
+| fallback | `agentglow.fallback(from_="inline", to="queue", reason="timeout")` | a dashed amber edge |
+| gate | `agentglow.gate("refunds", state="locked", attempts_left=2)` | a lock badge until unlocked |
+| backlog | `agentglow.backlog("orders", depth=42, lag_ms=1200)` | a ribbon between producer and consumer (`orders 42 · lag 1.2s`) |
+| lifecycle | `agentglow.lifecycle("ready")` | a tint ring: loading, warming, ready, degraded, draining, restarting, fatal |
+| metric | `agentglow.metric("shipped", 12, unit="orders/min")` | a value on the node's panel |
+| event | `agentglow.event("signup", label="trial")` | a business event chip |
+| cache | `agentglow.cache("catalog", hit=True)` | a cache resource with hit rate |
+| outcome | `agentglow.mark_error("vendor timeout")` / `mark_outcome("failed")` | a swallowed failure still shows the request red |
+
 ## 7 themes
+
+New in 0.4.0: **bubblechamber** (agents and services as particle tracks curling in a magnetic field) and **fireworks**
+(every pulse a burst). Open any theme at `/<name>`, e.g. http://localhost:8100/bubblechamber, and add `?sim=1` or `?sim=hf` for a
+built-in simulation.
 
 | | | |
 |:-:|:-:|:-:|
@@ -135,7 +191,7 @@ import { AgentScene } from "agentglow";
 | `sim` | `false` | built-in fake agents, no server needed (also kicks in automatically if `source` is unreachable) |
 | `style` | - | inline styles for the container, e.g. `{{ height: "80vh" }}` |
 | `className` | - | CSS class for the container |
-| `scope` / `run` | - | show only one user's/tenant's runs, or a single run (see [Security](#security--multi-user)) |
+| `scope` / `run` | - | show only one user's/tenant's runs, or a single run (see [Security](#security--privacy)) |
 | `token` | - | viewer token minted by your backend; sent as `Authorization: Bearer` |
 
 ```tsx
@@ -143,7 +199,9 @@ import { AgentScene } from "agentglow";
 ```
 Works in Next.js App Router out of the box (the package is `"use client"`). See [examples/react-embed](examples/react-embed).
 
-## Security & multi-user
+## Security & privacy
+
+### Multi-user
 
 Everything is open by default for local dev. For a shared or public deployment, turn on what you need:
 
@@ -167,24 +225,35 @@ token = agentglow.make_token(os.environ["AGENTGLOW_SECRET"], scope=user.id, ttl_
 Tokens and keys always travel in headers, never in URLs. Not using Python on the backend? The token is a 3-line HMAC,
 see [docs/SPEC.md "Scopes & auth"](docs/SPEC.md#scopes--auth).
 
-**Privacy:** every ingestion path drops identity attributes (emails, user/account/org ids) and raw user prompts and
-redacts secret-looking values before anything reaches the stream ([docs/SPEC.md](docs/SPEC.md#privacy)). Keep
-patient/customer data (names, phone numbers, ids) out of agent names, tool args and final text.
+### Privacy
 
-**Backend services are strict by default.** `agentglow.watch(app=..., broker=...)` keeps only an allow-list of
-structural attributes (route templates, methods, status codes, hosts, DB system / operation / collection, message
-destination / id / size, model names, token counts) before a span leaves your process: no request / response bodies
-or headers, no URLs or paths with ids, no SQL / Mongo statements, no message payloads, no prompts or tool args, no
-exception messages or stack traces, no credentials in connection strings; emails, phone numbers and long digit ids
-left in names are replaced. The server applies the transport part again as a backstop for every source (OTLP too).
+**Every ingestion path** drops identity attributes (emails, user / account / org ids) and raw user prompts and redacts
+secret-looking values before anything reaches the stream ([docs/SPEC.md](docs/SPEC.md#privacy)). Keep
+patient / customer data (names, phone numbers, ids) out of agent names, tool args and final text.
+
+**Backend mode is strict by default.** `agentglow.watch(app=..., broker=..., mcp=...)` and `agentglow/node` keep only
+an allow-list of structural attributes before a span leaves your process:
+
+| Kept | Dropped |
+|---|---|
+| route templates, methods, status codes, peer host:port | request / response bodies and headers (cookies, authorization) |
+| DB system / operation / collection | SQL / Mongo statements, connection string credentials |
+| message destination / id / size | message payloads |
+| model names, token counts | prompts, completions, tool args and results |
+| `agentglow.*` labels (primitives: numbers, ids, enums) | URLs and paths with ids, query strings, client IPs, user agents |
+| `error.type` | exception messages and stack traces |
+
+Emails, phone numbers and long digit ids left in names are replaced. The server applies the transport part again as a
+backstop for every source (OTLP too). Tune it per process:
 ```python
 agentglow.watch(app=app, broker=broker,
-                ignore=["GET /v1/models"],          # plus health checks + idle Redis polls by default
-                allow_message_keys=["attempt"],     # message fields you want to see
-                scrub=lambda attrs: attrs)          # your own last-pass hook
-agentglow.mark_error("vendor timeout")              # swallowed failure: the request still shows red
+                ignore=["GET /v1/models", "/internal/*"],  # never exported, with children; added to health checks + idle Redis polls
+                allow_message_keys=["attempt"],             # message fields you want to see
+                allow=["tenant.tier"],                      # extra attribute keys (fnmatch)
+                scrub=lambda attrs: attrs)                  # your own last-pass hook
 ```
-`privacy="standard"` exports spans unchanged. Full allow-list: [docs/SPEC.md "Privacy" > "Backend mode"](docs/SPEC.md#backend-mode-watchapp--broker--mcp).
+`privacy="standard"` exports spans unchanged (the server backstop still runs). Full allow-list:
+[docs/SPEC.md "Privacy" > "Backend mode"](docs/SPEC.md#backend-mode-watchapp--broker--mcp).
 
 **Your own prompts (opt-in, local only):** `npx agentglow setup --capture-prompts` (or `AGENTGLOW_CAPTURE_PROMPTS=1
 agentglow serve --host 127.0.0.1`) keeps your Claude Code prompts, secrets redacted and capped at 2000 chars, so the
@@ -207,7 +276,17 @@ shared server never receives prompts. `npx agentglow status` shows `prompts: cap
 | fast decisions (Jev, Laya, an LLM judge, code guards; `agentglow.decision`) | route fans with per-option %, guard gates (a red `BLOCKED` on a deny), check rings, with provider and latency |
 | many decisions per second | per-agent halos (`jev 42/s · 3% deny · p50 38 ms`); only denies, flips and unsure guards pop individually |
 | orders (`agentglow.order`) | BUY / SELL chips, dashed `paper` when dry-run |
-| backend services (FastAPI, FastStream, any OTel HTTP / messaging spans, `POST /v1/events`) | one long-lived agent per service with a `42 req/s · 2% 5xx · p50 18ms` halo, comets along publish -> consume edges labelled with the topic, background tasks as subagents, DB / cache / HTTP calls as resource nodes, errors flash red |
+| backend services (FastAPI, FastStream, FastMCP, Node, any OTel HTTP / messaging spans, `POST /v1/events`) | one long-lived node per service with a `42 req/s · 2% 5xx · p50 18ms` halo (`×3` for replicas), background tasks as subagents, DB / cache / HTTP calls as resource nodes, errors flash red; the services stay expanded next to your agent runs |
+| messages between services | comets along publish -> consume edges labelled with the topic; a failed publish fizzles out half way |
+| long requests (open past `AGENTGLOW_JOB_MS`, 3 s) | a job node ringing its service with a running timer (`orders · 27s`), owning the calls inside it; `N in flight` on the halo |
+| business jobs (`agentglow.job(id)`) | one `job:<id>` node that moves from API to worker, with state, attempts, retries and dead letters |
+| sessions (WebSockets, calls, chats) | a live node with a timer, turns and gauges, ending with its outcome |
+| stages / progress | status line under the node (`pick + pack`, `42% · ETA 8s`) and a progress arc |
+| pools / inference | worker and GPU pool resources (`2/3 busy · wait 12ms`), model resources with RTF |
+| broker backlog | a ribbon between producer and consumer (`orders 42 · lag 1.2s`), thicker with depth |
+| gates / capacity / rejections | lock badge (`locked · 2 left`), `cap 3/4`, amber flash for a 429 / 503 that is backpressure |
+| lifecycle | tint ring: blue loading / warming, amber degraded, grey draining, red fatal; a pulse on restart |
+| business events | chips next to the node, like orders |
 
 **Agents are always the center.** Graphs, databases and MCP servers are side resources that only show up when used, and the camera
 frames everything calmly: one smooth zoom per burst of spawns, never a jittery in-and-out. Stats sit in a slim top bar;
@@ -223,15 +302,16 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 
 | | |
 |---|---|
-| [quickstart](examples/quickstart) | 40-line deepagents researcher with two subagents - the "just show me" path |
+| [deepagents-hatchet: trading desk](examples/deepagents-hatchet#flagship-trading-desk) | **flagship**: a whole trading backend + its agents in one scene: a FastAPI market `feed` streaming ticks over a Redis stream (FastStream) to a Hatchet worker, a paper trading desk (one durable child run per market, rate-capped Jev gates, deepagents analysts, human Approve / Reject, kill switch), an MCP market-data server with auto-discovered backends (`watch(mcp=)`), a Postgres paper ledger |
+| [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up`; also incident triage, vendor consolidation (long-running), churn brief |
+| [fastapi-faststream](examples/fastapi-faststream) | your backend: a FastAPI orders API, a webhooks service, a FastStream worker on a Redis stream, a FastMCP server and a support agent, exercising every primitive (sessions, jobs with retries and dead letters, pools, backlog, gates, fallbacks); one `watch(...)` line each, no LLM key needed |
+| [node-proxy](examples/node-proxy) | a Node backend-for-frontend in front of the FastAPI orders API, one `agentglow/node` line; traces join across Node and Python |
+| [quickstart](examples/quickstart) | 40-line deepagents researcher with two subagents, the "just show me" path |
 | [langgraph](examples/langgraph) | LangGraph supervisor with worker agents (`langgraph-supervisor` works too) |
 | [openai-agents](examples/openai-agents) | OpenAI Agents SDK: handoffs + agent-as-tool |
 | [custom-loop](examples/custom-loop) | no framework: a hand-written voice-call loop traced with the manual API (runs without an LLM key) |
-| [fastapi-faststream](examples/fastapi-faststream) | your backend: a FastAPI orders API + a FastStream worker on a Redis stream + a FastMCP server, a load script; one `watch(...)` line each (no LLM key needed) |
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
-| [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts) - no code |
-| [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |
-| [deepagents-hatchet: trading desk](examples/deepagents-hatchet#flagship-trading-desk) | **flagship**: a whole trading backend + its agents in one scene: a FastAPI market `feed` streaming ticks over a Redis stream (FastStream) to a Hatchet worker, a paper trading desk (one durable child run per market, rate-capped Jev gates, deepagents analysts, human gates, kill switch), an MCP server with auto-discovered backends, Postgres / Redis paper fills |
+| [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts), no code |
 
 Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
 
@@ -239,7 +319,7 @@ Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropi
 
 Run **one** `agentglow serve` per environment (Docker image / k8s Deployment with `replicas: 1`) and point every app
 pod at it: `agentglow.watch("http://agentglow:8100")`. If it's down, your app is unaffected - spans are just dropped.
-Turn on the ingest key and viewer tokens (see [Security & multi-user](#security--multi-user)).
+Turn on the ingest key and viewer tokens (see [Security & multi-user](#security--privacy)).
 
 ## Develop
 
