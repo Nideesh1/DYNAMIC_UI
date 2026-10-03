@@ -143,6 +143,29 @@ export function stopLoginItem({ platform = process.platform } = {}) {
   }
 }
 
+/** argv that restarts the login-item server now (kills the running one first); null on Windows (two schtasks calls). */
+export function restartArgv({ platform = process.platform, uid = process.getuid?.() ?? 0 } = {}) {
+  if (platform === "darwin") return ["launchctl", "kickstart", "-k", `gui/${uid}/${LABEL}`];
+  if (platform === "win32") return null;
+  return ["systemctl", "--user", "restart", "agentglow"];
+}
+
+/** Restart the login-item server (e.g. setup installed a newer version while an older one runs). Never throws. */
+export function restartLoginItem({ platform = process.platform } = {}) {
+  try {
+    if (platform === "win32") {
+      try { execFileSync("schtasks", ["/end", "/tn", TASK_NAME], { stdio: "pipe" }); } catch { /* not running */ }
+      execFileSync("schtasks", ["/run", "/tn", TASK_NAME], { stdio: "pipe" });
+    } else {
+      const [cmd, ...args] = restartArgv({ platform });
+      execFileSync(cmd, args, { stdio: "pipe" });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Best-effort check: is the autostart entry currently installed? Never throws. */
 export function hasAutostart({ platform = process.platform, home = os.homedir() } = {}) {
   try {
