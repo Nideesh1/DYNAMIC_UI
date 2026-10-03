@@ -62,6 +62,10 @@ Orders (docs/SPEC.md "Orders"): a span with `agentglow.event` = order (+ `agentg
 
 MCP backend spans (`agentglow.mcp.*`, from the MCP server's process) can reach the server before the caller's tool span:
 one whose parent is not known yet is held until the parent arrives, and dropped after ORPHAN_MS (never a run of its own).
+
+Backend services (docs/SPEC.md "Backend services", backend.py): a request (HTTP SERVER span) or handled message (CONSUMER
+span) is a pulse on its service's long-lived agent; DB / cache / HTTP CLIENT spans inside it (or inside an MCP tool span
+that names no backend) light up resources. Only those spans are handled there: agent-only traces map as before.
 """
 from __future__ import annotations
 
@@ -73,6 +77,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from .backend import Services, entry_kind
 from .hv import DecisionRate
 from .scrub import SKILL_KEY, decision_text, session_title, skill_name, step_name
 
@@ -255,6 +260,11 @@ class Span:
     skill: str | None = None  # `agentglow.skill` name once its skill start was emitted
     wait: tuple | None = None  # (reason, until ms | None, declared by the app) while this span is a wait
     wait_step: str | None = None  # step span the wait belongs to
+    kind: str | None = None  # OTel span kind (server, client, producer, consumer, internal) when known
+    svc: str | None = None  # service agent id: this span is (inside) a service request (backend.py)
+    entry: str | None = None  # the request / handled-message span itself: http | rpc | message | event
+    backend: tuple | None = None  # backend client call emitted (owner, server, tool, resource, kind); () = rate-limited
+    mcp_host: str | None = None  # nearest MCP tool span naming no backend (its CLIENT spans become its backends)
 
 
 @dataclass
@@ -294,6 +304,7 @@ class Run:
     last_wait: tuple | None = None  # (end ts, step span id, reason, until) of the last wait that ended
     parked: dict = field(default_factory=dict)  # step name -> (reason, until): ended with its wait (evicted)
     park_pending: dict = field(default_factory=dict)  # parked step name -> park time, its `waiting` not emitted yet
+    service: bool = False  # backend services run: long-lived, never completes when its spans close
 
 
 def _hatchet_workflow(a: dict) -> str:
@@ -319,6 +330,7 @@ class Mapper:
         self.step_runs: dict[str, str] = {}  # hatchet.step_run_id -> run id (Hatchet wait spans carry only that)
         self.orphans: dict[str, dict] = {}  # MCP backend span id -> {"start", "end", "parent", "ts"} until its parent shows
         self.hv = DecisionRate()  # high-volume decisions: per-agent aggregation + global cap (hv.py)
+        self.svc = Services(self)  # backend services (backend.py)
 
     def _note_scope(self, s: "Span") -> None:
         if s.run in self.scopes:
@@ -391,9 +403,12 @@ class Mapper:
 
     def tick(self, now_ms: int) -> list[dict]:
         out: list[dict] = self.hv.flush(now_ms)
+        out += self.svc.tick(now_ms)
         for k in [k for k, o in self.orphans.items() if now_ms - o["ts"] >= ORPHAN_MS]:  # parent never came: drop
             self.orphans.pop(k)
         for r in list(self.runs.values()):
+            if r.service:
+                continue
             for step, t in [(k, t) for k, t in r.park_pending.items() if now_ms - t >= PARK_SHOW_MS]:
                 del r.park_pending[step]
                 reason, until = r.parked[step]
@@ -406,6 +421,13 @@ class Mapper:
     def _start(self, d: dict, out: list) -> Span:
         a = dict(d.get("attributes") or {})
         parent = self.spans.get(d.get("parent_span_id") or "")
+        entry = entry_kind(d)
+        if entry:  # a service's request / handled message (backend.py): a pulse on the service agent
+            s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a,
+                     self.svc.run_id(a.get("agentglow.scope") or a.get("agentglow.run.scope")), kind=d.get("kind"))
+            self.spans[s.id] = s
+            self.svc.start_entry(s, entry, d, out)
+            return s
         up = a.get("hatchet.parent_workflow_run_id")  # child workflow run: shown inside its (still open) parent run
         wf = a.get("hatchet.workflow_run_id")
         if wf and not (up and str(up) in self.runs) and parent is not None and parent.run != str(wf) and \
@@ -415,7 +437,10 @@ class Mapper:
             up = a["hatchet.parent_workflow_run_id"] = parent.run
         run_id = str((up if up and str(up) in self.runs else None) or a.get("hatchet.workflow_run_id") or a.get("agentglow.run.id")
                      or self.step_runs.get(str(a.get("hatchet.step_run_id") or "")) or (parent.run if parent else d["trace_id"]))
-        s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a, run_id)
+        s = Span(d["span_id"], d["trace_id"], d.get("parent_span_id"), d.get("name") or "span", d.get("start_time_ms") or 0, a, run_id,
+                 kind=d.get("kind"))
+        if parent is not None:
+            s.svc, s.mcp_host = parent.svc, parent.mcp_host
         self.spans[s.id] = s
         self._note_scope(s)
         if len(self.spans) > 200_000:  # memory guard for spans that never end
@@ -470,6 +495,8 @@ class Mapper:
         elif self._is_tool(s) or (parent and parent.name == "tools"):
             self._tool_start(s, out, ts)
         self._mcp_call(s, out, ts)
+        if s.svc or s.mcp_host:
+            self.svc.child_start(s, out)
         self._skill_start(s, out, ts)
         if "agentglow.final" in a:
             self._final(s.run, a["agentglow.final"], out, ts)
@@ -493,6 +520,11 @@ class Mapper:
         s.status = d.get("status") or "unset"
         a, ts, run = s.attrs, s.end, self.runs.get(s.run)
         failed = s.status == "error"
+        if s.entry:
+            s.name = d.get("name") or s.name  # e.g. FastAPI renames "GET" to "GET /orders/{id}" once routed
+            self.svc.end_entry(s, out)
+            self.svc.span_ended(s)
+            return
 
         # late classification: attributes that only exist at end (OpenInference)
         if not s.agent and not s.container and not s.alias and not s.team:
@@ -544,7 +576,9 @@ class Mapper:
             out.append(ev)
         if s.skill:
             out.append({"type": "skill", "run_id": s.run, "id": self._owner(s, out), "name": s.skill, "status": "end", "ts": ts})
-        if a.get("db.system"):
+        if s.backend is not None:
+            self.svc.child_end(s, out)
+        elif a.get("db.system"):
             self._graph(s, out, ts)
         if a.get(DECISION_KEY) and not s.agent:
             self._decision(s, out, ts)
@@ -575,7 +609,9 @@ class Mapper:
         if s.step and not run:
             out.append({"type": "step", "run_id": s.run, "step": s.step, "status": "failed" if failed else "done", "ts": ts})
 
-        if run:
+        if run and run.service:
+            self.svc.span_ended(s)
+        elif run:
             run.open = max(0, run.open - 1)
             run.last_ts = max(run.last_ts, ts)
             if s.step:
@@ -635,6 +671,8 @@ class Mapper:
         v = a.get("agentglow.agent")
         if v:
             return s.name if v is True or str(v).lower() == "true" else str(v)
+        if s.svc and s.name == "fastapi.background_task":  # a service's background task: a short-lived subagent
+            return str(a.get("code.function.name") or "background_task").rsplit(".", 1)[-1] or "background_task"
         if a.get("gen_ai.operation.name") == "invoke_agent":
             return str(a.get("gen_ai.agent.name") or s.name.removeprefix("invoke_agent ").strip() or "agent")
         meta = _json(a.get("metadata")) or {}
@@ -662,7 +700,7 @@ class Mapper:
             if cur.agent:
                 return cur.id, via_tool
             if cur.alias:
-                return cur.alias, via_tool
+                return cur.alias, via_tool or cur.entry is not None  # an agent in a service request is its subagent
             if cur.team:  # an agent graph inside a langgraph-supervisor team is the supervisor's subagent
                 return cur.team, True
             via_tool = via_tool or cur.tool or cur.name == "task"
@@ -676,8 +714,11 @@ class Mapper:
         if host is not None and host.team and (self.agents.get(host.team) or Agent("", "")).name == name:
             s.alias = host.team  # the supervisor's next turn: same agent instance, no new spawn
             return
-        s.agent, s.candidate = name, None
         parent, via_tool = self._ancestor_agent(s)
+        if parent and s.svc and parent in self.svc.svcs and not self.svc.admit_task(parent, s.id):
+            s.alias = parent  # the service already runs MAX_TASKS tasks: this one shows as the service itself
+            return
+        s.agent, s.candidate = name, None
         run = self.runs.get(s.run)
         st = self._step_span(s)
         child = st is not None and st.attrs.get("hatchet.parent_workflow_run_id") == s.run
@@ -1008,6 +1049,7 @@ class Mapper:
         kind = str(a.get("agentglow.mcp.resource_kind") or "api")
         kind = kind if kind in RESOURCE_KINDS else "api"
         s.mcp = (server, tool, str(res) if res else None, kind)
+        s.mcp_host = None if res else s.id  # no backend named: its CLIENT spans become its backends (backend.py)
         key = (server, s.mcp[2])
         if key not in self.mcp_known:
             self.mcp_known.add(key)

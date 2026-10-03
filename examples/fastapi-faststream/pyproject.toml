@@ -1,0 +1,12 @@
+[project]
+name = "agentglow-example-fastapi-faststream"
+version = "0.1.0"
+description = "AgentGlow backend services: a FastAPI orders API + a FastStream worker on a Redis stream (+ a FastMCP server), watched live in 3D"
+requires-python = ">=3.10"
+dependencies = ["agentglow[fastapi,faststream,redis,mcp]", "uvicorn>=0.27", "redis>=5"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agentglow = { workspace = true }  # in this repo; outside it, the published `agentglow` from PyPI is used

@@ -81,6 +81,16 @@ class Hub:
         becomes the scope of the runs it builds."""
         return self._ingest_cc(self.claude_code.handle(payload, now_ms), scope)
 
+    def ingest_events(self, items: list, now_ms: int, scope: str | None = None) -> int:
+        """Flat events (POST /v1/events, agentglow.pulse()): docs/SPEC.md "Backend services" > "Flat events".
+        Scrubbed like spans (backend.Services.flat runs scrub_attrs on each event)."""
+        n = 0
+        for it in items:
+            if isinstance(it, dict):
+                self.publish(self.mapper.svc.flat(it, now_ms, scope))
+                n += 1
+        return n
+
     def tick(self, now_ms: int) -> None:
         self.publish(self.mapper.tick(now_ms))
         self._ingest_cc(self.claude_code.tick(now_ms))
@@ -148,8 +158,11 @@ class Hub:
         """What a new viewer needs: MCP topology + events of runs still in progress (finished runs would just flash),
         restricted to what its filter allows. `after`: a reconnecting viewer's last seq (this epoch), only newer events."""
         done = {e["run_id"] for e in self.buffer if e.get("type") == "run" and e.get("status") in ("completed", "failed")}
-        return list(self.topology.values()) + [e for e in self.buffer if e.get("seq", 0) > after and e.get("run_id") not in done
-                                               and f.match(e, self.scope_of)]
+        # long-lived services: their run start / spawn may have left the bounded buffer, the viewer still needs them
+        first = self.buffer[0].get("seq", 0) if self.buffer else self.seq + 1
+        svc = [e for e in self.mapper.svc.snapshot() if after < e.get("seq", 0) < first and f.match(e, self.scope_of)]
+        return list(self.topology.values()) + svc + [e for e in self.buffer if e.get("seq", 0) > after and e.get("run_id") not in done
+                                                     and f.match(e, self.scope_of)]
 
     def resume_after(self, last_event_id: str) -> int:
         """Last-Event-ID -> seq to replay after (0 = everything: none sent, or from another server instance / restart)."""
