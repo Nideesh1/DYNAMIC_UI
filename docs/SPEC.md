@@ -40,7 +40,7 @@ Optional React embed: `npm i agentglow` → `<AgentScene theme="neural" source="
   - `GET /live/stream` - SSE world events. On connect: replay MCP topology + events of runs still in progress. Keepalive 15s.
     Filtered per viewer by scope/run (see "Scopes & auth").
     Replay: the server keeps the last `AGENTGLOW_BUFFER` events (default 5000) plus a bounded snapshot of every open
-    run's state-carrying events: its `run started` (+ latest `renamed`, `final`, step states), per live agent its
+    run's state-carrying events: its `run started` (+ latest `renamed`, `idle`, `final`, step states), per live agent its
     `spawn` and the latest of each state still open (`agent` status / waiting, a `skill` started and not ended, a
     running `stage`, `session` start + latest phase, `job`, locked `gate`, `lifecycle`, `progress`, `capacity`,
     `metric`, open `deferred`), plus live backend services and job nodes. An agent's entries are dropped on its
@@ -178,7 +178,7 @@ any ancestor (HatchetInstrumentor attrs), else `agentglow.run.id`, else the trac
 | Skill | hint attribute `agentglow.skill` = skill name on any span (usually a tool span); set by the Claude Code hooks adapter for the `Skill` tool (`tool_input.skill`, e.g. `hello`, `plugin:skill`), by the traces-only path from the `claude_code.tool` span's `skill_name` (needs `OTEL_LOG_TOOL_DETAILS=1`), and by the manual `skill()` | `skill` `status: "start"` when the span starts (or at end if the attribute only arrives then), `"end"` when it ends, on the owning agent; the normal `tool` event is still emitted (Claude Code `Skill` args preview = the skill name only) |
 | Framework skills (inferred) | deepagents: TOOL `read_file` whose `input.value` `file_path` matches `^(.*/)?<skill>/SKILL\.md$` (skill = parent dir); confirmed against `skills_metadata[].path` from a `SkillsMiddleware.before_agent` span's `output.value` when known (cached per `thread_id`, else trace: it is emitted only on a thread's first turn); `offset > 0` re-reads, `write_file`/`edit_file`/`ls`/`glob`/`grep` never count. OpenAI Agents SDK: TOOL `load_skill` (`input.value.skill_name`); TOOL `shell`/`exec_command`/`local_shell`/`bash`/`run_shell_command` whose command strings READ a skill file (`cat`/`sed`/`head`/`less`/`more`/`bat` ... `<skill>/SKILL.md`, no redirect, not `sed -i`; a trailing `-<32 hex>` mount suffix is stripped); hosted shell: an LLM span's `output.value` `output[]` items `type: shell_call` (`action.commands`, once per `call_id`; `input.value` is never scanned) | same `skill` start/end on the owning agent (tool span start/end; hosted shell: both at the LLM span's end); one use per (agent, skill) (deepagents also per path) |
 | Decision | `agentglow.decision` ∈ `choice`, `score`, `noul` on any span (see "Decisions") | `decision` on span end, on the owning agent; the span itself is never an LLM / tool |
-| Claude Code hooks | `POST /v1/claude-code` (`claude_code.py`) | one prompt = one run (topic `Claude Code · <cwd basename>`); main agent `claude`; `Agent` tool → `task` + subagent named after its type; tools; 0-token thinking pulses |
+| Claude Code hooks | `POST /v1/claude-code` (`claude_code.py`) | one prompt = one run (topic `Claude Code · <cwd basename>`); main agent `claude`; `Agent` tool → `task` + subagent named after its type; tools; 0-token thinking pulses. A session with no hook / trace for `AGENTGLOW_SESSION_IDLE_MIN` minutes (default 10; 30 = the pre-0.4 behavior) was abandoned (terminal closed, no SessionEnd): it closes like SessionEnd and its run completes with `reason: "abandoned"`; the next hook of that session id (any event) opens a new run (`<session>:<n+1>`) at once |
 | Claude Code traces | `claude_code.*` spans on `/v1/traces` (`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`) | `interaction` = run + `claude`; each `agent_id` = subagent (`subagent: true`, parent `claude`, linked via its `Agent` tool's `tool.execution` span; named from `query_source_safe` `agent.<kind>.<type>`, else `subagent <id>`); `llm_request` = `llm` with `tokens_in` = input + cache_creation + cache_read (all prompt tokens), `tokens_out`, `tokens_cached` = cache_read, `tokens_cache_write` = cache_creation; `tool` = tool event (`tool.blocked_on_user`/`tool.execution` skipped). Merged with hooks when `session.id` is a hooks session: no new agents/tools, token `llm` events go to the hooks agents (by `agent_id`; a re-delivered `llm_request` span id is ignored), hook pulses muted, exits wait up to 15 s for the agent's trace spans |
 Unknown spans are kept only for tree/ownership. Ids: agent instance id = span id (stable string).
 
@@ -673,6 +673,14 @@ an agent (main or subagent) started / finished using a skill.
 writes + cache reads); `tokens_out` = completion tokens. `llm` may carry `tokens_cached` (the cache-read subset of
 `tokens_in`) and `tokens_cache_write` (the cache-write subset) when known; they are never added on top of `tokens_in`.
 `run` may carry status `renamed` (same `run_id`, new `topic`, e.g. a Claude Code session /rename): relabel only.
+`run` status `idle` = `{"type": "run", "run_id", "status": "idle", "since": <epoch ms of its last event>, "ts"}`: an open
+agent run published no event for `AGENTGLOW_IDLE_DIM_MIN` minutes (server env, float, default 3, `0` = off; server-side
+so every viewer agrees). Never for the backend services run, nor while the run is quiet on purpose: an open wait
+(`agentglow.wait` / approval / sleep, Hatchet durable wait), a parked step, or an open `session` / `job` primitive span.
+`run` status `active` (`{"type": "run", "run_id", "status": "active", "ts"}`) goes out right before the next event of an
+idle run. Both are relabel / dim only (the run stays open); replay keeps an open run's latest `idle`. Viewers dim an idle
+run's agents and show `idle · 4m` on its label. `completed` / `failed` may carry `reason` (`abandoned`: a Claude Code
+session closed for silence, below).
 `step` may carry status `waiting` with `reason` (wait label) and optional `until` (epoch ms); `agent` status `waiting` may
 carry the same `reason` / `until` (see "Waits and long-running runs").
 

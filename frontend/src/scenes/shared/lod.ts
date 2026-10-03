@@ -18,7 +18,7 @@
  * shows the "grouped: N runs in K clusters · show all" chip (Hud.tsx).
  */
 import { useSyncExternalStore } from "react";
-import { RUN_COLORS, energy, hash01, isLive, linger, world, type AgentType, type Instance, FADE_MS } from "./world";
+import { RUN_COLORS, energy, hash01, isDismissed, isLive, linger, world, type AgentType, type Instance, FADE_MS } from "./world";
 
 /** Number of visual lanes runs are grouped by (most themes lay runs out by slot % 6). */
 export const LOD_LANES = 6;
@@ -133,13 +133,15 @@ export const laneOfInstance = (i: Instance) => laneOfRun(i.run);
 
 /** Should this instance be drawn individually? (always true when not grouped) */
 export function isExpanded(i: Instance | string): boolean {
-  if (!lod.grouped) return true;
   const inst = typeof i === "string" ? world.instances.get(i) : i;
+  if (inst && isDismissed(inst.run)) return false; // hidden by this viewer ("×"): drawn neither alone nor clustered
+  if (!lod.grouped) return true;
   if (!inst) return false;
   return expRuns.has(inst.run);
 }
 /** Should this run's own visuals (label, aura, lane line…) be drawn? */
 export function isRunExpanded(runId: string): boolean {
+  if (isDismissed(runId)) return false;
   return !lod.grouped || expRuns.has(runId);
 }
 /** Show this agent's label? (all when not grouped; else top-K busiest expanded + selected) */
@@ -195,6 +197,7 @@ function recompute(now: number) {
   runAlive.clear();
   let alive = 0;
   for (const i of world.instances.values()) {
+    if (isDismissed(i.run)) continue;
     // budget weight: finished (dimmed) agents still belong to their run's view but cost little room
     runCount.set(i.run, (runCount.get(i.run) ?? 0) + (i.doneAt && !i.exitAt ? DONE_WEIGHT : 1));
     if (isLive(i)) {
@@ -341,6 +344,7 @@ function stats() {
   }
   let expAgents = 0;
   for (const i of world.instances.values()) {
+    if (isDismissed(i.run)) continue;
     if (expRuns.has(i.run)) {
       if (isLive(i)) expAgents++;
       continue;

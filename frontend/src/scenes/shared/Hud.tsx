@@ -10,7 +10,7 @@ import { decisionTint } from "./kit/DecisionGlyph";
 import { haloHover } from "./kit/HighVolume";
 import { fmtMs, gaugeText, jobStateText, metricText } from "./prims";
 import { PrimDetail } from "./PrimPanel";
-import { STALE_TEXT, decisionText, getInstance, jobText, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloLatency, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
+import { STALE_TEXT, dismissRun, dismissedRuns, idleText, isDismissed, isIdle, undismissRuns, decisionText, getInstance, jobText, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloLatency, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -28,7 +28,8 @@ function short(id: string) {
 export function describe(e: WorldEvent): string {
   switch (e.type) {
     case "run":
-      return `run ${e.status} · ${e.topic}`;
+      if (!("topic" in e)) return `run ${e.status} · ${world.runs.get(e.run_id)?.topic ?? shortRun(e.run_id)}`;
+      return `run ${e.status}${e.reason ? ` (${e.reason})` : ""} · ${e.topic}`;
     case "step":
       return e.status === "waiting" ? `step ${e.step} ${waitLabel({ reason: e.reason || "wait", until: e.until ?? 0 })} · ${shortRun(e.run_id)}` : `step ${e.step} ${e.status} · ${shortRun(e.run_id)}`;
     case "spawn":
@@ -262,8 +263,9 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const seenAt = seen.current ? w.ticker.indexOf(seen.current) : -1;
   const unseen = side.tab === "events" && !side.collapsed ? 0 : seenAt >= 0 ? seenAt : w.ticker.length;
 
-  const alive = [...w.instances.values()].filter(isLive);
-  const runs = [...w.runs.values()].filter((r) => r.status === "started" && !isStale(r));
+  const alive = [...w.instances.values()].filter((i) => isLive(i) && !isDismissed(i.run));
+  const runs = [...w.runs.values()].filter((r) => r.status === "started" && !isStale(r) && !isDismissed(r.id));
+  const hidden = dismissedRuns();
   const graph = w.stats.graphReads + w.stats.graphWrites;
   const close = () => {
     selectInstance(null);
@@ -299,6 +301,11 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
             <button className={`hud-info${info ? " on" : ""}`} onClick={() => setInfo((v) => !v)} aria-label="What am I looking at?" aria-expanded={info} title="What am I looking at?">
               i
             </button>
+            {hidden.length > 0 && (
+              <button className="hud-badge hud-hidden" onClick={() => undismissRuns(hidden)} title="Runs you hid with ×: click to show them again">
+                {hidden.length} hidden · show
+              </button>
+            )}
             {w.mode === "live" && canRun && <RunButton />}
             {!embedded && (
               <select className="hud-theme" value={here} aria-label="Theme" onChange={(e) => (location.href = `/${e.target.value}${qs}`)}>
@@ -1046,6 +1053,7 @@ function AgentList() {
   }, [all]);
   const needle = q.trim().toLowerCase();
   const rows = all
+    .filter((i) => !isDismissed(i.run))
     .filter((i) => (types.size ? types.has(i.name) : true))
     .filter((i) => matchesStatus(i, status))
     .filter((i) => (run ? i.run === run : true))
@@ -1192,8 +1200,16 @@ function AgentDetail({ i }: { i: Instance }) {
         </div>
       </dl>
       <section>
-        <h4>Run</h4>
+        <h4 className="ap-runhead">
+          Run
+          {run && run.workflow !== "services" && (
+            <button className="ap-dismiss" onClick={() => dismissRun(run.id)} aria-label="Hide this run" title="Hide this run for you (comes back on new activity)">
+              ×
+            </button>
+          )}
+        </h4>
         <p>{run ? run.topic : i.run}</p>
+        {run && isIdle(run) && <p className="ap-idle">{idleText(run)}</p>}
         {run && isStale(run) && <p className="ap-wait">{STALE_TEXT}</p>}
         {run && runWaitText(run) && <p className="ap-wait">{runWaitText(run)}</p>}
         {run && chips && (
