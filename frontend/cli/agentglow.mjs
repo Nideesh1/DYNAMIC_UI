@@ -10,11 +10,11 @@ import {
   baseUrl, claudeSettings, installSettingsFile, isOurHook, pluginIdsIn, readState, startHookCommand, uninstallSettingsFile,
 } from "./lib/settings.mjs";
 import {
-  clearLock, installCliCopy, localBase, readLock, readPid, removeCliCopies, serveForeground, spawnStarter,
+  clearLock, installCliCopy, localBase, readLock, readPid, refreshStaleServer, removeCliCopies, serveForeground, spawnStarter,
   startBackground, stopServer,
 } from "./lib/server.mjs";
 import { which } from "./lib/uv.mjs";
-import { hasAutostart, installAutostart, launchdLogPath, loginPath, removeAutostart, stopLoginItem } from "./lib/autostart.mjs";
+import { hasAutostart, installAutostart, launchdLogPath, loginPath, removeAutostart, restartLoginItem, stopLoginItem } from "./lib/autostart.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const here = path.dirname(SELF);
@@ -180,8 +180,12 @@ async function cmdSetup(o) {
     const wantLogin = o.autostart === true || (o.autostart !== false && process.platform !== "win32");
     const login = wantLogin ? installLoginItem(port) : null;
     try {
-      if (login?.startsNow && (await waitHealthy(port, 120000))) console.log(`AgentGlow server is running on port ${port} (managed by ${login.method}).`);
-      else {
+      if (login?.startsNow && (await waitHealthy(port, 120000))) {
+        // an older server may still hold the port (the login item's new `start` then exits at once): replace it
+        const r = await refreshStaleServer({ port, expected: VERSION, deps: { restart: () => restartLoginItem() } });
+        if (r === "stale") console.error(`agentglow: warning: an older AgentGlow server still runs on port ${port}; stop it: npx agentglow stop${portFlag(port)}`);
+        console.log(`AgentGlow server ${r === "down" ? "is starting" : "is running"} on port ${port} (managed by ${login.method}).`);
+      } else {
         const s2 = await startLocal(port);
         console.log(s2.started ? `Started the AgentGlow server on port ${port}.` : `AgentGlow server already running on port ${port}.`);
       }

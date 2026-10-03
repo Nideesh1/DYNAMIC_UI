@@ -54,6 +54,10 @@ export function describe(e: WorldEvent): string {
       return `${short(e.id)} · ${e.n} decisions in ${Math.round(e.window_ms)}ms`;
     case "order":
       return `${short(e.id)} · ${orderText(e)}${e.reason ? ` · ${e.reason}` : ""}`;
+    case "request":
+      return `${short(e.id)} · ${e.name}${e.status !== undefined ? ` ${e.status}` : ""}${e.error ? " ERROR" : ""} · ${Math.round(e.ms)}ms`;
+    case "service_stats":
+      return `${short(e.id)} · ${e.n} requests in ${Math.round(e.window_ms)}ms`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
     case "chat":
@@ -302,6 +306,11 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
                 <span className="hud-stat" title={`orders: ${w.orders.n} · paper ${w.orders.paper} · rejected/cancelled ${w.orders.rejected}`}>
                   orders <b>{w.orders.n}</b>
                   {w.orders.paper > 0 && w.orders.paper === w.orders.n ? " (paper)" : w.orders.paper > 0 ? ` (${w.orders.paper} paper)` : ""}
+                </span>
+              )}
+              {w.stats.requests > 0 && (
+                <span className={`hud-stat${w.stats.errors > 0 ? " is-deny" : ""}`} title={`backend requests / handled messages: ${w.stats.requests} · errors ${w.stats.errors}`}>
+                  <b>{fmtK(w.stats.requests)}</b> req{w.stats.errors > 0 ? ` · ${fmtK(w.stats.errors)} err` : ""}
                 </span>
               )}
               {w.stats.mcpCalls > 0 && (
@@ -855,7 +864,7 @@ function AgentDetail({ i }: { i: Instance }) {
       )}
       {i.hv && (
         <section>
-          <h4>Decision rate {hvActive(i) ? "" : "(quiet)"}</h4>
+          <h4>{i.hv.unit ? `Traffic${i.svcN ? ` · ${i.svcN} handled${i.svcErr ? `, ${i.svcErr} errors` : ""}` : ""}` : "Decision rate"} {hvActive(i) ? "" : "(quiet)"}</h4>
           <p className="ap-hv">{haloText(i.hv)} · p95 {Math.round(i.hv.p95)}ms</p>
           <div className="ap-hv-bar" title="outcome mix (smoothed)">
             {i.hv.seg.map((f, k) =>

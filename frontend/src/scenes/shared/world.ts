@@ -48,6 +48,11 @@ export type WorldEvent =
   | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; ms: number; ts: number; hv?: boolean; why?: string }
   // high-volume mode: one per agent per ~1 s window (docs/SPEC.md "Decisions" > "High volume")
   | { type: "decision_stats"; run_id: string; id: string; window_ms: number; n: number; by_purpose: DecisionStatsByPurpose; p50_ms: number; p95_ms: number; providers: Record<string, number>; ts: number }
+  // backend services (docs/SPEC.md "Backend services"): a request / handled message on the service agent `id`;
+  // `hv` = an error sent individually while the service's requests are aggregated in `service_stats`
+  | { type: "request"; run_id: string; id: string; service: string; name: string; kind: "http" | "rpc" | "message" | "event"; status?: number; error: boolean; ms: number; ts: number; hv?: boolean }
+  // one per service per ~1 s window: requests, errors, status classes ("2xx": n), latency, top routes
+  | { type: "service_stats"; run_id: string; id: string; service: string; window_ms: number; n: number; errors: number; codes: Record<string, number>; p50_ms: number; p95_ms: number; routes: Record<string, number>; ts: number }
   // an order action (paper when dry_run) by agent instance `id`
   | { type: "order"; run_id: string; id: string; side: string; qty: number; price?: number; status: OrderStatus; instrument: string; dry_run: boolean; reason?: string; ts: number }
   // MCP tool call from an agent instance to an external MCP server ("call" when sent, "result" when it returns)
@@ -71,7 +76,7 @@ const ORDERS_KEPT = 8;
  * High-volume decisions, per agent (from `decision_stats`): smoothed (EMA) so the halo and its label never flicker.
  * `seg` = smoothed share of each outcome category, in HALO_CATS order.
  */
-export type HvStats = { at: number; bump: number; bumpDeny: boolean; rate: number; deny: number; p50: number; p95: number; seg: number[]; provider: string; n: number; windows: number };
+export type HvStats = { at: number; bump: number; bumpDeny: boolean; rate: number; deny: number; p50: number; p95: number; seg: number[]; provider: string; n: number; windows: number; unit?: "req" | "msg" };
 /** outcome categories of a decision halo arc: allow, deny, check yes, check no, route result slots 0..3, other */
 export const HALO_CATS = ["allow", "deny", "yes", "no", "r0", "r1", "r2", "r3", "other"] as const;
 export const HALO_COLORS = ["#4ade80", "#fb3b5c", "#5eead4", "#fbbf24", "#60a5fa", "#c084fc", "#f472b6", "#facc15", "#94a3b8"];
@@ -96,11 +101,13 @@ export function haloMix(h: HvStats | null, now = performance.now()): number {
 }
 /** the agent is in high-volume mode now (recent decision_stats) */
 export const hvActive = (i: Instance, now = performance.now()) => !!i.hv && now - i.hv.at < HV_QUIET_MS + HV_FADE_MS;
-/** `jev 42/s · 3% deny · p50 38ms` */
+/** `jev 42/s · 3% deny · p50 38ms`; a service: `42 req/s · 2% 5xx · p50 18ms` (`msg/s · err` for a consumer) */
 export function haloText(h: HvStats): string {
   const r = h.rate >= 10 ? Math.round(h.rate) : Math.round(h.rate * 10) / 10;
   const d = h.deny * 100;
-  return `${h.provider} ${r}/s · ${d > 0 && d < 1 ? "<1" : Math.round(d)}% deny · p50 ${Math.round(h.p50)}ms`;
+  const dt = `${d > 0 && d < 1 ? "<1" : Math.round(d)}%`;
+  if (h.unit) return `${r} ${h.unit}/s · ${dt} ${h.unit === "req" ? "5xx" : "err"} · p50 ${Math.round(h.p50)}ms`;
+  return `${h.provider} ${r}/s · ${dt} deny · p50 ${Math.round(h.p50)}ms`;
 }
 /** One decision on one agent; `at` (performance.now()) = when its glyph starts (staggered so a burst reads one by one). */
 export type DecisionUse = Omit<Extract<WorldEvent, { type: "decision" }>, "type" | "run_id" | "id"> & {
@@ -240,6 +247,9 @@ export type Instance = {
   chat: { role: "user" | "agent"; text: string }[];
   /** what it is waiting on (status "waiting" with a reason), else null */
   wait: Wait | null;
+  /** backend service agent: requests / errors handled (from `service_stats`) */
+  svcN?: number;
+  svcErr?: number;
 };
 /** A declared wait: what it waits on ("approval", "sleep", an event key) and its deadline / wake-up (epoch ms, 0 = none). */
 export type Wait = { reason: string; until: number };
@@ -396,7 +406,7 @@ export const world = {
   /** MCP tool name -> the server it was last called on (a guard deny on that tool flashes the line to it) */
   mcpTools: new Map<string, string>(),
   ticker: [] as WorldEvent[],
-  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0, decisions: 0, decisionMs: 0 },
+  stats: { runs: 0, spawned: 0, llmCalls: 0, tokens: 0, toolCalls: 0, graphReads: 0, graphWrites: 0, mcpCalls: 0, decisions: 0, decisionMs: 0, requests: 0, errors: 0 },
   /** decisions per provider (jev / laya / llm ...): count + summed latency (HUD chip tooltip) */
   decisionProviders: new Map<string, { n: number; ms: number }>(),
   /** session-wide decision rate (HUD): last full second's rate, deny share, p50/p95, 60 s sparkline (per second) */
@@ -500,7 +510,7 @@ function admitHv(d: DecisionUse, now: number): boolean {
   return true;
 }
 /** high-frequency event types: no immediate React notify (the HUD catches up within HUD_NOTIFY_MS) */
-const QUIET = new Set(["decision", "decision_stats", "order"]);
+const QUIET = new Set(["decision", "decision_stats", "order", "request", "service_stats"]);
 const HUD_NOTIFY_MS = 250;
 let dirty = false;
 let notifiedAt = 0;
@@ -508,7 +518,7 @@ let notifiedAt = 0;
 export function apply(ev: WorldEvent) {
   const now = performance.now();
   // stats windows are not log lines (the halo shows them); everything else goes to the event log
-  if (ev.type !== "mcp_register" && ev.type !== "decision_stats") {
+  if (ev.type !== "mcp_register" && ev.type !== "decision_stats" && ev.type !== "service_stats") {
     world.ticker.unshift(ev);
     if (world.ticker.length > 60) world.ticker.length = 60;
   }
@@ -778,6 +788,57 @@ export function apply(ev: WorldEvent) {
       }
       break;
     }
+    case "request": {
+      // an individual request pulses the service, an error flashes its halo red (counted by `service_stats`)
+      const i = world.instances.get(ev.id);
+      if (!i) break;
+      i.pulse = Math.max(i.pulse * Math.exp(-((now - i.pulseAt) / 1000) * 2.2), ev.error ? 1.2 : 0.7);
+      i.pulseAt = now;
+      if (ev.error) {
+        if (!i.hv) i.hv = { at: now, bump: 0, bumpDeny: false, rate: 0, deny: 0, p50: ev.ms, p95: ev.ms, seg: SEG_SCRATCH.map(() => 0), provider: "", n: 0, windows: 0, unit: ev.kind === "http" ? "req" : "msg" };
+        i.hv.bump = now;
+        i.hv.bumpDeny = true;
+      }
+      break;
+    }
+    case "service_stats": {
+      // every request is counted here (the backend sends a window for each second with requests)
+      world.stats.requests += ev.n;
+      world.stats.errors += ev.errors;
+      const i = world.instances.get(ev.id);
+      if (!i || ev.n <= 0) break;
+      const c = ev.codes;
+      const http = Object.keys(c).length > 0;
+      const ok = http ? (c["1xx"] ?? 0) + (c["2xx"] ?? 0) + (c["3xx"] ?? 0) : ev.n - ev.errors;
+      const seg = SEG_SCRATCH.fill(0);
+      // halo arc: ok green, 5xx / errors red, 4xx amber, anything else grey
+      seg[0] = ok;
+      seg[1] = http ? c["5xx"] ?? 0 : ev.errors;
+      seg[3] = c["4xx"] ?? 0;
+      seg[8] = Math.max(0, ev.n - seg[0] - seg[1] - seg[3]);
+      const tot = seg.reduce((x, y) => x + y, 0) || 1;
+      const rate = (ev.n * 1000) / Math.max(1, ev.window_ms);
+      const deny = ev.errors / ev.n;
+      const unit = http ? "req" : "msg";
+      const h = i.hv;
+      if (!h || now - h.at > HV_QUIET_MS + HV_FADE_MS || !h.unit) {
+        i.hv = { at: now, bump: h?.bump ?? 0, bumpDeny: h?.bumpDeny ?? false, rate, deny, p50: ev.p50_ms, p95: ev.p95_ms, seg: seg.map((x) => x / tot), provider: unit, n: ev.n, windows: h ? h.windows : 0, unit };
+      } else {
+        const k = HV_ALPHA;
+        h.at = now;
+        h.rate += (rate - h.rate) * k;
+        h.deny += (deny - h.deny) * k;
+        h.p50 += (ev.p50_ms - h.p50) * k;
+        h.p95 += (ev.p95_ms - h.p95) * k;
+        for (let j = 0; j < seg.length; j++) h.seg[j] += (seg[j] / tot - h.seg[j]) * k;
+        h.n = ev.n;
+        h.unit = unit;
+        h.windows++;
+      }
+      i.svcN = (i.svcN ?? 0) + ev.n;
+      i.svcErr = (i.svcErr ?? 0) + ev.errors;
+      break;
+    }
     case "order": {
       world.orders.n++;
       if (ev.dry_run) world.orders.paper++;
@@ -857,7 +918,7 @@ export function apply(ev: WorldEvent) {
       break;
     }
   }
-  const id = ev.type === "decision_stats" ? null : "id" in ev ? ev.id : ev.type === "message" ? ev.from_id : null;
+  const id = ev.type === "decision_stats" || ev.type === "service_stats" ? null : "id" in ev ? ev.id : ev.type === "message" ? ev.from_id : null;
   if (id) {
     const i = world.instances.get(id);
     if (i) {
