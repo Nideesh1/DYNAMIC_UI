@@ -26,7 +26,7 @@ import interUrl from "./fonts/inter-latin-500-normal.woff";
 import monoUrl from "./fonts/jetbrains-mono-latin-500-normal.woff";
 import { fit } from "./kit/fit";
 import { LabelScope, labels, newLabelEntry, registerLabel, unregisterLabel, type LabelKind } from "./kit/labels";
-import { STALE_TEXT, isStale, runWait, slotLabel, stepChips, useWorld, waitLabel, type Run } from "./world";
+import { STALE_TEXT, idleText, isIdle, isStale, runWait, slotLabel, stepChips, useWorld, waitLabel, type Run } from "./world";
 
 /** kit/dim.ts skips this subtree (the label fades itself) */
 const NO_DIM = { kitNoDim: true };
@@ -231,7 +231,8 @@ function flattenLine(line: LabelLine | null | undefined, upper: boolean, tmp: TH
 
 /**
  * The shared run sub-line "hatchet · plan › research › write" as colored segments (current step bright, done
- * steps light, queued dim; a step paused in a wait amber, followed by " · waiting on approval"). Runs without Hatchet steps show `fallback` [working, finished, failed?].
+ * steps light, queued dim; a step paused in a wait amber, followed by " · waiting on approval"; an idle run ends with
+ * " · idle · 4m"). Runs without Hatchet steps show `fallback` [working, finished, failed?] ("idle · 4m" while idle).
  */
 export function runStepsLine(
   run: Run,
@@ -240,7 +241,8 @@ export function runStepsLine(
 ): LabelLine {
   const finished = run.status !== "started";
   if (isStale(run)) return [{ text: STALE_TEXT, color: WAIT_COLOR }];
-  if (!run.hasSteps) return [{ text: finished ? (run.status === "failed" ? (fallback[2] ?? "failed") : fallback[1]) : fallback[0], color: c.base }];
+  const idle = !finished && isIdle(run) ? idleText(run) : "";
+  if (!run.hasSteps) return [{ text: finished ? (run.status === "failed" ? (fallback[2] ?? "failed") : fallback[1]) : idle || fallback[0], color: c.base }];
   const segs: LabelSeg[] = [{ text: "hatchet · ", color: c.base }];
   const { shown, more } = stepChips(run);
   shown.forEach((st, i) => {
@@ -252,6 +254,7 @@ export function runStepsLine(
   if (more) segs.push({ text: ` +${more}`, color: c.base });
   const w = finished ? null : runWait(run);
   if (w) segs.push({ text: ` · ${waitLabel(w)}`, color: WAIT_COLOR });
+  else if (idle) segs.push({ text: ` · ${idle}`, color: c.base });
   return segs;
 }
 /** a step paused in a wait (approval, durable sleep) */

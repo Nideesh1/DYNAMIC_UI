@@ -11,7 +11,7 @@
 import * as THREE from "three";
 import { clusterOf, isExpanded, isRunExpanded, LOD_LANES, lod } from "../lod";
 import { alt, jit } from "../spread";
-import { graphMix, graphShown, isDone, mcpWanted, roleScale, world, type AgentType, type Instance } from "../world";
+import { IDLE_DIM, graphMix, graphShown, isDone, isIdle, mcpWanted, roleScale, world, type AgentType, type Instance } from "../world";
 import { fit, fitTick } from "./fit";
 import { radial, type LayoutPreset, type Point2, type PresetCtx, type Slot2 } from "./presets";
 import { kit, nextUid, planePoint, reduced, type KitAgent, type KitBackend, type KitMcp, type KitRun } from "./state";
@@ -798,7 +798,9 @@ export function kitTick(now = performance.now()) {
     }
     const r = a.run;
     a.pos.copy(r.origin).addScaledVector(r.side, a.eu - r.cu).addScaledVector(r.axis, a.ev - r.cv);
-    a.live.copy(a.pos);    const dw = isDone(a.inst) ? 1 : 0;
+    a.live.copy(a.pos);
+    // finished agents dim fully, an idle run's agents part way (server `run idle`)
+    const dw = isDone(a.inst) ? 1 : isIdle(a.run.run) ? IDLE_DIM : 0;
     a.dim = reduced ? dw : a.dim + (dw - a.dim) * Math.min(1, dt / DIM_S);
   }
   for (const lane of activeLanes) {

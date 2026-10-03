@@ -26,7 +26,10 @@ export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "fai
 
 // ------------------------------------------------------------------ event contract (v2)
 export type WorldEvent =
-  | { type: "run"; run_id: string; status: "started" | "renamed" | "completed" | "failed"; topic: string; workflow: string; ts: number }
+  | { type: "run"; run_id: string; status: "started" | "renamed" | "completed" | "failed"; topic: string; workflow: string; ts: number; reason?: string }
+  // idle: an open run silent for AGENTGLOW_IDLE_DIM_MIN (not waiting on purpose); `since` = its last event (epoch ms).
+  // active: it produced an event again (sent right before that event)
+  | { type: "run"; run_id: string; status: "idle" | "active"; since?: number; ts: number }
   // "waiting": the step is paused in a wait (approval, durable sleep, ...); `reason` = what it waits on, `until` = epoch ms
   // declared waits also carry the drawer fields (WaitExtra: kind "approval", title, details, url, because)
   | ({ type: "step"; run_id: string; step: StepName; status: "running" | "waiting" | "done" | "failed"; reason?: string; until?: number; ts: number } & WaitExtra)
@@ -372,6 +375,8 @@ export type Run = {
   final: string;
   /** performance.now() of the run's latest event (stale detection) */
   lastEventAt: number;
+  /** server-declared idle since (epoch ms of its last event), 0 = active (isIdle / idleText) */
+  idleSince: number;
 };
 /** Which of the 3 scene slots a step is drawn in (see STEP_SLOTS). */
 export function stepSlot(r: Run, step: StepName): number {
@@ -405,6 +410,67 @@ const hhmm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit"
  * STALE_GRACE_MS (e.g. its worker restarted mid-run: nobody will resolve the wait or end the run). */
 export const STALE_QUIET_MS = 20_000;
 export const STALE_GRACE_MS = 15_000;
+/** Idle run (server `run` status "idle"): its agents are dimmed (IDLE_DIM) and its label says "idle · 4m". */
+export const IDLE_DIM = 0.55;
+export const isIdle = (r: Run | undefined): boolean => !!r && r.status === "started" && r.idleSince > 0;
+export function idleText(r: Run, wall = Date.now()): string {
+  const s = Math.max(0, (wall - r.idleSince) / 1000);
+  return `idle · ${s < 60 ? `${Math.floor(s)}s` : `${Math.floor(s / 60)}m`}`;
+}
+
+// ------------------------------------------------------------------ per-viewer dismissed runs
+/** Runs this viewer hid ("×"): run id -> Date.now() at dismissal, kept in localStorage. The world keeps applying
+ * their events (state stays right), lod.ts just never draws them; any new activity after the dismissal shows the run
+ * again (replayed older events do not). */
+const DISMISS_KEY = "agentglow.dismissedRuns";
+const DISMISS_MAX = 200;
+const dismissed: Map<string, number> = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(DISMISS_KEY) ?? "{}");
+    if (v && typeof v === "object") return new Map(Object.entries(v).filter((e): e is [string, number] => typeof e[1] === "number"));
+  } catch {
+    /* no storage (private window, blocked, SSR): nothing remembered */
+  }
+  return new Map<string, number>();
+})();
+function saveDismissed() {
+  try {
+    localStorage.setItem(DISMISS_KEY, JSON.stringify(Object.fromEntries(dismissed)));
+  } catch {
+    /* not remembered across reloads, still hidden now */
+  }
+}
+export const isDismissed = (runId: string | undefined): boolean => !!runId && dismissed.has(runId);
+/** Hide a run (and its agents) for this viewer. */
+export function dismissRun(runId: string) {
+  dismissed.delete(runId);
+  dismissed.set(runId, Date.now());
+  while (dismissed.size > DISMISS_MAX) dismissed.delete(dismissed.keys().next().value!);
+  saveDismissed();
+  const sel = world.selected ? world.instances.get(world.selected) : undefined;
+  if (sel?.run === runId) world.selected = null;
+  notify();
+}
+/** Show the given runs again (all dismissed ones when omitted). */
+export function undismissRuns(ids?: string[]) {
+  for (const id of ids ?? [...dismissed.keys()]) dismissed.delete(id);
+  saveDismissed();
+  notify();
+}
+/** Dismissed runs that are still in the world (the HUD's "N hidden" chip). */
+export const dismissedRuns = (): string[] => [...world.runs.keys()].filter((id) => dismissed.has(id));
+function undismissOnActivity(ev: WorldEvent) {
+  const id = (ev as { run_id?: string }).run_id;
+  const at = id ? dismissed.get(id) : undefined;
+  if (at === undefined) return;
+  // not activity: the run's own idle / end / relabel notices
+  if (ev.type === "run" && ev.status !== "started" && ev.status !== "active") return;
+  if (typeof ev.ts === "number" && ev.ts > at) {
+    dismissed.delete(id!);
+    saveDismissed();
+  }
+}
+
 export function isStale(r: Run | undefined, now = performance.now(), wall = Date.now()): boolean {
   if (!r || r.status !== "started" || now - r.lastEventAt < STALE_QUIET_MS) return false;
   const overdue = (w: Wait | null | undefined) => !!w && !!w.until && wall - w.until > STALE_GRACE_MS;
@@ -680,6 +746,7 @@ export function apply(ev: WorldEvent) {
   const now = performance.now();
   const evRun = "run_id" in ev ? world.runs.get(ev.run_id as string) : undefined;
   if (evRun) evRun.lastEventAt = now;
+  if ("run_id" in ev && dismissed.size) undismissOnActivity(ev);
   // stats windows are not log lines (the halo shows them); everything else goes to the event log
   if (ev.type !== "mcp_register" && ev.type !== "decision_stats" && ev.type !== "service_stats" && ev.type !== "drives" && !PRIM_NO_LOG.has(ev.type) && !(ev.type === "session" && ev.phase === "progress")) {
     world.ticker.unshift(ev);
@@ -691,6 +758,8 @@ export function apply(ev: WorldEvent) {
       if (ev.status === "renamed") {
         const r = world.runs.get(ev.run_id);
         if (r) r.topic = ev.topic; // e.g. a Claude Code session /rename: label only, run state untouched
+      } else if (ev.status === "idle" || ev.status === "active") {
+        if (evRun) evRun.idleSince = ev.status === "idle" ? ev.since || ev.ts || Date.now() : 0;
       } else if (ev.status === "started") {
         const slot = freeSlot();
         world.runs.set(ev.run_id, {
@@ -712,6 +781,7 @@ export function apply(ev: WorldEvent) {
           lastDone: "",
           final: "",
           lastEventAt: now,
+          idleSince: 0,
         });
         world.stats.runs++;
       } else {
@@ -1173,6 +1243,7 @@ function expireSkills(i: Instance, now: number) {
 }
 
 const staleRuns = new Set<string>();
+let idleKey = "";
 let staleCheckAt = 0;
 
 export function tick(now = performance.now()) {
@@ -1180,10 +1251,14 @@ export function tick(now = performance.now()) {
   if (now - staleCheckAt > 1000) {
     // stale runs (isStale) appear without any event: notify the HUD / labels when one flips
     staleCheckAt = now;
+    let idle = "";
     for (const r of world.runs.values()) {
       const st = isStale(r, now);
       if (st !== staleRuns.has(r.id)) (st ? staleRuns.add(r.id) : staleRuns.delete(r.id)), (changed = true);
+      if (isIdle(r)) idle += `${r.id} ${idleText(r)}\n`;
     }
+    // "idle · 4m" labels count up without events
+    if (idle !== idleKey) (idleKey = idle), (changed = true);
   }
   if (dirty && now - notifiedAt >= HUD_NOTIFY_MS) changed = true;
   runsWithInstances.clear();
