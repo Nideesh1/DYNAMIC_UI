@@ -223,6 +223,24 @@ OTel instrumentations are installed. Extras: `agentglow[fastapi]`, `[faststream]
 `[mcp]`. `service_name` (else OTEL_SERVICE_NAME, the FastMCP name, the FastAPI title, `api` / `worker`) names the
 process's service, also when an existing provider's resource has none. Example: `examples/fastapi-faststream/`.
 
+**Node.js.** `watch(opts)` from the npm package's `agentglow/node` entry (`frontend/src/node.ts`, server-only, no
+React / three.js; OpenTelemetry packages are optional peer dependencies): a `NodeTracerProvider` (resource
+`service.name` = `service`, `service.instance.id` = a random UUID) registered globally with the W3C `traceparent` /
+baggage propagator, `@opentelemetry/instrumentation-http` (incoming requests = SERVER spans; off under Next.js,
+`NEXT_RUNTIME` set, which makes its own `BaseServer.handleRequest` SERVER spans) and `instrumentation-undici` (global
+`fetch` = CLIENT spans + `traceparent`, so a Python service watched with `watch(app=...)` continues the trace), batched
+to `<url>/v1/traces` as OTLP/HTTP JSON (`x-api-key` = `ingestKey`). Idempotent per url; `spanProcessor()` gives the same
+scrubbing exporter for apps with their own provider. Privacy, applied to every span before export: `"strict"` (default)
+keeps only method, route, status, peer `server.address` / `server.port` (taken from the URL's host when missing),
+`url.scheme`, protocol, `error.type`, rpc / messaging / db system, destination and operation names, `next.route`,
+selected `gen_ai.*` names and token counts, and `agentglow.*`; `"standard"` keeps other attributes too. Both drop
+headers, bodies, cookies, query strings, raw URLs / targets / paths, identity and client-address keys, statements and
+`exception.*`; span events (strict) and status messages are dropped. A server span's `http.route` = the route
+template, else the id-normalized path (`/orders/:id`; Next.js `/route` suffix dropped), and its name =
+`METHOD route`; URLs in other span names keep their origin (userinfo stripped) with an id-normalized path. The optional
+`scrub(attrs, {name, kind})` hook runs next; last, a regex backstop on every string (secrets, emails, phone numbers,
+long ids, query strings, userinfo). Example: `examples/node-proxy/`.
+
 ### Flat events
 `POST /v1/events`: one JSON object or an array (max 5000), for anything without OTel. Same ingest key, scope (`?scope=`,
 `X-AgentGlow-Scope`, or a `scope` field per event) and privacy scrub as `/v1/live`; ids and timing are the server's

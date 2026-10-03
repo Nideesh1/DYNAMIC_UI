@@ -12,7 +12,8 @@
     "deepagents",
     "react",
     "observability",
-    "react-three-fiber"
+    "react-three-fiber",
+    "nodejs"
   ],
   "license": "MIT",
   "repository": {
@@ -38,6 +39,12 @@
       "types": "./dist/types/pulse.d.ts",
       "import": "./dist/pulse.js",
       "default": "./dist/pulse.js"
+    },
+    "./node": {
+      "types": "./dist/types/node.d.ts",
+      "node": "./dist/node.js",
+      "import": "./dist/node.js",
+      "default": "./dist/node.js"
     },
     "./style.css": "./dist/style.css",
     "./package.json": "./package.json"
@@ -69,7 +76,37 @@
   },
   "peerDependencies": {
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": ">=0.200.0 <1",
+    "@opentelemetry/instrumentation": ">=0.200.0 <1",
+    "@opentelemetry/instrumentation-http": ">=0.200.0 <1",
+    "@opentelemetry/instrumentation-undici": ">=0.10.0 <1",
+    "@opentelemetry/resources": "^2.0.0",
+    "@opentelemetry/sdk-trace-node": "^2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": {
+      "optional": true
+    },
+    "@opentelemetry/exporter-trace-otlp-http": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-http": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-undici": {
+      "optional": true
+    },
+    "@opentelemetry/resources": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-trace-node": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",
@@ -79,13 +116,20 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/instrumentation": "^0.222.0",
+    "@opentelemetry/instrumentation-http": "^0.222.0",
+    "@opentelemetry/instrumentation-undici": "^0.32.0",
+    "@opentelemetry/resources": "^2.11.0",
+    "@opentelemetry/sdk-trace-node": "^2.11.0",
     "@types/node": "^22.20.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.0.0",
-    "typescript": "^5.6.0",
-    "vite": "^6.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
   }
 }

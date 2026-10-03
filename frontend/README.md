@@ -90,6 +90,78 @@ export default function Live() {
 }
 ```
 
+## Node.js services
+
+`agentglow/node` (server-only, no React / three.js) puts a Node service (Next.js backend-for-frontend, Express,
+Fastify, plain `http`) into the scene, like Python's `agentglow.watch(app=...)`. The OpenTelemetry packages are
+optional peer dependencies, installed only by the apps that use this entry:
+
+```bash
+npm i agentglow @opentelemetry/api @opentelemetry/sdk-trace-node @opentelemetry/resources @opentelemetry/exporter-trace-otlp-http @opentelemetry/instrumentation @opentelemetry/instrumentation-http @opentelemetry/instrumentation-undici
+```
+
+```ts
+import { watch } from "agentglow/node";
+
+watch({ service: "web-bff", url: "http://localhost:8100" }); // before the server starts listening
+```
+
+- Incoming HTTP requests = the service's requests (req/s halo, 5xx flashes), named `METHOD route`.
+- Outgoing `fetch` / `http` calls = resource nodes, and carry a W3C `traceparent`: a Python API watched with
+  `agentglow.watch(app=...)` continues the same trace.
+- Spans go to `<url>/v1/traces` (OTLP/HTTP JSON); `ingestKey` (or env `AGENTGLOW_API_KEY`) is sent as `x-api-key`.
+
+| Option | Default | |
+|---|---|---|
+| `service` | env `OTEL_SERVICE_NAME`, else `node-app` | the service (agent) name |
+| `url` | env `AGENTGLOW_URL`, else `http://localhost:8100` | AgentGlow server |
+| `ingestKey` | env `AGENTGLOW_API_KEY` | server `--ingest-key` |
+| `privacy` | `"strict"` | `"strict"`: attribute allowlist. `"standard"`: other attributes kept, the drops and backstop below still apply |
+| `scrub` | | `(attrs, { name, kind }) => attrs`: your own rule, after the built-in ones |
+| `incoming` | `true` (`false` under Next.js) | trace incoming HTTP requests |
+| `ignorePaths` | `[]` | incoming paths not traced (`"/healthz"`, regexes) |
+
+`watch()` returns `{ flush(), shutdown() }` (call `flush()` before a short script exits) and is idempotent.
+
+**Privacy (strict).** Only method, route, status, peer host:port, messaging / db / rpc system names, `next.route` and
+`agentglow.*` attributes leave the process. Never bodies, headers (cookies, authorization), query strings, URL
+userinfo, client IPs, user agents, span events or error messages. Paths without a route template are id-normalized
+(`/orders/123` -> `/orders/:id`; numbers, UUIDs, hex, long tokens, emails). A regex backstop replaces emails, phone
+numbers, long ids and secrets in every remaining string.
+
+**Next.js** (`instrumentation.ts` at the project root, or in `src/`):
+
+```ts
+export async function register() {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    (await import("agentglow/node")).watch({ service: "web-bff" });
+  }
+}
+```
+
+Next.js makes its own request spans (`GET /api/orders/[id]`), so `watch()` does not add a second one; `fetch` calls in
+route handlers, server actions and server components carry the `traceparent` into your API. The edge runtime is not
+traced. Already using OpenTelemetry (`@vercel/otel`, `NodeSDK`)? Add `spanProcessor()` from `agentglow/node` to its
+`spanProcessors` instead of calling `watch()`.
+
+**Express / Fastify:**
+
+```js
+import { watch } from "agentglow/node";
+import express from "express";
+
+watch({ service: "web-bff", ignorePaths: ["/healthz"] });
+const app = express();
+app.use("/api", async (req, res) => {
+  const r = await fetch(`http://localhost:8191${req.url}`); // traceparent added for you
+  res.status(r.status).type("json").send(await r.text());
+});
+app.listen(8190);
+```
+
+Example: [examples/node-proxy](../examples/node-proxy) (a Node proxy in front of the FastAPI orders example).
+`agentglow/pulse` stays for hand-sent events without OpenTelemetry.
+
 ## Props
 
 | Prop        | Type                  | Default    | What it does |

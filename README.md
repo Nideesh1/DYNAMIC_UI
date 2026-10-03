@@ -90,7 +90,10 @@ show on (or under) their service. Pure agent traces look exactly as before. No P
 curl -X POST localhost:8100/v1/events -H 'content-type: application/json' \
   -d '{"service": "checkout", "event": "request", "name": "POST /pay", "status": 200, "duration_ms": 42}'
 ```
-JS / TS: `import { pulse } from "agentglow/pulse"; await pulse("http://localhost:8100", { service: "checkout", name: "POST /pay" })`.
+Node.js (Next.js backend-for-frontend, Express, Fastify): `import { watch } from "agentglow/node"; watch({ service: "web-bff" })`
+traces requests and `fetch` calls, and links them into your Python API's traces
+([frontend/README.md](frontend/README.md#nodejs-services), [examples/node-proxy](examples/node-proxy)).
+JS / TS events: `import { pulse } from "agentglow/pulse"; await pulse("http://localhost:8100", { service: "checkout", name: "POST /pay" })`.
 See [examples/fastapi-faststream](examples/fastapi-faststream) and docs/SPEC.md "Backend services".
 
 ### 5. The full demo stack (Hatchet + deepagents + MCP + FalkorDB)
