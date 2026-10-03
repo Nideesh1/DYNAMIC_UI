@@ -1,5 +1,5 @@
-"""trading_desk - a fast PAPER trading desk on synthetic weather event-contract markets (inspired by exchanges like
-Kalshi), orchestrated by Hatchet, with deepagents doing the slow thinking and fast Jev gates doing the rest.
+"""trading_desk - a fast PAPER trading desk on synthetic weather event-contract markets (the shape of an event-contract
+exchange), orchestrated by Hatchet, with deepagents doing the slow thinking and fast Jev gates doing the rest.
 No exchange connection anywhere: every order is `dry_run` (would_place / rejected).
 
   open_session   task: session state + N synthetic markets with toy order books (app/markets.py)
@@ -399,14 +399,16 @@ WEATHER = "You read the weather model for one market with weather_forecast and r
 
 # market_data MCP tools (app/market_mcp_server.py), loaded once per worker process
 _market_tools: dict | None = None
+_market_lock = asyncio.Lock()
 
 
 async def market_tools() -> dict:
     global _market_tools
-    if _market_tools is None:
-        from .config import MARKET_MCP_URL
-        from .tools import load_mcp_tools
-        _market_tools = {t.name: t for t in await load_mcp_tools(market_mcp.SERVER, MARKET_MCP_URL)}
+    async with _market_lock:  # analysts start together: load once
+        if _market_tools is None:
+            from .config import MARKET_MCP_URL
+            from .tools import load_mcp_tools
+            _market_tools = {t.name: t for t in await load_mcp_tools(market_mcp.SERVER, MARKET_MCP_URL)}
     return _market_tools
 
 
@@ -452,20 +454,22 @@ async def analyst_for(v: ViewInput):
         """The weather model's probability for this market's event (synthetic NWS forecast)."""
         return await via_mcp("forecast", {"ticker": v.ticker, "model_p": v.forecast_p})
 
+    # graph tools: the FalkorDB client is blocking, so the query runs in a thread (never on the worker's event loop,
+    # which also ticks every market and heartbeats Hatchet)
     @tool
-    def correlated_markets() -> dict:
+    async def correlated_markets() -> dict:
         """Markets correlated with this one (same weather family or city) from the knowledge graph, with the desk's
         latest fair view on each (if any)."""
         with graph_span("read", dg.CORRELATED_Q) as span:
-            found = dg.correlated(v.ticker)
+            found = await asyncio.to_thread(dg.correlated, v.ticker)
             set_nodes(span, [dg.market_node(v.ticker), *[r["market"] for r in found]])
         return {"market": dg.market_node(v.ticker), "correlated": found}
 
     @tool
-    def save_view(fair_p: float, confidence: float, rationale: str) -> dict:
+    async def save_view(fair_p: float, confidence: float, rationale: str) -> dict:
         """Save your fair view of this market to the knowledge graph (the desk's other analysts read it)."""
         with graph_span("write", dg.VIEW_Q) as span:
-            nodes = dg.write_view(v.ticker, fair_p, confidence, rationale)
+            nodes = await asyncio.to_thread(dg.write_view, v.ticker, fair_p, confidence, rationale)
             set_nodes(span, nodes)
         return {"saved": nodes[0]}
 

@@ -96,8 +96,8 @@ the `approval` step is not remembered: approve once it is waiting. Timings: `DEM
 ## Trading desk (paper, fast)
 
 Hatchet workflow `trading_desk` (`app/trading.py`, synthetic markets in `app/markets.py`) is a fast **paper** trading
-desk on made-up weather event contracts (YES pays 100c if it rains in NYC, ...; the shape of event-contract exchanges
-like Kalshi). It shows the other end of the spectrum from vendor consolidation: tens of fast decisions per second,
+desk on made-up weather event contracts (YES pays 100c if it rains in NYC, ...; the shape of an event-contract
+exchange). It shows the other end of the spectrum from vendor consolidation: tens of fast decisions per second,
 with the slow deepagents thinking branching off only when it is worth it. HUD picker: **Trading desk (paper, fast)**.
 
 | Step | Runs as | What it does |

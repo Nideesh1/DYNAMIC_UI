@@ -21,9 +21,9 @@ type Body = Omit<Dec, "type" | "run_id" | "id" | "ts">;
 
 const CAP = 20;
 const MARKETS = [
-  "KXHIGHNY", "KXHIGHCHI", "KXHIGHMIA", "KXHIGHAUS", "KXHIGHDEN", "KXHIGHLAX", "KXHIGHPHIL", "KXRAINNYC", "KXSNOWDEN", "KXHIGHSEA",
-  "KXCPI", "KXCPICORE", "KXPAYROLLS", "KXUNRATE", "KXFEDDEC", "KXGDP", "KXJOBLESS", "KXPCE", "KXRETAIL", "KXISM",
-  "KXNBAGAME1", "KXNBAGAME2", "KXNHLGAME1", "KXMLBGAME1", "KXMLBGAME2", "KXNFLSPRD", "KXNBATOT", "KXNHLTOT", "KXMLBTOT", "KXWNBA1",
+  "temp-nyc-hi", "temp-chi-hi", "temp-mia-hi", "temp-aus-hi", "temp-den-hi", "temp-lax-hi", "temp-phl-hi", "rain-nyc", "snow-den", "temp-sea-hi",
+  "cpi", "cpi-core", "payrolls", "unemployment", "fed-decision", "gdp", "jobless-claims", "pce", "retail-sales", "ism",
+  "nba-game-1", "nba-game-2", "nhl-game-1", "mlb-game-1", "mlb-game-2", "nfl-spread", "nba-total", "nhl-total", "mlb-total", "wnba-game-1",
 ];
 const STRATS = ["hold", "quote", "take"];
 const HALT_S = 6;
@@ -76,7 +76,7 @@ export function runHfSimulator(): () => void {
   let halted = false;
   const run = "hf-desk";
   const desk = `${run}:desk`;
-  emit({ type: "run", run_id: run, status: "started", topic: `Kalshi desk · ${nMarkets} markets (paper)`, workflow: "market_desk", ts: ts() });
+  emit({ type: "run", run_id: run, status: "started", topic: `Trading desk · ${nMarkets} markets (paper)`, workflow: "market_desk", ts: ts() });
   emit({ type: "spawn", run_id: run, id: desk, agent: "desk", parent_id: null, ts: ts() });
   emit({ type: "agent", run_id: run, id: desk, status: "thinking", ts: ts() });
   desks.push({ id: desk, run, next: performance.now() + 2000 + rnd() * 3000 });
@@ -133,7 +133,7 @@ export function runHfSimulator(): () => void {
       const rejected = rnd() < 0.07;
       const side = rnd() < 0.5 ? "yes" : "no";
       later(30 + rnd() * 120, () =>
-        emit({ type: "order", run_id: m.run, id: m.id, side, qty: 1 + Math.floor(rnd() * 9), price: r3(0.05 + Math.round(rnd() * 90) / 100), status: rejected ? "rejected" : "would_place", instrument: `${m.name}-26OCT02`, dry_run: true, reason: rejected ? "post-only would cross" : `edge ${2 + Math.floor(rnd() * 6)}c`, ts: ts() }),
+        emit({ type: "order", run_id: m.run, id: m.id, side, qty: 1 + Math.floor(rnd() * 9), price: r3(0.05 + Math.round(rnd() * 90) / 100), status: rejected ? "rejected" : "would_place", instrument: `${m.name.toUpperCase()}-42`, dry_run: true, reason: rejected ? "post-only would cross" : `edge ${2 + Math.floor(rnd() * 6)}c`, ts: ts() }),
       );
     }
   };

@@ -1,8 +1,8 @@
 """Synthetic weather event-contract markets for the trading_desk demo (app/trading.py). PAPER ONLY: made-up markets,
 a toy order book, no exchange connection anywhere.
 
-Prices are in cents (1..99), like a YES contract that pays 100 if the event happens (the shape of event-contract
-exchanges like Kalshi). Each market has a hidden true probability that drifts, a mid that slowly finds it, a spread
+Prices are in cents (1..99), like a YES contract that pays 100 if the event happens (the shape of an event-contract
+exchange). Each market has a hidden true probability that drifts, a mid that slowly finds it, a spread
 and a depth at the best price. Plain Python: the state is serializable, so a Hatchet task can pass it around.
 
 Also here: `sim_p`, the free local stub ("jev-sim") that answers the desk's gate questions when the real Jev rate cap
