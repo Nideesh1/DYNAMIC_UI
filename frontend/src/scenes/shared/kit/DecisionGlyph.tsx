@@ -9,7 +9,8 @@
  *  - guard deny (noul, purpose "guard", result no): a red shockwave ring out of the agent, a big red X inside a
  *    shut ring, the agent's line to the target tool's MCP server flashes red, label `BLOCKED rollback_deploy · 97%`.
  *    One at a time on screen (BIG_DENY_MS): a deny while another one plays gets a compact mark instead (a small red
- *    X badge on the agent, no label) and flashes the agent's decision halo red. Desk-wide guards (`scope: "global"`)
+ *    X badge on the agent, no label) and flashes the agent's decision halo red. At most LABEL_CAP decision labels
+ *    show at once across all agents (a full deny always gets its label); the other glyphs play without text. Desk-wide guards (`scope: "global"`)
  *    never get a glyph: world.ts turns them into one halted state on the desk (kit/Halt.tsx);
  *  - guard allow: a small green tick and a small label (never distracting);
  *  - check (any other noul): a progress ring that fills to p (green yes, amber yes below 60%, red no),
@@ -56,13 +57,26 @@ const loseLen = (p: number) => 0.45 + 0.3 * p;
 /** quad half size in glyph units per glyph kind (the deny's is set from its shockwave reach) */
 const QUAD = [3.0, 4.4, 1.6, 1.7, 2.1, 1.2];
 /** glyph unit (RING_K agent radii) on screen at most (css px): the X of a big agent close up stays a mark */
-const GLYPH_MAX_PX = 44;
+const GLYPH_MAX_PX = 36;
 /** deny shockwave reach beyond the shut ring on screen (css px), clamped to SHOCK_K glyph units */
-const SHOCK_PX = 70;
+const SHOCK_PX = 55;
 const SHOCK_K: [number, number] = [0.7, 2.7];
 /** a full deny glyph (shockwave + big X + label) plays alone this long; others meanwhile get the compact mark */
 const BIG_DENY_MS = 1400;
 const bigDeny = { until: 0, d: null as DecisionUse | null };
+/** decision labels on screen at once (all agents): a burst (every market deciding on the same tick) shows the glyphs,
+ *  but only the first LABEL_CAP get their text; a full deny always does */
+const LABEL_CAP = 3;
+const labeled: DecisionUse[] = [];
+function takeLabel(d: DecisionUse, now: number, force: boolean) {
+  for (let k = labeled.length - 1; k >= 0; k--) {
+    const x = labeled[k];
+    if (x.cut || now - x.at >= decisionLife(x)) labeled.splice(k, 1);
+  }
+  if (!force && labeled.length >= LABEL_CAP) return false;
+  labeled.push(d);
+  return true;
+}
 /** ease-out-back constants (overshoot ~6%) */
 const BACK = 1.0;
 const BACK3 = BACK + 1;
@@ -410,7 +424,7 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
         if (h) (h.bump = now), (h.bumpDeny = true);
       } else (bigDeny.until = now + BIG_DENY_MS), (bigDeny.d = d);
     }
-    st.quiet[k] = kind === 5;
+    st.quiet[k] = kind === 5 || !takeLabel(d, now, kind === 1);
     sl.kind = kind;
     sl.server = kind === 1 ? denyServer(d, agent) : "";
     u.uKind.value = kind;
@@ -433,7 +447,7 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
     h?.setColor(tint);
     h?.setEmphasis(kind === 1);
     (small ? lbl.current[k] : lblS.current[k])?.setOpacity(0, true);
-    if (kind === 5) h?.setOpacity(0, true);
+    if (st.quiet[k]) h?.setOpacity(0, true);
     // a choice takes over the option ray labels
     if (kind === 0 && o.length && !d.hv) {
       st.optSlot = k;
@@ -488,7 +502,9 @@ function Glyph({ agent, radius, height }: { agent: KitAgent; radius: number; hei
         assign(k, d, now);
       } else st.extra++;
     }
-    st.extraMix += ((st.extra > 0 ? 1 : 0) - st.extraMix) * 0.25;
+    let talk = false;
+    for (let q = 0; q < MAX_SLOTS; q++) if (st.slots[q].d && !st.quiet[q]) talk = true;
+    st.extraMix += ((st.extra > 0 && talk ? 1 : 0) - st.extraMix) * 0.25;
     if (st.extra > 0 && st.extra !== st.shownExtra) {
       st.shownExtra = st.extra;
       lbl.current[MAX_SLOTS]?.setText(cap === 1 ? `+${st.extra}` : `+${st.extra} more`);

@@ -9,7 +9,7 @@
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { Label3D, type Label3DHandle } from "../Label3D";
+import { Label3D, type Label3DHandle, type LabelSeg } from "../Label3D";
 import { HALT_FADE_MS, haltOn, presence, world } from "../world";
 import { DECISION_NO } from "./DecisionGlyph";
 import { labels } from "./labels";
@@ -82,7 +82,7 @@ function Mark({ agent, radius, height }: { agent: KitAgent; radius: number; heig
   const quad = useRef<THREE.Mesh>(null);
   const tag = useRef<THREE.Group>(null);
   const lbl = useRef<Label3DHandle>(null);
-  const st = useMemo(() => ({ key: "" }), []);
+  const st = useMemo(() => ({ key: "", main: [] as LabelSeg[], sub: null as LabelSeg[] | null }), []);
   const mat = useMemo(
     () =>
       new THREE.ShaderMaterial({
@@ -113,14 +113,14 @@ function Mark({ agent, radius, height }: { agent: KitAgent; radius: number; heig
       const key = `${h.reason}|${n}|${h.end ? 1 : 0}`;
       if (key !== st.key) {
         st.key = key;
-        lbl.current?.setText(
-          [
-            { text: h.end ? "RESUMED" : "HALTED", color: h.end ? "#4ade80" : DECISION_NO },
-            { text: ` · ${h.reason}`, color: "#f1fffd" },
-          ],
-          n ? [{ text: h.end ? `${n} agents trading again` : `${n} agent${n === 1 ? "" : "s"} paused`, color: "#fca5b4" }] : null,
-        );
+        st.main = [
+          { text: h.end ? "RESUMED" : "HALTED", color: h.end ? "#4ade80" : DECISION_NO },
+          { text: ` · ${h.reason}`, color: "#f1fffd" },
+        ];
+        st.sub = n ? [{ text: h.end ? `${n} agents trading again` : `${n} agent${n === 1 ? "" : "s"} paused`, color: "#fca5b4" }] : null;
       }
+      // every frame (a no-op once applied): the label's text mesh may mount a few frames after the first halt
+      lbl.current?.setText(st.main, st.sub);
     }
     V1.copy(agent.live);
     if (kit.plane === "xz") V1.y += height * agent.scale * 0.5;

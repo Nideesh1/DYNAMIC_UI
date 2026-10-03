@@ -242,7 +242,7 @@ gate that flicks green or slams red (a `guard` `no` is a red X: `guard: deny <ta
 HUD counts decisions (`N decisions · avg X ms`, per provider in the tooltip) and the agent panel lists recent ones.
 Display names (HUD, labels; the events keep the raw values): kind `noul` = YES/NO, `choice` = PICK, `score` = SCORE;
 provider `code` = rule; `why` important = key, flip = changed mind, low_p = unsure, deny = DENY.
-A guard deny's red X + shockwave is capped on screen (~45 px X, ~70 px shockwave) and plays one at a time: a deny while
+A guard deny's red X + shockwave is capped on screen (~35 px X, ~55 px shockwave) and plays one at a time: a deny while
 another one shows gets a small red X badge on its agent instead (no label) and flashes the agent's halo red.
 
 **Desk-wide guards (`scope: "global"`).** A guard with `scope` `global` (e.g. a trading desk's kill switch) is shown
