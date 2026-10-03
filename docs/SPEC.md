@@ -75,11 +75,11 @@ buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion 
 **Choosing the filter (viewer side).**
 - Dev (no secret): headers `X-AgentGlow-Scope` and `X-AgentGlow-Run`; `/live/stream` also accepts `?run=<id>`
   (shareable link, not sensitive). `?scope=` and `?token=` are not accepted on viewer endpoints.
-- Secure (`AGENTGLOW_SECRET` env or `agentglow serve --secret S`): `/live/stream`, `/live/graph`, `/live/run` require
+- Secure (`AGENTGLOW_SECRET` env or `agentglow serve --secret S`): `/live/stream`, `/live/graph`, `/live/run`, `/live/approve` require
   `Authorization: Bearer <token>` (401 if missing, invalid or expired; never accepted in a query param). The filter
   comes only from the token. A scope/run header or `?run=` that contradicts the token is 403; it may only narrow a
   dimension the token leaves open (an admin token plus `X-AgentGlow-Scope` = view as that scope).
-  `/live/health` without a token returns liveness only (`ok, version, ui, run, auth`); with a token, counts for
+  `/live/health` without a token returns liveness only (`ok, version, ui, run, approve, auth`); with a token, counts for
   that filter (`buffered`, `open_runs`, plus `scope`/`run_id`); a bad token is 401.
 - `/live/stream` is plain `text/event-stream` over GET: works with `fetch()` + a stream reader (headers), and with
   `EventSource` in dev. CORS allows the `Authorization`, `X-AgentGlow-Scope` and `X-AgentGlow-Run` headers.
@@ -88,6 +88,13 @@ buffer, in order, once), so a scoped run never leaks to other scopes. Ingestion 
   calls of in-progress runs are not applied twice. An id from another epoch (server restarted) gets the full replay.
 - `POST /live/run` `{topic, scope?}` forwards `{"topic", "scope"}` to the webhook (`scope` omitted when unknown).
   Secure: scope from the token (a different body `scope` is 403). Dev: `X-AgentGlow-Scope` header, else body `scope`.
+- `POST /live/approve` `{run_id, agent_id?, step?, approve: bool, note?}` (optional `AGENTGLOW_APPROVE_WEBHOOK`; 404
+  without it; health `approve: true` makes the HUD show Approve / Reject on agents waiting on a human / approval):
+  the run must pass the viewer's filter (403) and have an open wait owned by `agent_id` / in `step` (409 otherwise,
+  e.g. it already resolved). Forwards `{run_id, approve, agent_id?, agent?, step?, note?, scope?, reason, workflow?,
+  wait_run_id?}`: `workflow` / `wait_run_id` are the Hatchet workflow and workflow run of the waiting step (a child
+  run folded into `run_id` keeps its own id here), so the webhook can push the event that wait listens for. The wait
+  clearing shows up through the normal event stream.
 - Without a secret, `agentglow serve` logs a warning when bound to a non-localhost address.
 
 **Ingest key** (who may post spans; independent of the viewer secret).

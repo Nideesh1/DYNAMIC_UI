@@ -860,7 +860,11 @@ class Mapper:
             out.append({"type": "step", "run_id": run.id, "step": st.step, "status": "running", "ts": ts})
 
     def _wait_start(self, s: Span, run: Run, out: list, ts: int) -> None:
-        st = self._step_span(s)
+        # Hatchet's own wait span hangs off the trigger's traceparent: for a folded child run that is a step of the
+        # PARENT run, so its step run id (when known) names the step it really waits in
+        srid = str(s.attrs.get("hatchet.step_run_id") or "")
+        st = self.spans.get(run.step_runs.get(srid) or "") if srid and not s.step else None
+        st = st or self._step_span(s)
         s.wait_step = st.id if st else None
         shown = self._shown_wait(run, st)
         run.waits[s.id] = s
@@ -888,6 +892,27 @@ class Mapper:
         ag = self.agents.get(owner or "")
         if ag and not ag.done and not any(self._wait_agent(w, self.spans.get(w.wait_step or "")) == owner for w in run.waits.values()):
             self._thinking(owner, s.run, out, ts, force=True)
+
+    def open_wait(self, run_id: str, agent_id: str | None = None, step: str | None = None) -> dict | None:
+        """The open wait an approval targets (POST /live/approve): newest first, owned by `agent_id` and/or in `step`.
+        Returns {reason, step?, workflow?, wait_run_id?} (the Hatchet workflow run / workflow of the waiting step, e.g.
+        a child run folded into `run_id`), or None. A parked step (evicted while waiting) matches by `step` too."""
+        run = self.runs.get(run_id)
+        if run is None:
+            return None
+        for w in sorted(run.waits.values(), key=lambda w: (w.wait[2], w.start), reverse=True):
+            st = self.spans.get(w.wait_step or "")
+            if agent_id and self._wait_agent(w, st) != agent_id:
+                continue
+            if step and (st is None or st.step != step):
+                continue
+            a = st.attrs if st else w.attrs
+            out = {"reason": w.wait[0], "step": st.step if st else None, "workflow": _hatchet_workflow(a) or None,
+                   "wait_run_id": str(a.get("hatchet.workflow_run_id") or "") or None}
+            return {k: v for k, v in out.items() if v}
+        if step and not agent_id and step in run.parked:
+            return {"reason": run.parked[step][0], "step": step}
+        return None
 
     # ------------------------------------------------------------------ llm / tools
     @staticmethod
