@@ -2,10 +2,22 @@
 from v0.3.0 (tests/fixtures/golden, written by tests/golden.py before backend services existed), also when the spans
 carry the new transport fields (kind, service, links) that watch() / OTLP decoding now add."""
 import json
+import time
 
 import pytest
 
 from golden import GOLDEN, all_events
+
+
+@pytest.fixture(autouse=True)
+def _recorded_timezone(monkeypatch):
+    """The goldens were recorded in America/New_York (Claude Code run topics carry a local `HH:MM`): pin it so the
+    comparison does not depend on the machine's timezone (CI runs in UTC)."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
 
 
 def _kinded(span: dict) -> dict:

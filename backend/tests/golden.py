@@ -63,6 +63,11 @@ def all_events(tweak_span=None, tweak_otlp=None) -> dict[str, list[dict]]:
 
 
 if __name__ == "__main__":
+    import os
+    import time
+
+    os.environ["TZ"] = "America/New_York"  # the timezone the goldens were recorded in (test_backend_regression.py pins it)
+    time.tzset()
     GOLDEN.mkdir(exist_ok=True)
     for k, evs in all_events().items():
         (GOLDEN / f"{k}.json").write_text(json.dumps(evs, indent=None, separators=(",", ":")) + "\n")
