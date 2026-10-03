@@ -7,7 +7,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
-from .claude_code import ClaudeCodeAdapter
+from .claude_code import ClaudeCodeAdapter, env_ms
 from .mapper import Mapper
 from .scrub import scrub_span
 
@@ -38,8 +38,11 @@ class Sub:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=10_000))
 
 
+IDLE_DIM_MIN = 3.0  # default AGENTGLOW_IDLE_DIM_MIN: an open agent run with no events this long is shown idle
+
+
 class Hub:
-    def __init__(self, buffer: int | None = None, capture_prompts: bool = False) -> None:
+    def __init__(self, buffer: int | None = None, capture_prompts: bool = False, idle_ms: int | None = None) -> None:
         self.mapper = Mapper()
         self.claude_code = ClaudeCodeAdapter(capture_prompts=capture_prompts)
         # replay buffer (events); AGENTGLOW_BUFFER overrides the default (small values exercise the snapshot path)
@@ -51,6 +54,12 @@ class Hub:
         # instead of re-adding replayed events (tokens, calls); another epoch (server restarted) = full replay
         self.epoch = format(time.time_ns(), "x")
         self.seq = 0
+        # idle runs: an open agent run silent for idle_ms (0 = off) gets `run` status "idle" (+ `since`, its last event,
+        # epoch ms), and "active" again right before its next event. Server-side, so every viewer agrees.
+        self.idle_ms = idle_ms if idle_ms is not None else env_ms("AGENTGLOW_IDLE_DIM_MIN", IDLE_DIM_MIN)
+        self.activity: dict[str, int] = {}  # run id -> wall clock ms of its latest published event
+        self.idle: set[str] = set()
+        self.clock = lambda: int(time.time() * 1000)  # activity clock (tests replace it)
 
     # ---- ingest (every path scrubs spans here: identity keys, raw prompts and secrets never reach events)
     def ingest_live(self, items: list[dict], scope: str | None = None) -> int:
@@ -64,11 +73,14 @@ class Hub:
 
     def _ingest_cc(self, items: list[dict], scope: str | None = None) -> int:
         """Claude Code adapter output: live span items, plus ready `llm` events (trace tokens on hooks agents)."""
+        evs: list[dict] = []  # one publish: a session's closing events go out together (no "active" before its end)
         for it in items:
             if "kind" in it:
-                self.ingest_live([it], scope)
+                if isinstance(it.get("span"), dict):
+                    evs += self.mapper.feed(it.get("kind", "end"), scrub_span(_with_scope(it["span"], scope)))
             else:
-                self.publish([it])
+                evs.append(it)
+        self.publish(evs)
         return len(items)
 
     def ingest_ended(self, spans: list[dict], now_ms: int | None = None, scope: str | None = None) -> int:
@@ -97,6 +109,50 @@ class Hub:
     def tick(self, now_ms: int) -> None:
         self.publish(self.mapper.tick(now_ms))
         self._ingest_cc(self.claude_code.tick(now_ms))
+        self.publish(self._idle_tick(now_ms))
+
+    # ---- idle runs
+    def _idle_tick(self, now: int) -> list[dict]:
+        """`run` status "idle" for open agent runs silent for idle_ms. Never the services run, nor a run that is quiet
+        on purpose (Mapper.quiet_runs: an open wait / approval / sleep, a parked step, an open session / job)."""
+        runs = self.mapper.runs
+        for rid in [r for r in self.activity if r not in runs]:  # ended (or never a mapper run): forget it
+            self.activity.pop(rid, None)
+            self.idle.discard(rid)
+        if not self.idle_ms:
+            return []
+        due = [rid for rid, t in self.activity.items()
+               if rid not in self.idle and now - t >= self.idle_ms and not runs[rid].service]
+        if not due:
+            return []
+        quiet = self.mapper.quiet_runs()
+        out = []
+        for rid in due:
+            if rid not in quiet:
+                self.idle.add(rid)
+                out.append({"type": "run", "run_id": rid, "status": "idle", "since": self.activity[rid], "ts": now})
+        return out
+
+    def _note_activity(self, events: list[dict]) -> list[dict]:
+        """Marks each event's run active now; an idle run gets `run` status "active" right before its event."""
+        out: list[dict] = []
+        now = self.clock()
+        ending = {e.get("run_id") for e in events if e.get("type") == "run" and e.get("status") in ("completed", "failed")}
+        for ev in events:
+            rid = ev.get("run_id")
+            if rid is not None and ev.get("type") != "mcp_register":
+                st = ev.get("status") if ev.get("type") == "run" else None
+                if st in ("completed", "failed"):
+                    self.activity.pop(rid, None)
+                    self.idle.discard(rid)
+                elif st not in ("idle", "active"):
+                    if rid in self.idle:
+                        self.idle.discard(rid)
+                        if rid not in ending:  # its closing events (a timeout close) are not a comeback
+                            out.append({"type": "run", "run_id": rid, "status": "active", "ts": now})
+                    self.activity[rid] = now
+            out.append(ev)
+        return out
 
     def register_mcp(self, server: str, resources: list[dict], ts: int) -> dict:
         ev = {"type": "mcp_register", "server": server, "resources": resources, "ts": ts}
@@ -109,7 +165,7 @@ class Hub:
 
     def publish(self, events: list[dict]) -> None:
         self._flush_newly_scoped()
-        for ev in events:
+        for ev in self._note_activity(events):
             if ev.get("type") == "mcp_register":
                 ev = self._merge_topology(ev)
             else:
@@ -258,6 +314,7 @@ class _Agent:
 class _Run:
     started: dict | None = None
     renamed: dict | None = None
+    idle: dict | None = None  # latest `run idle` while it lasts
     final: dict | None = None
     steps: dict = field(default_factory=dict)  # step -> latest step event
     agents: set = field(default_factory=set)
@@ -290,6 +347,11 @@ class LiveState:
                 self._run(rid).started = ev
             elif st == "renamed":
                 self._run(rid).renamed = ev
+            elif st == "idle":
+                self._run(rid).idle = ev
+            elif st == "active":
+                if rid in self.runs:
+                    self.runs[rid].idle = None
             elif st in ("completed", "failed"):
                 self._drop_run(rid)
                 self.endings.append(ev)
@@ -349,7 +411,7 @@ class LiveState:
     def snapshot(self) -> list[dict]:
         """Every kept entry, in publish (seq) order: the run starts before its agents, a parent's spawn before its
         child's, a spawn before its state. Replaying them in that order rebuilds the current world."""
-        evs = [e for r in self.runs.values() for e in (r.started, r.renamed, r.final) if e]
+        evs = [e for r in self.runs.values() for e in (r.started, r.renamed, r.final, r.idle) if e]
         evs += [e for r in self.runs.values() for e in r.steps.values()]
         evs += [e for a in self.agents.values() for e in (a.spawn, *a.state.values())]
         return evs

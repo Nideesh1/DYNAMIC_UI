@@ -310,6 +310,7 @@ class Run:
     parked: dict = field(default_factory=dict)  # step name -> (reason, until): ended with its wait (evicted)
     park_pending: dict = field(default_factory=dict)  # parked step name -> park time, its `waiting` not emitted yet
     service: bool = False  # backend services run: long-lived, never completes when its spans close
+    reason: str = ""  # why it ended, when not just "its spans closed" (`agentglow.run.end_reason`, e.g. "abandoned")
 
 
 def _hatchet_workflow(a: dict) -> str:
@@ -431,6 +432,15 @@ class Mapper:
                 out.append(self._step_wait_ev(r.id, step, reason, until, now_ms))
             if (r.done_at is not None and now_ms >= r.done_at) or (r.last_ts and now_ms - r.last_ts >= RUN_MAX_IDLE_MS):
                 self._complete(r, now_ms, out)
+        return out
+
+    def quiet_runs(self) -> set[str]:
+        """Open runs that are legitimately quiet (never shown idle): an open wait (declared approval / sleep, Hatchet
+        durable wait), a step parked in a wait, or an open primitive session / job span (long-lived by design)."""
+        out = {r.id for r in self.runs.values() if r.waits or r.parked}
+        for s in self.spans.values():
+            if s.end is None and ("agentglow.session" in s.attrs or "agentglow.job.id" in s.attrs):
+                out.add(s.run)
         return out
 
     # ------------------------------------------------------------------ lifecycle
@@ -658,6 +668,8 @@ class Mapper:
                 self._step_end(s, run, failed, out, ts)
             if failed and run.root == s.id:
                 run.failed = True
+            if run.root == s.id and a.get("agentglow.run.end_reason"):
+                run.reason = str(a["agentglow.run.end_reason"])[:40]
             if run.open == 0:
                 if not run.hatchet:
                     self._complete(run, ts, out)
@@ -697,8 +709,11 @@ class Mapper:
         if run.synthetic:
             out.append({"type": "exit", "run_id": run.id, "id": run.synthetic, "status": "failed" if run.failed else "done", "ts": ts})
         root = self.spans.get(run.root or "")
-        out.append({"type": "run", "run_id": run.id, "status": "failed" if run.failed else "completed",
-                    "topic": self._topic(root) if root else run.id, "workflow": self._workflow(root) if root else "", "ts": ts})
+        ev = {"type": "run", "run_id": run.id, "status": "failed" if run.failed else "completed",
+              "topic": self._topic(root) if root else run.id, "workflow": self._workflow(root) if root else "", "ts": ts}
+        if run.reason:
+            ev["reason"] = run.reason
+        out.append(ev)
         self.runs.pop(run.id, None)
         for k in [k for k, s in self.spans.items() if s.run == run.id]:
             del self.spans[k]

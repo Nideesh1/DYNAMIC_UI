@@ -13,7 +13,7 @@ class Rig:
     """A Hub + adapter driven with explicit timestamps; `tr` = the session transcript (title records)."""
 
     def __init__(self, tmp_path, transcript=True):
-        self.hub, self.cc = Hub(), ClaudeCodeAdapter()
+        self.hub, self.cc = Hub(), ClaudeCodeAdapter(idle_ms=30 * 60_000)  # sessions outlive the subagent silences tested here
         self.tr = tmp_path / f"{SID}.jsonl"
         if transcript:
             self.tr.write_text(json.dumps({"type": "user", "sessionId": SID}) + "\n")
