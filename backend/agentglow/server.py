@@ -28,6 +28,11 @@ def now_ms() -> int:
 
 
 # ---------------------------------------------------------------------- OTLP decoding
+def sse(ev: dict, eid: str | None = None) -> str:
+    """One SSE message; buffered events carry `id: <epoch>-<seq>` so a reconnect sends it back as Last-Event-ID."""
+    return (f"id: {eid}\n" if eid else "") + f"data: {json.dumps(ev)}\n\n"
+
+
 def _any_value(v) -> object:  # protobuf AnyValue → python
     which = v.WhichOneof("value")
     if which == "array_value":
@@ -149,11 +154,13 @@ def ingest_key_ok(keys: tuple[bytes, ...], request: Request) -> bool:
 
 # ---------------------------------------------------------------------- app
 def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_webhook: str | None = None,
-               run_transport=None, secret: str | None = None, ingest_key: str | list[str] | None = None,
+               run_transport=None, approve_webhook: str | None = None, secret: str | None = None, ingest_key: str | list[str] | None = None,
                capture_prompts: bool = False) -> FastAPI:
     """`run_webhook` (or AGENTGLOW_RUN_WEBHOOK): URL that POST /live/run forwards `{topic, scope?}` to (your trigger
     endpoint); the UI shows "Run agents" only when it is set. GET /live/run proxies `GET <webhook>` for an optional
     `{workflows: [{id, label, topic}]}` listing (the UI's workflow picker). `run_transport` is an optional httpx transport (tests).
+    `approve_webhook` (or AGENTGLOW_APPROVE_WEBHOOK): URL that POST /live/approve forwards a human's approve / reject of
+    an open wait to (the HUD's Approve / Reject buttons, shown only when it is set). Same transport as the run webhook.
     `secret` (or AGENTGLOW_SECRET): viewer endpoints require `Authorization: Bearer <token>` (agentglow.make_token)
     and the token alone decides what the viewer sees. Without it (dev), X-AgentGlow-Scope / X-AgentGlow-Run headers
     (and `?run=` on /live/stream) pick the filter.
@@ -164,6 +171,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
     hub = hub or Hub(capture_prompts=capture_prompts)
     falkor_url = falkor_url or os.environ.get("AGENTGLOW_FALKOR_URL")
     run_webhook = run_webhook or os.environ.get("AGENTGLOW_RUN_WEBHOOK") or None
+    approve_webhook = approve_webhook or os.environ.get("AGENTGLOW_APPROVE_WEBHOOK") or None
     secret = secret or os.environ.get("AGENTGLOW_SECRET") or None
     ingest_keys = parse_ingest_keys(ingest_key or os.environ.get("AGENTGLOW_INGEST_KEY"))
 
@@ -261,17 +269,18 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
         f = viewer(request)
         sub = hub.subscribe(f)
         q = sub.queue
-        replay = hub.replay(f)
+        # a reconnect: resume after what the viewer already has
+        replay = hub.replay(f, hub.resume_after(request.headers.get("last-event-id", "")))
 
         async def gen():
             try:
                 yield "retry: 2000\n\n"
                 for ev in replay:
-                    yield f"data: {json.dumps(ev)}\n\n"
+                    yield sse(ev, hub.event_id(ev))
                 while not await request.is_disconnected():
                     try:
                         ev = await asyncio.wait_for(q.get(), timeout=KEEPALIVE_S)
-                        yield f"data: {json.dumps(ev)}\n\n"
+                        yield sse(ev, hub.event_id(ev))
                     except asyncio.TimeoutError:
                         yield ": keepalive\n\n"
             finally:
@@ -300,6 +309,7 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
     @app.get("/live/health")
     def health(request: Request):
         base = {"ok": True, "version": __version__, "ui": (STATIC / "index.html").exists(), "run": bool(run_webhook),
+                "approve": bool(approve_webhook),
                 "auth": bool(secret), "ingest_auth": bool(ingest_keys), "prompts": hub.claude_code.capture_prompts}
         f = viewer(request, required=False)
         if f is None:  # secure mode without a token: liveness only
@@ -358,6 +368,47 @@ def create_app(*, falkor_url: str | None = None, hub: Hub | None = None, run_web
             raise HTTPException(502, f"run webhook unreachable: {e}")
         if r.status_code >= 400:
             raise HTTPException(502, f"run webhook returned {r.status_code}: {r.text[:200]}")
+        try:
+            return r.json()
+        except ValueError:
+            return {"ok": True}
+
+    @app.post("/live/approve")
+    async def approve(body: dict, request: Request):
+        """A human approves / rejects an open wait: `{run_id, agent_id?, step?, approve: bool, note?}` → forwarded to
+        AGENTGLOW_APPROVE_WEBHOOK as `{run_id, approve, agent_id?, agent?, step?, note?, scope?, reason, workflow?,
+        wait_run_id?}` (the wait's Hatchet workflow / workflow run, e.g. a child run folded into run_id). Same viewer
+        auth as /live/run, and the run must be visible to the viewer (403) and have a matching open wait (409)."""
+        f = viewer(request)
+        if not approve_webhook:
+            raise HTTPException(404, "no approve webhook (set AGENTGLOW_APPROVE_WEBHOOK)")
+        run_id = str(body.get("run_id") or "").strip()
+        if not run_id or not isinstance(body.get("approve"), bool):
+            raise HTTPException(400, "run_id and approve (bool) are required")
+        if not f.match({"run_id": run_id}, hub.scope_of):
+            raise HTTPException(403, "run is outside the viewer's scope")
+        agent_id = str(body.get("agent_id") or "")[:128] or None
+        step = str(body.get("step") or "")[:128] or None
+        wait = hub.mapper.open_wait(run_id, agent_id, step)
+        if wait is None:
+            raise HTTPException(409, "nothing is waiting there")
+        ag = hub.mapper.agents.get(agent_id or "")
+        note = str(body.get("note") or "")[:500]
+        scope = hub.scope_of(run_id)
+        payload = {"run_id": run_id, "approve": body["approve"], **({"agent_id": agent_id} if agent_id else {}),
+                   **({"agent": ag.name} if ag else {}), **({"note": note} if note else {}),
+                   **({"scope": scope} if scope else {}), **wait}
+        if step and "step" not in payload:
+            payload["step"] = step
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(transport=run_transport, timeout=30) as c:
+                r = await c.post(approve_webhook, json=payload)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"approve webhook unreachable: {e}")
+        if r.status_code >= 400:
+            raise HTTPException(502, f"approve webhook returned {r.status_code}: {r.text[:200]}")
         try:
             return r.json()
         except ValueError:

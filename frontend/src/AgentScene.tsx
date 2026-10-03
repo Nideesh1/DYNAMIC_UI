@@ -11,7 +11,7 @@ export type AgentSceneProps = {
   /** Show the HUD (counts, event ticker, agent panel). Default true. */
   hud?: boolean;
   /** Use the built-in simulator instead of a server. Default false (auto-fallback if the server is unreachable). */
-  sim?: boolean;
+  sim?: boolean | "hf";
   /**
    * Only show agents in this scope (e.g. a user or tenant id). Sent as the `X-AgentGlow-Scope` header, never in a URL.
    * On a server that requires tokens the token decides the scope; this is then only a label (and the POST /live/run scope).

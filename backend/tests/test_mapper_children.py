@@ -89,3 +89,23 @@ def test_hatchet_wait_inside_a_declared_wait_does_not_repeat_waiting():
     assert [(e["status"], e.get("reason")) for e in evs if e["type"] == "agent"] == [("waiting", "approval")]
     evs = m.feed("end", span("w", "wait approval", "ag", None, 1100, 5001))
     assert steps(evs, "approval")[-1]["status"] == "running"
+
+
+def test_hatchet_wait_in_a_folded_child_run_belongs_to_the_child_step_not_the_parent():
+    """The instrumentor's wait span hangs off the trigger's traceparent (a step of the PARENT run): its step run id
+    decides, so the child's agent waits (once, on the declared reason) and the parent's agent keeps working."""
+    m = Mapper()
+    evs = m.feed("start", span("p", "hatchet.start_step_run", None, step("run_markets", "srp", run="sess"), 1000))
+    evs += m.feed("start", span("desk", "desk", "p", {"agentglow.agent": True}, 1001))
+    kid = {**step("market_watch", "src", run="mkt-1"), "hatchet.parent_workflow_run_id": "sess"}
+    evs += m.feed("start", span("c", "hatchet.start_step_run", "desk", kid, 1100))
+    evs += m.feed("start", span("a", "wx-nyc", "c", {"agentglow.agent": True}, 1101))
+    evs = m.feed("start", span("w", "await human", "a", {"agentglow.wait": "human approval yes 5"}, 1200))
+    evs += m.feed("start", span("hw", "hatchet.durable.wait_for", "p", {"instrumentor": "hatchet", "hatchet.signal_key": "human-1",
+                                                                          "hatchet.step_run_id": "src"}, 1201))
+    waits = [(e["id"], e["reason"]) for e in evs if e["type"] == "agent" and e["status"] == "waiting"]
+    assert waits == [("a", "human approval yes 5")]
+    assert [e["step"] for e in steps(evs) if e["status"] == "waiting"] == ["market_watch"]
+    assert m.open_wait("sess", "a") == {"reason": "human approval yes 5", "step": "market_watch", "workflow": "vendor_consolidation",
+                                        "wait_run_id": "mkt-1"}
+    assert m.open_wait("sess", "desk") is None

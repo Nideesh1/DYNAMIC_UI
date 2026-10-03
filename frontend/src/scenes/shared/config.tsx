@@ -8,8 +8,8 @@ import { createContext, useContext } from "react";
 export type SceneConfig = {
   /** Base URL of the agentglow server ("" = same origin). Endpoints: `${source}/live/stream|graph|health|run`. */
   source: string;
-  /** Force the built-in simulator (no network). */
-  sim: boolean;
+  /** Force the built-in simulator (no network); "hf" = the high-frequency scenario (~30 market agents, ~100 decisions/s). */
+  sim: boolean | "hf";
   /** Show the glass HUD (top bar with live totals, Agents | Events | Selected sidebar). */
   hud: boolean;
   /** Embedded in a host page: fill the container instead of the viewport, no theme nav links. */
@@ -31,7 +31,7 @@ export function configFromUrl(): SceneConfig {
   const flag = (k: string) => q.has(k) && !["0", "false", "no"].includes(q.get(k)!.toLowerCase());
   return {
     source: normalizeSource(q.get("source")),
-    sim: flag("sim"),
+    sim: q.get("sim")?.toLowerCase() === "hf" ? "hf" : flag("sim"),
     hud: q.get("hud") === null ? true : flag("hud"),
     embedded: false,
     run: q.get("run")?.trim() || undefined,

@@ -7,6 +7,7 @@
 #   docker compose exec worker uv run python trigger.py --incident   # incident triage demo (see the example README)
 #   docker compose exec worker uv run python trigger.py --vendor     # long-running vendor consolidation demo, then:
 #   curl -X POST localhost:8300/approve                               # approve it (or: trigger.py --approve)
+#   docker compose exec worker uv run python trigger.py --desk       # paper trading desk (fast Jev gates, deepagents analyst)
 #   ./scripts/gen-obs-env.sh   # only for the langfuse profile: generates its local secrets into .env
 #   LANGFUSE_EXPORT=1 docker compose --profile langfuse up -d     # + Langfuse at :3100 (same spans, side by side)
 #
@@ -22,6 +23,7 @@ services:
     environment:
       AGENTGLOW_FALKOR_URL: redis://falkordb:6379
       AGENTGLOW_RUN_WEBHOOK: http://trigger:8300/run   # "▶ Run agents" in the UI → the example's trigger service
+      AGENTGLOW_APPROVE_WEBHOOK: http://trigger:8300/approve   # HUD Approve / Reject on agents waiting on a human
       AGENTGLOW_INGEST_KEY: ${AGENTGLOW_INGEST_KEY:-}  # empty (default) = open ingest; see .env.example
     depends_on: [falkordb]
     restart: unless-stopped
@@ -89,7 +91,7 @@ services:
     depends_on: [agentglow]
     restart: unless-stopped
 
-  worker:       # Hatchet worker running the deepagents workflows `agent_smoke`, `incident_triage`, `vendor_consolidation`
+  worker:       # Hatchet worker running the deepagents workflows `agent_smoke`, `incident_triage`, `vendor_consolidation`, `trading_desk`
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
     command: ["uv", "run", "python", "-m", "app.worker"]
@@ -103,11 +105,32 @@ services:
       EMAIL_MCP_URL: http://mcp_email:8204/mcp
       DEMO_SLEEP_S: ${DEMO_SLEEP_S:-20}                 # vendor demo: durable sleep between negotiation rounds
       APPROVAL_TIMEOUT_S: ${APPROVAL_TIMEOUT_S:-1800}   # vendor demo: auto-approve after 30 min
+      # trading desk demo (paper only, see the example README): session size, analyst cooldown, human gate, Jev cap
+      DESK_MARKETS: ${DESK_MARKETS:-12}
+      DESK_TICKS: ${DESK_TICKS:-60}
+      DESK_TICK_S: ${DESK_TICK_S:-1.0}
+      DESK_THINK_COOLDOWN_S: ${DESK_THINK_COOLDOWN_S:-30}
+      DESK_MAX_ANALYSTS: ${DESK_MAX_ANALYSTS:-3}
+      DESK_HUMAN_TIMEOUT_S: ${DESK_HUMAN_TIMEOUT_S:-8}
+      DESK_OUTAGE_EVERY_S: ${DESK_OUTAGE_EVERY_S:-45}
+      JEV_MAX_RPS: ${JEV_MAX_RPS:-5}                    # hard cap on real Jev requests/s; overflow -> local jev-sim
       FALKOR_HOST: falkordb
       AGENT_MODEL: ${AGENT_MODEL:-google_genai:gemini-3.8-flash}   # provider:model (google_genai / openai / anthropic)
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Amazon Bedrock Mantle (AGENT_MODEL=bedrock_mantle_openai:... / bedrock_mantle_anthropic:...): a Bedrock API key
+      # or standard AWS credentials; AWS_REGION picks the endpoint (default us-east-1)
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      # decisions (app/decide.py): TypeSafe Jev when set, else an LLM judge (DECIDE_MODEL, default AGENT_MODEL)
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      DECIDE_MODEL: ${DECIDE_MODEL:-}
+      ROUTER_SMALL_MODEL: ${ROUTER_SMALL_MODEL:-}   # vendor router "small" route (default per provider, see app/vendor.py)
+      DEMO_FORCE_FIRST_REVIEW_FAIL: ${DEMO_FORCE_FIRST_REVIEW_FAIL:-1}   # incident: reject review attempt 1 → one retry
       OBS_LANGFUSE_PUBLIC_KEY: ${OBS_LANGFUSE_PUBLIC_KEY:-}
       OBS_LANGFUSE_SECRET_KEY: ${OBS_LANGFUSE_SECRET_KEY:-}
       LANGFUSE_EXPORT: ${LANGFUSE_EXPORT:-0}
@@ -124,7 +147,7 @@ services:
       obs_hatchet_token: {condition: service_completed_successfully}
     restart: unless-stopped
 
-  trigger:      # HTTP trigger (POST :8300/run {topic, workflow?} → agent_smoke / incident_triage / vendor_consolidation run; POST :8300/approve); agentglow's POST /live/run forwards here
+  trigger:      # HTTP trigger (POST :8300/run {topic, workflow?} → agent_smoke / incident_triage / vendor_consolidation / trading_desk run; POST :8300/approve); agentglow's POST /live/run forwards here
     image: agentglow-example-deepagents-hatchet:local
     build: *example-build
     command: ["uv", "run", "python", "-m", "app.trigger_api"]

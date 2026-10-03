@@ -1,4 +1,5 @@
 import json
+import httpx
 
 from fastapi.testclient import TestClient
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
@@ -74,6 +75,29 @@ def test_live_ingest_and_replay_excludes_completed_runs():
     assert [e["type"] for e in replay[1:]] == ["run", "spawn"]
 
 
+def test_replay_after_last_event_id_and_seq_increases():
+    from agentglow.server import sse
+    from agentglow.state import Hub
+
+    hub = Hub()
+    span = lambda sid: {"trace_id": "t", "span_id": sid, "parent_span_id": None, "name": "agent", "start_time_ms": 1,
+                        "attributes": {"agentglow.agent": sid}}
+    hub.ingest_live([{"kind": "start", "span": span("a")}])
+    hub.register_mcp("github", [], 1)
+    mid = hub.buffer[-1]["seq"]
+    assert mid == 2  # run + spawn
+    hub.ingest_live([{"kind": "start", "span": span("b")}])
+    seqs = [e["seq"] for e in hub.buffer]
+    assert seqs == list(range(1, len(seqs) + 1))
+    full, resumed = hub.replay(), hub.replay(after=hub.resume_after(hub.event_id(hub.buffer[1])))
+    assert len(full) == 1 + len(seqs)  # topology + every buffered event
+    assert resumed[0]["type"] == "mcp_register" and [e["seq"] for e in resumed[1:]] == [s for s in seqs if s > mid]
+    assert sse(hub.buffer[0], hub.event_id(hub.buffer[0])) == f"id: {hub.epoch}-1\ndata: {json.dumps(hub.buffer[0])}\n\n"
+    assert hub.event_id(resumed[0]) is None and sse(resumed[0]).startswith("data: ")  # topology: no id
+    # no / malformed / another server instance's id (restart): full replay
+    assert [hub.resume_after(x) for x in ("", "7", "abc-3", f"{hub.epoch}-x", f"{Hub().epoch}9-3")] == [0] * 5
+
+
 def test_sse_stream_replays_over_real_server():
     import socket
     import threading
@@ -99,6 +123,31 @@ def test_sse_stream_replays_over_real_server():
             assert r.headers["content-type"].startswith("text/event-stream")
             line = next(ln for ln in r.iter_lines() if ln.startswith("data: "))
             assert json.loads(line[6:])["server"] == "github"
+        hub = app.state.hub
+        hub.ingest_live([{"kind": "start", "span": {"trace_id": "t", "span_id": "a", "parent_span_id": None, "name": "agent",
+                                                    "start_time_ms": 1, "attributes": {"agentglow.agent": "a"}}}])
+        last = hub.buffer[-1]["seq"]
+
+        def ids_until(headers, seq):  # SSE ids received until the event with this seq
+            with httpx.stream("GET", f"http://127.0.0.1:{port}/live/stream", headers=headers, timeout=5) as r:
+                out = []
+                for ln in r.iter_lines():
+                    if ln.startswith("id: "):
+                        assert ln[4:].startswith(hub.epoch + "-")
+                        out.append(int(ln[4:].rpartition("-")[2]))
+                        if out[-1] == seq:
+                            return out
+            return out
+
+        ids = ids_until({}, last)
+        assert ids == [e["seq"] for e in hub.buffer] and ids == sorted(ids)
+        # a reconnect (Last-Event-ID) does not replay what the viewer already applied: only the next live event
+        threading.Timer(0.3, lambda: httpx.post(f"http://127.0.0.1:{port}/v1/live", json=[{"kind": "start", "span": {
+            "trace_id": "t", "span_id": "b", "parent_span_id": "a", "name": "llm", "start_time_ms": 2,
+            "attributes": {"openinference.span.kind": "LLM"}}}])).start()  # on the server's loop (queues aren't thread-safe)
+        nxt = last + 1
+        assert ids_until({"last-event-id": f"{hub.epoch}-{last}"}, nxt) == [nxt]
+        assert ids_until({"last-event-id": f"old-{last}"}, nxt) == [e["seq"] for e in hub.buffer]  # restart: full replay
     finally:
         server.should_exit = True
 
@@ -163,3 +212,70 @@ def test_run_disabled_without_webhook(monkeypatch):
     assert c.get("/live/health").json()["run"] is False
     assert c.post("/live/run", json={"topic": "x"}).status_code == 404
     assert c.get("/live/run").status_code == 404
+
+
+# ---------------------------------------------------------------------- approve webhook
+def waiting_desk(c, scope=None):
+    """A desk session run with a market child run (folded in) whose agent waits on a human gate."""
+    sc = {"agentglow.scope": scope} if scope else {}
+    sp = lambda sid, name, parent, attrs, start: {"kind": "start", "span": {
+        "trace_id": "t", "span_id": sid, "parent_span_id": parent, "name": name, "start_time_ms": start,
+        "end_time_ms": None, "status": "unset", "attributes": {**sc, **attrs}}}
+    c.post("/v1/live", json=[
+        sp("s0", "hatchet.start_step_run", None, {"hatchet.workflow_run_id": "sess", "hatchet.step_name": "run_markets",
+                                                  "hatchet.step_run_id": "sr0", "hatchet.action_name": "trading_desk:run_markets"}, 1),
+        sp("s1", "hatchet.start_step_run", "s0", {"hatchet.workflow_run_id": "mkt-3", "hatchet.parent_workflow_run_id": "sess",
+                                                  "hatchet.step_name": "market_watch", "hatchet.step_run_id": "sr1",
+                                                  "hatchet.action_name": "market_watch:market_watch"}, 2),
+        sp("ag", "agent", "s1", {"agentglow.agent": "WX-NYC"}, 3),
+        sp("w", "await human", "ag", {"agentglow.wait": "human approval yes 12"}, 4),
+    ])
+
+
+def approve_app(handler=None, **kw):
+    seen = []
+
+    def default(req: httpx.Request) -> httpx.Response:
+        seen.append((str(req.url), json.loads(req.content)))
+        return httpx.Response(200, json={"event": "desk:approve"})
+
+    return TestClient(create_app(approve_webhook="http://trigger:8300/approve",
+                                 run_transport=httpx.MockTransport(handler or default), **kw)), seen
+
+
+def test_approve_webhook_forwards_the_wait():
+    c, seen = approve_app()
+    assert c.get("/live/health").json()["approve"] is True
+    waiting_desk(c)
+    r = c.post("/live/approve", json={"run_id": "sess", "agent_id": "ag", "approve": False, "note": "too big"})
+    assert r.status_code == 200 and r.json() == {"event": "desk:approve"}
+    assert seen == [("http://trigger:8300/approve", {
+        "run_id": "sess", "approve": False, "agent_id": "ag", "agent": "WX-NYC", "note": "too big",
+        "reason": "human approval yes 12", "step": "market_watch", "workflow": "market_watch", "wait_run_id": "mkt-3"})]
+    c.post("/live/approve", json={"run_id": "sess", "step": "market_watch", "approve": True})
+    assert seen[-1][1]["approve"] is True and seen[-1][1]["wait_run_id"] == "mkt-3" and "agent_id" not in seen[-1][1]
+    assert c.post("/live/approve", json={"run_id": "sess", "agent_id": "nobody", "approve": True}).status_code == 409
+    assert c.post("/live/approve", json={"run_id": "other", "approve": True}).status_code == 409
+    assert c.post("/live/approve", json={"run_id": "sess", "approve": "yes"}).status_code == 400
+    assert c.post("/live/approve", json={"approve": True}).status_code == 400
+    c.post("/v1/live", json=[{"kind": "end", "span": {"trace_id": "t", "span_id": "w", "parent_span_id": "ag", "name": "await human",
+                                                      "start_time_ms": 4, "end_time_ms": 9, "status": "ok", "attributes": {}}}])
+    assert c.post("/live/approve", json={"run_id": "sess", "agent_id": "ag", "approve": True}).status_code == 409  # wait over
+    assert len(seen) == 2
+
+
+def test_approve_webhook_errors_and_disabled(monkeypatch):
+    def down(req):
+        raise httpx.ConnectError("down")
+
+    c, _ = approve_app(down)
+    waiting_desk(c)
+    assert c.post("/live/approve", json={"run_id": "sess", "approve": True}).status_code == 502
+    c, _ = approve_app(lambda req: httpx.Response(500, text="boom"))
+    waiting_desk(c)
+    assert c.post("/live/approve", json={"run_id": "sess", "approve": True}).status_code == 502
+    monkeypatch.delenv("AGENTGLOW_APPROVE_WEBHOOK", raising=False)
+    c = client()
+    assert c.get("/live/health").json()["approve"] is False
+    waiting_desk(c)
+    assert c.post("/live/approve", json={"run_id": "sess", "approve": True}).status_code == 404

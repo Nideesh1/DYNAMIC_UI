@@ -184,3 +184,27 @@ def test_hatchet_v1_workflow_label_comes_from_action_name():
          "hatchet.action_name": "vendor_consolidation:inventory"}
     evs = m.feed("start", span("s", "hatchet.start_step_run", None, a, 1000, trace="s"))
     assert by_type(evs, "run")[0]["workflow"] == "vendor_consolidation"
+
+
+def test_cache_tokens_every_spelling_are_a_subset_of_tokens_in():
+    """tokens_in = all prompt tokens (cached included); tokens_cached / tokens_cache_write are subsets, from any of
+    the GenAI semconv spellings or OpenInference prompt_details."""
+    cases = [
+        ({"gen_ai.operation.name": "chat", "gen_ai.usage.input_tokens": 1000, "gen_ai.usage.output_tokens": 5,
+          "gen_ai.usage.cache_read_input_tokens": 800, "gen_ai.usage.cache_creation_input_tokens": 150}),
+        ({"gen_ai.operation.name": "chat", "gen_ai.usage.input_tokens": 1000, "gen_ai.usage.output_tokens": 5,
+          "gen_ai.usage.cache_read.input_tokens": 800, "gen_ai.usage.cache_creation.input_tokens": 150}),
+        ({"openinference.span.kind": "LLM", "llm.token_count.prompt": 1000, "llm.token_count.completion": 5,
+          "llm.token_count.prompt_details.cache_read": 800, "llm.token_count.prompt_details.cache_write": 150}),
+    ]
+    for attrs in cases:
+        m = Mapper()
+        evs = m.feed("start", span("a", "invoke_agent helper", attrs={"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "helper"}))
+        evs += m.feed("end", span("l", "chat", "a", attrs, 1010, 1110))
+        llm = by_type(evs, "llm")
+        assert len(llm) == 1, attrs
+        assert (llm[0]["tokens_in"], llm[0]["tokens_out"], llm[0]["tokens_cached"], llm[0]["tokens_cache_write"]) == (1000, 5, 800, 150)
+    m = Mapper()  # no cache usage: no extra keys
+    evs = m.feed("end", span("l", "chat", None, {"gen_ai.operation.name": "chat", "gen_ai.usage.input_tokens": 10,
+                                                 "llm.token_count.prompt_details.cache_read": 0}, 1010, 1110))
+    assert "tokens_cached" not in by_type(evs, "llm")[0] and "tokens_cache_write" not in by_type(evs, "llm")[0]

@@ -5,7 +5,11 @@ vendors):
               nodes into FalkorDB
   analyze     fans out one CHILD run of `vendor_category` per spend category (10). The child task has a Hatchet
               CONCURRENCY limit of 3 per parent run, so the categories queue and drain 3 at a time. Each runs its own
-              <category>_analyst deep agent (graph read + erp) and returns a recommendation.
+              <category>_analyst deep agent (graph read + erp) and returns a recommendation. A ROUTER decision
+              (Choice small|large on the category's spend / vendor count, app/decide.py) first picks the analyst's
+              model: small = claude-haiku-4-5 / gpt-5-mini / gemini-3.5-flash-lite / Mantle gpt-oss-20b /
+              Mantle claude-haiku-4-5 (by AGENT_MODEL's provider), large =
+              AGENT_MODEL (override: ROUTER_SMALL_MODEL / ROUTER_LARGE_MODEL).
   approval    DURABLE task: waits (ctx.aio_wait_for) for the user event `vendor:approve` for this run, or auto-approves
               after APPROVAL_TIMEOUT_S (default 30 min). Approve with POST /approve on the trigger service.
   negotiate   DURABLE task: negotiator drafts / sends outreach via the `email` MCP server (Exchange), then durable-sleeps
@@ -16,6 +20,7 @@ Waits are declared for AgentGlow with a span carrying `agentglow.wait` (+ `agent
 docs/SPEC.md "Waits": the step shows `waiting` (approval / vendor reply) instead of looking stalled.
 Agents are compiled in worker.py's lifespan and reached via ctx.lifespan.
 """
+import os
 import re
 import time
 from contextlib import contextmanager
@@ -25,17 +30,71 @@ from . import config  # noqa: F401  (must be first: Hatchet env)
 
 from hatchet_sdk import ConcurrencyExpression, ConcurrencyLimitStrategy, Context, DurableContext
 from hatchet_sdk.conditions import SleepCondition, UserEventCondition, or_
+from langchain.agents.middleware import AgentMiddleware, AgentState
 from opentelemetry import trace
 from pydantic import BaseModel
+from typing_extensions import NotRequired
 
-from .config import APPROVAL_TIMEOUT_S, DEMO_SLEEP_S
-from .erp_mcp_server import CATEGORIES
+from . import decide
+from .config import APPROVAL_TIMEOUT_S, DEMO_SLEEP_S, MODEL
+from .erp_mcp_server import CATEGORIES, VENDORS
+from .tools import tool_context
 from .workflow import hatchet, text_of
 
 WORKFLOW = "vendor_consolidation"
 APPROVE_EVENT = "vendor:approve"
 ROUNDS = 3
 tracer = trace.get_tracer("deepagents-hatchet.vendor")
+
+
+# ROUTER: model spec per route ("" = AGENT_MODEL); small defaults per AGENT_MODEL provider.
+_SMALL = {
+    "anthropic": "anthropic:claude-haiku-4-5",
+    "openai": "openai:gpt-5-mini",
+    "google_genai": "google_genai:gemini-3.5-flash-lite",
+    "bedrock_mantle_openai": "bedrock_mantle_openai:openai.gpt-oss-20b",
+    "bedrock_mantle_anthropic": "bedrock_mantle_anthropic:anthropic.claude-haiku-4-5",
+}
+MODEL_ROUTES = {
+    "small": os.environ.get("ROUTER_SMALL_MODEL") or _SMALL.get(MODEL.split(":", 1)[0], ""),
+    "large": os.environ.get("ROUTER_LARGE_MODEL") or "",
+}
+ROUTE_OPTIONS = {
+    "small": "Fast, cheap model. Total annual spend under $150k: a routine keep / cut call.",
+    "large": "Strongest model. Total annual spend of $150k or more: the savings justify a careful analysis.",
+}
+
+
+class _RouteState(AgentState):
+    model_route: NotRequired[str]
+
+
+class RouteModel(AgentMiddleware):
+    """ROUTER: before the analyst starts, a Choice small|large on its category's vendor count and spend; every model
+    call of that run then goes to the chosen model (same shape as langchain-typesafe's ModelRouterMiddleware, but
+    provider-agnostic and traced as an AgentGlow decision on the analyst)."""
+
+    state_schema = _RouteState
+
+    def __init__(self, category: str, models: dict):
+        super().__init__()
+        self.category, self.models = category, models
+        # the model each route goes to, for the decision's target (e.g. "claude-haiku-4-5")
+        self.targets = {r: str(getattr(m, "model", None) or getattr(m, "model_name", "") or "").removeprefix("models/") for r, m in models.items()}
+
+    async def abefore_agent(self, state, runtime):
+        rows = VENDORS.get(self.category, [])
+        d = await decide.choice(
+            "which model for this analyst?", ROUTE_OPTIONS, purpose="route", parent=tool_context(), targets=self.targets,
+            state={"category": self.category, "vendors": len(rows), "annual_spend_usd": sum(r[1] for r in rows),
+                   "vendor_spend": {v: usd for v, usd, _ in rows}},
+            instructions="Which model should analyze this spend category? Use the least costly one whose criteria fit `annual_spend_usd`.",
+        )
+        return {"model_route": d.result}
+
+    async def awrap_model_call(self, request, handler):
+        model = self.models.get(request.state.get("model_route", ""))
+        return await handler(request.override(model=model) if model is not None else request)
 
 
 class VendorInput(BaseModel):
@@ -101,15 +160,15 @@ async def inventory(input: VendorInput, ctx: Context) -> dict:
 )
 async def vendor_category(input: CategoryInput, ctx: Context) -> dict:
     step_span(input.topic)
-    rec = await _ask(ctx, f"{slug(input.category)}_analyst", "category", (
+    out = await ctx.lifespan[f"{slug(input.category)}_analyst"].ainvoke({"messages": [{"role": "user", "content": (
         f"Program: {input.topic}\nYour spend category: {input.category}\n\n"
         f"1) graph_category_vendors for '{input.category}'. 2) vendor_scorecard for the 2 biggest vendors and "
         f"renewal_calendar for '{input.category}'.\n"
         "Recommend: which vendor to keep, which to cut or merge into it, estimated annual savings in USD, and the "
         "renewal deadline that matters. Under 70 words. End with one line exactly like `SHORTLIST: <vendor>, <vendor>` "
         "naming the vendors procurement should negotiate with (1-2). Do not write files."
-    ), limit=30)
-    return {"category": input.category, "recommendation": rec}
+    )}]}, config={"recursion_limit": 30, "configurable": {"thread_id": f"{ctx.workflow_run_id}:category"}})
+    return {"category": input.category, "recommendation": text_of(out["messages"][-1])[:5000], "model_route": out.get("model_route")}
 
 
 @vendor_consolidation.task(parents=[inventory], execution_timeout=timedelta(minutes=30), retries=0)
@@ -148,7 +207,8 @@ async def approval(input: VendorInput, ctx: DurableContext) -> dict:
     fired = {k: v for group in res.values() if isinstance(group, dict) for k, v in group.items()}
     if "approved" in fired:
         ev = (fired["approved"] or [{}])[0] if isinstance(fired["approved"], list) else fired["approved"]
-        return {"approved": True, "by": (ev or {}).get("approver") or "human", "note": (ev or {}).get("note", "")}
+        ev = ev or {}
+        return {"approved": bool(ev.get("approve", True)), "by": ev.get("approver") or "human", "note": ev.get("note", "")}
     return {"approved": True, "by": "auto (timeout)", "note": f"no response in {APPROVAL_TIMEOUT_S}s"}
 
 
@@ -159,6 +219,9 @@ async def negotiate(input: VendorInput, ctx: DurableContext) -> dict:
     a = ctx.task_output(analyze)
     vendors = ", ".join(a["shortlist"]) or "the top vendor in each category"
     log: list[str] = []
+    ok = ctx.task_output(approval)
+    if not ok["approved"]:  # rejected: no vendor gets an email
+        return {"rounds": [f"Not negotiated: the program was rejected by {ok['by']}. {ok.get('note') or ''}".strip()]}
     for rnd in range(1, ROUNDS + 1):
         task = (
             "For EACH vendor: draft_email (ask for a consolidation discount on a co-termed renewal) then send_email "

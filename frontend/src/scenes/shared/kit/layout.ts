@@ -207,6 +207,9 @@ function orderRuns() {
 
 // ------------------------------------------------------------------ run-local agent layout
 
+/** siblings per fan row before a parent's subagents wrap into staggered rows */
+const FAN_ROW = 8;
+
 function placeLocal(a: KitAgent) {
   const L = config.preset.local;
   const sp = fit.spread;
@@ -231,6 +234,16 @@ function placeLocal(a: KitAgent) {
   if (L.fan === "stack") {
     a.u = p.u + (shift + alt(a.sib) * 0.35 + jit(a.id, 31) * 0.4) * sp;
     a.v = p.v + (L.fanLen + a.sib * L.stackGap) * deep * sp;
+  } else if (a.sibs > FAN_ROW) {
+    // many siblings (e.g. 30 market agents of one desk): staggered rows of a curved fan instead of one long line
+    const per = Math.max(FAN_ROW, Math.ceil(Math.sqrt(a.sibs * 2.2)));
+    const row = Math.floor(a.sib / per);
+    const col = a.sib - row * per;
+    const cnt = Math.min(per, a.sibs - row * per);
+    const off = col - (cnt - 1) / 2 + (row % 2 && cnt === per ? 0.5 : 0); // odd full rows staggered half a gap
+    const half = (per - 1) / 2 || 1;
+    a.u = p.u + (shift + off * L.subGap * 0.92 * deep + jit(a.id, 31) * 0.3) * sp;
+    a.v = p.v + (L.fanLen * deep + row * L.fanLen * 0.62 + (off / half) ** 2 * L.fanLen * 0.35 + jit(a.id, 32) * 0.3) * sp;
   } else {
     const off = a.sib - (a.sibs - 1) / 2;
     a.u = p.u + (shift + off * L.subGap * deep + jit(a.id, 31) * 0.45) * sp;

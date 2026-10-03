@@ -16,6 +16,16 @@ Agents spawn as glowing shapes, pulse on every LLM call, fan out to subagents, q
 and fade when they finish. One line of Python. Works with **LangChain, LangGraph, deepagents, OpenAI Agents SDK,
 Hatchet, MCP**, and **Claude Code** itself.
 
+## What's new in 0.3.0
+
+- **Fast decisions:** route / guard / check decisions from TypeSafe Jev (or Laya, an LLM judge, plain code) drawn as snaps on the agent, with a HUD rate chip.
+- **High-volume mode:** busy agents switch to decision halos and the server aggregates per second, so 100+ decisions/s stays readable at 60 fps (`?sim=hf` to see it).
+- **Long-running runs:** Hatchet durable waits keep a run open and show `waiting on approval`; an **Approve / Reject** button can resolve them through your webhook.
+- **New demos** in the docker stack: incident triage, vendor consolidation (long), trading desk (paper, fast), all deepagents + Hatchet.
+- **Models:** deepagents model strings, OpenAI GPT-5.6 on the Responses API, Gemini, Amazon Bedrock Mantle.
+- **Accurate tokens:** one convention everywhere (input includes cached, cached shown separately); no double counts on re-delivery or reconnect.
+- **Claude Code:** subagents that started before a server restart still show up.
+
 ## Get started
 
 Pick your path. Each one ends at **http://localhost:8100/neural** (no agents yet? try `?sim=1`).
@@ -155,6 +165,10 @@ shared server never receives prompts. `npx agentglow status` shows `prompts: cap
 | handoffs | agents chained with a message along the edge |
 | skills (Claude Code, deepagents and OpenAI Agents skills, `agentglow.skill`) | a `skill:name` ring on the agent using it |
 | Hatchet workflow runs | runs and their steps, whatever they are named, including parallel steps and retries |
+| durable waits (approvals, sleeps) | the run stays open; the step and agent show `waiting on approval` / `sleeping until ...` |
+| fast decisions (Jev, Laya, an LLM judge, code guards; `agentglow.decision`) | route fans with per-option %, guard gates (a red `BLOCKED` on a deny), check rings, with provider and latency |
+| many decisions per second | per-agent halos (`jev 42/s · 3% deny · p50 38 ms`); only denies, flips and unsure guards pop individually |
+| orders (`agentglow.order`) | BUY / SELL chips, dashed `paper` when dry-run |
 
 **Agents are always the center.** Graphs, databases and MCP servers are side resources that only show up when used, and the camera
 frames everything calmly: one smooth zoom per burst of spawns, never a jittery in-and-out. Stats sit in a slim top bar;
@@ -177,6 +191,7 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
 | [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts) - no code |
 | [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |
+| [deepagents-hatchet: trading desk](examples/deepagents-hatchet#trading-desk-paper-fast) | Hatchet-orchestrated paper trading desk on synthetic weather markets: one durable child run per market, fast rate-capped Jev gates as halos, deepagents analyst runs, durable human gates, kill switch, paper orders |
 
 Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
 

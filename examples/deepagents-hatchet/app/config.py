@@ -30,10 +30,23 @@ ERP_MCP_URL = os.environ.get("ERP_MCP_URL", "http://localhost:8203/mcp")
 EMAIL_MCP_URL = os.environ.get("EMAIL_MCP_URL", "http://localhost:8204/mcp")
 DEMO_SLEEP_S = int(os.environ.get("DEMO_SLEEP_S", "20"))  # durable sleep between negotiation rounds (stands in for days)
 APPROVAL_TIMEOUT_S = int(os.environ.get("APPROVAL_TIMEOUT_S", "1800"))  # auto-approve after this long (30 min)
-# LLM: any LangChain `init_chat_model` spec "<provider>:<model>" - google_genai:, openai:, anthropic:.
-# Keys come from the standard env vars: GEMINI_API_KEY (or GOOGLE_API_KEY), OPENAI_API_KEY, ANTHROPIC_API_KEY.
+# LLM: any LangChain `init_chat_model` spec "<provider>:<model>" - google_genai:, openai:, anthropic:,
+# bedrock_mantle_openai:, bedrock_mantle_anthropic: (Amazon Bedrock Mantle, langchain-aws).
+# Keys come from the standard env vars: GEMINI_API_KEY (or GOOGLE_API_KEY), OPENAI_API_KEY, ANTHROPIC_API_KEY,
+# AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key) or standard AWS credentials for Mantle.
 # (Legacy OBS_MODEL=<gemini model> still works.)
 MODEL = os.environ.get("AGENT_MODEL") or (f"google_genai:{os.environ['OBS_MODEL']}" if os.environ.get("OBS_MODEL") else "google_genai:gemini-3.8-flash")
+
+# deepagents builds every agent model from its "<provider>:<model>" string (create_deep_agent(model=MODEL)) via its provider
+# profiles: built-in `openai` -> Responses API. Our additions: low temperature / low thinking for Gemini, and the AWS
+# region for Bedrock Mantle (endpoint https://bedrock-mantle.<region>.api.aws). ChatOpenAIMantle already uses the
+# Responses API for OpenAI GPT models (openai.gpt-*) and Chat Completions for gpt-oss / other open-weight models.
+from deepagents import ProviderProfile, register_provider_profile  # noqa: E402
+
+register_provider_profile("google_genai", ProviderProfile(init_kwargs={"temperature": 0.2, "thinking_level": "low"}))
+AWS_REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+for _mantle in ("bedrock_mantle_openai", "bedrock_mantle_anthropic"):
+    register_provider_profile(_mantle, ProviderProfile(init_kwargs={"region_name": AWS_REGION}))
 
 # Optional: Langfuse over plain OTLP - on when keys are set (scripts/gen-obs-env.sh) unless LANGFUSE_EXPORT=0.
 # Start Langfuse with `docker compose --profile langfuse up -d`.

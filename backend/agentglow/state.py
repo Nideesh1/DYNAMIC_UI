@@ -44,6 +44,10 @@ class Hub:
         self.buffer: deque[dict] = deque(maxlen=buffer)
         self.topology: dict[str, dict] = {}  # server -> merged mcp_register event
         self.subs: set[Sub] = set()
+        # SSE event id = "<epoch>-<seq>": a reconnecting viewer's Last-Event-ID resumes after what it already applied
+        # instead of re-adding replayed events (tokens, calls); another epoch (server restarted) = full replay
+        self.epoch = format(time.time_ns(), "x")
+        self.seq = 0
 
     # ---- ingest (every path scrubs spans here: identity keys, raw prompts and secrets never reach events)
     def ingest_live(self, items: list[dict], scope: str | None = None) -> int:
@@ -99,6 +103,8 @@ class Hub:
                 sc = self.scope_of(ev.get("run_id"))
                 if sc:
                     ev["scope"] = sc
+                self.seq += 1
+                ev["seq"] = self.seq
                 self.buffer.append(ev)
             for sub in list(self.subs):
                 if sub.filter.match(ev, self.scope_of):
@@ -138,11 +144,20 @@ class Hub:
             self.topology[ev["server"]] = {**ev, "resources": list(ev.get("resources", []))}
         return ev
 
-    def replay(self, f: Filter = Filter()) -> list[dict]:
+    def replay(self, f: Filter = Filter(), after: int = 0) -> list[dict]:
         """What a new viewer needs: MCP topology + events of runs still in progress (finished runs would just flash),
-        restricted to what its filter allows."""
+        restricted to what its filter allows. `after`: a reconnecting viewer's last seq (this epoch), only newer events."""
         done = {e["run_id"] for e in self.buffer if e.get("type") == "run" and e.get("status") in ("completed", "failed")}
-        return list(self.topology.values()) + [e for e in self.buffer if e.get("run_id") not in done and f.match(e, self.scope_of)]
+        return list(self.topology.values()) + [e for e in self.buffer if e.get("seq", 0) > after and e.get("run_id") not in done
+                                               and f.match(e, self.scope_of)]
+
+    def resume_after(self, last_event_id: str) -> int:
+        """Last-Event-ID -> seq to replay after (0 = everything: none sent, or from another server instance / restart)."""
+        epoch, _, seq = (last_event_id or "").partition("-")
+        return int(seq) if epoch == self.epoch and seq.isdigit() else 0
+
+    def event_id(self, ev: dict) -> str | None:
+        return f"{self.epoch}-{ev['seq']}" if "seq" in ev else None
 
     def counts(self, f: Filter = Filter()) -> dict:
         if f.empty:

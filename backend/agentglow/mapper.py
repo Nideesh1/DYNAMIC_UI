@@ -51,6 +51,15 @@ with no span activity for RUN_MAX_IDLE_MS (default 24 h) is completed so nothing
 when a task triggers it, is in another open Hatchet run) fold into their parent run as subagents of the agent that
 triggered them; parallel instances of one step name (fan-out) keep the step `running` until the last one ends.
 
+Decisions (docs/SPEC.md "Decisions"): a span with `agentglow.decision` = choice | score | noul (+ `.question`, `.result`,
+`.p`, `.options` JSON [{name, p}], `.provider`, `.purpose`, `.target`) is a fast structured decision (Jev / Laya / an
+LLM-as-judge) of its owning agent: one `decision` event when it ends (`ms` = its duration, options top 5 by p, labels
+via scrub.decision_text). It is never classified as an LLM or tool span itself. At high rates (hv.py) a busy agent's
+decisions are aggregated into `decision_stats` once per tick; only interesting ones still go out individually.
+
+Orders (docs/SPEC.md "Orders"): a span with `agentglow.event` = order (+ `agentglow.order.side`, `.qty`, `.price`,
+`.status`, `.instrument`, `.dry_run`, `.reason`) → one `order` event of its owning agent when it ends.
+
 MCP backend spans (`agentglow.mcp.*`, from the MCP server's process) can reach the server before the caller's tool span:
 one whose parent is not known yet is held until the parent arrives, and dropped after ORPHAN_MS (never a run of its own).
 """
@@ -64,7 +73,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from .scrub import SKILL_KEY, session_title, skill_name, step_name
+from .hv import DecisionRate
+from .scrub import SKILL_KEY, decision_text, session_title, skill_name, step_name
 
 LLM_OPS = {"chat", "text_completion", "generate_content"}
 LG_NODES = {"model", "tools", "agent", "call_model", "__start__", "__end__"}
@@ -76,6 +86,12 @@ TEXT_RE = re.compile(r'"(?:content|text)":\s*"((?:[^"\\]|\\.)+)"')
 SKILL_MD_RE = re.compile(r"^(.*/)?(?P<skill>[^/]+)/SKILL\.md$")  # deepagents: read_file of <skill dir>/SKILL.md
 FILE_PATH_RE = re.compile(r"""['"]file_path['"]\s*:\s*['"]([^'"]+)['"]""")
 MAX_SKILL_SETS = 1024
+DECISION_KEY = "agentglow.decision"
+DECISION_KINDS = {"choice", "score", "noul"}
+MAX_DECISION_OPTIONS = 5
+EVENT_KEY = "agentglow.event"
+ORDER_KEY = "agentglow.order"
+ORDER_STATUSES = {"would_place", "placed", "filled", "rejected", "cancelled"}
 SHELL_TOOLS = {"shell", "exec_command", "local_shell", "bash", "run_shell_command"}
 # a shell READ of a skill file (no redirect/pipe between the reader and the path); `sed -i` is a write, see _shell_skills
 SHELL_SKILL_RE = re.compile(r"\b(?:cat|sed|head|less|more|bat)\b[^\n>|;&]*?([A-Za-z0-9._-]+)/SKILL\.md\b")
@@ -96,9 +112,26 @@ UNIT_MS = {"s": 1000, "m": 60_000, "h": 3_600_000}
 MAX_STEP_RUNS = 20_000
 ORPHAN_MS = 10_000  # how long an MCP backend span waits for its (caller's) parent span
 MAX_ORPHANS = 5_000
+# Prompt-cache usage, one of each spelling (GenAI semconv old/new, OpenInference). Token convention: `tokens_in` = ALL
+# prompt tokens including cached ones (what `llm.token_count.prompt` / `gen_ai.usage.input_tokens` carry); these are
+# subsets of it, never added on top.
+CACHE_READ_KEYS = ("gen_ai.usage.cache_read_input_tokens", "gen_ai.usage.cache_read.input_tokens",
+                   "llm.token_count.prompt_details.cache_read")
+CACHE_WRITE_KEYS = ("gen_ai.usage.cache_creation_input_tokens", "gen_ai.usage.cache_creation.input_tokens",
+                    "llm.token_count.prompt_details.cache_write")
 
 
 MAX_SCOPED_RUNS = 20_000
+
+
+def _first_int(a: dict, keys: tuple) -> int:
+    for k in keys:
+        try:
+            if a.get(k):
+                return int(a[k])
+        except (TypeError, ValueError):
+            pass
+    return 0
 
 
 def is_lg_node(name: str) -> bool:
@@ -168,6 +201,30 @@ def _deadline(v: Any) -> int | None:
             return None
         return int((dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp() * 1000)
     return int(n * 1000 if n < 1e11 else n)
+
+
+def _num(v: Any) -> float | int | None:
+    """Finite number (int kept int) or None."""
+    if isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):
+        return None
+    return int(f) if f.is_integer() and abs(f) < 1e15 else round(f, 6)
+
+
+def _prob(v: Any) -> float | None:
+    """Probability → float clamped to 0..1 (None if missing / not a number)."""
+    if isinstance(v, bool) or v is None or v == "":
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return min(1.0, max(0.0, f)) if f == f else None
 
 
 @dataclass
@@ -261,6 +318,7 @@ class Mapper:
         self.shell_calls: dict[str, None] = {}  # hosted shell_call ids already scanned (FIFO, bounded)
         self.step_runs: dict[str, str] = {}  # hatchet.step_run_id -> run id (Hatchet wait spans carry only that)
         self.orphans: dict[str, dict] = {}  # MCP backend span id -> {"start", "end", "parent", "ts"} until its parent shows
+        self.hv = DecisionRate()  # high-volume decisions: per-agent aggregation + global cap (hv.py)
 
     def _note_scope(self, s: "Span") -> None:
         if s.run in self.scopes:
@@ -332,7 +390,7 @@ class Mapper:
         return out
 
     def tick(self, now_ms: int) -> list[dict]:
-        out: list[dict] = []
+        out: list[dict] = self.hv.flush(now_ms)
         for k in [k for k, o in self.orphans.items() if now_ms - o["ts"] >= ORPHAN_MS]:  # parent never came: drop
             self.orphans.pop(k)
         for r in list(self.runs.values()):
@@ -404,7 +462,9 @@ class Mapper:
         elif parent and is_lg_node(s.name) and not parent.agent and not is_lg_node(parent.name) and not (parent.llm or parent.tool):
             self._spawn(parent, parent.name, out, parent.start)  # parent is a LangGraph agent graph
 
-        if self._is_llm(s) or (not self._not_llm(s) and ((parent and parent.name in LLM_PARENTS) or s.name.startswith("Chat"))):
+        if DECISION_KEY in a or a.get(EVENT_KEY) == "order":
+            pass  # a decision / order is shown as one `decision` event at its end, never as an LLM turn / tool call
+        elif self._is_llm(s) or (not self._not_llm(s) and ((parent and parent.name in LLM_PARENTS) or s.name.startswith("Chat"))):
             s.llm = True
             self._thinking(self._owner(s, out), s.run, out, ts)
         elif self._is_tool(s) or (parent and parent.name == "tools"):
@@ -439,11 +499,13 @@ class Mapper:
             name = self._agent_name(s)
             if name:
                 self._spawn(s, name, out, s.start)
-        if not s.llm and self._is_llm(s):
+        if DECISION_KEY in a or a.get(EVENT_KEY) == "order":
+            s.llm = s.tool = False
+        elif not s.llm and self._is_llm(s):
             s.llm = True
         elif s.llm and self._not_llm(s):  # guessed from its parent (`agent` node) but it's a chain, not a model call
             s.llm = False
-        if not s.tool and not s.llm and not s.agent and self._is_tool(s):
+        if not s.tool and not s.llm and not s.agent and DECISION_KEY not in a and not s.attrs.get(EVENT_KEY) == "order" and self._is_tool(s):
             self._tool_start(s, out, s.start)
         self._mcp_call(s, out, s.start)
         if "SkillsMiddleware" in s.name:
@@ -456,9 +518,12 @@ class Mapper:
             tout = int(a.get("gen_ai.usage.output_tokens") or a.get("llm.token_count.completion") or a.get("gen_ai.usage.completion_tokens") or 0)
             if a.get("agentglow.llm.pulse") is not False:  # False: tokens come from elsewhere (Claude Code traces)
                 ev = {"type": "llm", "run_id": s.run, "id": owner, "tokens_in": tin, "tokens_out": tout, "latency_ms": max(0, s.end - s.start), "ts": ts}
-                cached = int(a.get("gen_ai.usage.cache_read_input_tokens") or 0)
+                cached = _first_int(a, CACHE_READ_KEYS)  # a subset of tokens_in (prompt totals include cached)
                 if cached:
                     ev["tokens_cached"] = cached
+                written = _first_int(a, CACHE_WRITE_KEYS)
+                if written:
+                    ev["tokens_cache_write"] = written
                 out.append(ev)
             self._remember_tool_calls(owner, a)
             self._hosted_shell_skills(s, owner, out, ts)
@@ -481,6 +546,10 @@ class Mapper:
             out.append({"type": "skill", "run_id": s.run, "id": self._owner(s, out), "name": s.skill, "status": "end", "ts": ts})
         if a.get("db.system"):
             self._graph(s, out, ts)
+        if a.get(DECISION_KEY) and not s.agent:
+            self._decision(s, out, ts)
+        if a.get(EVENT_KEY) == "order" and not s.agent:
+            self._order(s, out, ts)
         if "agentglow.final" in a:
             self._final(s.run, a["agentglow.final"], out, ts)
         if s.team:  # langgraph-supervisor team graph ended → its supervisor exits
@@ -791,7 +860,11 @@ class Mapper:
             out.append({"type": "step", "run_id": run.id, "step": st.step, "status": "running", "ts": ts})
 
     def _wait_start(self, s: Span, run: Run, out: list, ts: int) -> None:
-        st = self._step_span(s)
+        # Hatchet's own wait span hangs off the trigger's traceparent: for a folded child run that is a step of the
+        # PARENT run, so its step run id (when known) names the step it really waits in
+        srid = str(s.attrs.get("hatchet.step_run_id") or "")
+        st = self.spans.get(run.step_runs.get(srid) or "") if srid and not s.step else None
+        st = st or self._step_span(s)
         s.wait_step = st.id if st else None
         shown = self._shown_wait(run, st)
         run.waits[s.id] = s
@@ -819,6 +892,27 @@ class Mapper:
         ag = self.agents.get(owner or "")
         if ag and not ag.done and not any(self._wait_agent(w, self.spans.get(w.wait_step or "")) == owner for w in run.waits.values()):
             self._thinking(owner, s.run, out, ts, force=True)
+
+    def open_wait(self, run_id: str, agent_id: str | None = None, step: str | None = None) -> dict | None:
+        """The open wait an approval targets (POST /live/approve): newest first, owned by `agent_id` and/or in `step`.
+        Returns {reason, step?, workflow?, wait_run_id?} (the Hatchet workflow run / workflow of the waiting step, e.g.
+        a child run folded into `run_id`), or None. A parked step (evicted while waiting) matches by `step` too."""
+        run = self.runs.get(run_id)
+        if run is None:
+            return None
+        for w in sorted(run.waits.values(), key=lambda w: (w.wait[2], w.start), reverse=True):
+            st = self.spans.get(w.wait_step or "")
+            if agent_id and self._wait_agent(w, st) != agent_id:
+                continue
+            if step and (st is None or st.step != step):
+                continue
+            a = st.attrs if st else w.attrs
+            out = {"reason": w.wait[0], "step": st.step if st else None, "workflow": _hatchet_workflow(a) or None,
+                   "wait_run_id": str(a.get("hatchet.workflow_run_id") or "") or None}
+            return {k: v for k, v in out.items() if v}
+        if step and not agent_id and step in run.parked:
+            return {"reason": run.parked[step][0], "step": step}
+        return None
 
     # ------------------------------------------------------------------ llm / tools
     @staticmethod
@@ -1050,6 +1144,64 @@ class Mapper:
                 if self._first_use(s, out, "skill:" + n, owner):
                     out.append({"type": "skill", "run_id": s.run, "id": owner, "name": n, "status": "start", "ts": ts})
                     out.append({"type": "skill", "run_id": s.run, "id": owner, "name": n, "status": "end", "ts": ts})
+
+    def _decision(self, s: Span, out: list, ts: int) -> None:
+        a = s.attrs
+        kind = str(a.get(DECISION_KEY)).strip().lower()
+        opts = self._decision_options(a.get(DECISION_KEY + ".options"))
+        result = decision_text(a.get(DECISION_KEY + ".result"), 40) or (opts[0]["name"] if opts else "")
+        p = _prob(a.get(DECISION_KEY + ".p"))
+        if p is None:
+            p = next((o["p"] for o in opts if o["name"] == result), None)
+        ev = {"type": "decision", "run_id": s.run, "id": self._owner(s, out), "kind": kind if kind in DECISION_KINDS else "choice",
+              "question": decision_text(a.get(DECISION_KEY + ".question"), 80) or kind, "result": result}
+        if p is not None:
+            ev["p"] = round(p, 3)
+        if opts:
+            ev["options"] = opts
+        ev["provider"] = decision_text(a.get(DECISION_KEY + ".provider"), 40) or "llm"
+        for k in ("purpose", "target"):
+            v = decision_text(a.get(f"{DECISION_KEY}.{k}"), 40)
+            if v:
+                ev[k] = v
+        ev.update(ms=max(0, (s.end or s.start) - s.start), ts=ts)
+        important = a.get(DECISION_KEY + ".important")
+        out += self.hv.offer(ev, important is True or str(important).lower() in ("true", "1"))
+
+    def _order(self, s: Span, out: list, ts: int) -> None:
+        a, k = s.attrs, ORDER_KEY + "."
+        side = decision_text(a.get(k + "side"), 8).lower() or "buy"
+        status = decision_text(a.get(k + "status"), 16).lower()
+        ev = {"type": "order", "run_id": s.run, "id": self._owner(s, out), "side": side,
+              "qty": _num(a.get(k + "qty")) or 0, "price": _num(a.get(k + "price")),
+              "status": status if status in ORDER_STATUSES else "would_place",
+              "instrument": decision_text(a.get(k + "instrument"), 40),
+              "dry_run": a.get(k + "dry_run") is True or str(a.get(k + "dry_run")).lower() in ("true", "1")}
+        if ev["price"] is None:
+            del ev["price"]
+        reason = decision_text(a.get(k + "reason"), 80)
+        if reason:
+            ev["reason"] = reason
+        ev["ts"] = ts
+        out.append(ev)
+
+    @staticmethod
+    def _decision_options(v: Any) -> list[dict]:
+        """`agentglow.decision.options` (JSON string, list of {name, p}, or {name: p}) → top MAX_DECISION_OPTIONS by p."""
+        data = _json(v)
+        if isinstance(data, dict):
+            data = [{"name": k, "p": x} for k, x in data.items()]
+        rows = []
+        for it in data if isinstance(data, list) else []:
+            if isinstance(it, str):
+                it = _json(it)
+            if not isinstance(it, dict):
+                continue
+            name, p = decision_text(it.get("name"), 40), _prob(it.get("p"))
+            if name and p is not None:
+                rows.append({"name": name, "p": round(p, 3)})
+        rows.sort(key=lambda r: -r["p"])
+        return rows[:MAX_DECISION_OPTIONS]
 
     def _graph(self, s: Span, out: list, ts: int) -> None:
         a = s.attrs

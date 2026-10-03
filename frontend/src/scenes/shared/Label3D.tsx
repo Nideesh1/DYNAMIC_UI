@@ -51,7 +51,7 @@ export interface Label3DHandle {
   setEmphasis(on: boolean): void;
 }
 
-export type PlateStyle = "pill" | "box" | "bar" | "underline" | "none";
+export type PlateStyle = "pill" | "tag" | "box" | "bar" | "underline" | "none";
 
 export interface Label3DProps {
   /** main line (string, or colored segments) */
@@ -185,6 +185,8 @@ void main() {
 const STYLE: Record<PlateStyle, { fillA: number; edgeA: number; border: number; bar: number; under: number; round: number }> = {
   // border / bar / under in × font size; round in × plate height (0.5 = pill)
   pill: { fillA: 0.52, edgeA: 0.6, border: 0.055, bar: 0, under: 0, round: 0.5 },
+  // a near-opaque dark pill with a bold accent border: short-lived callouts (decision labels) that must read on anything
+  tag: { fillA: 0.86, edgeA: 0.95, border: 0.085, bar: 0, under: 0, round: 0.5 },
   box: { fillA: 0.62, edgeA: 0.55, border: 0.055, bar: 0, under: 0, round: 0.14 },
   bar: { fillA: 0.66, edgeA: 0.95, border: 0, bar: 0.14, under: 0, round: 0.06 },
   underline: { fillA: 0.52, edgeA: 0.8, border: 0, bar: 0, under: 0.07, round: 0.06 },
@@ -340,6 +342,7 @@ function Label3DInner(props: Label3DProps) {
       bx1: 0,
       by1: 0,
       ndc: new THREE.Vector3(),
+      on: false,
       keyM: "\u0000",
       keyS: "\u0000",
     }),
@@ -416,7 +419,7 @@ function Label3DInner(props: Label3DProps) {
       let W = 0, H = 0, cw = 0, hS = 0, gap = 0;
       for (let k = 0; k < 2; k++) {
         const withSub = k === 0 && s.hasSub;
-        const padX = none ? 0 : size * (q.plate === "pill" && !withSub ? 0.6 : 0.5);
+        const padX = none ? 0 : size * ((q.plate === "pill" || q.plate === "tag") && !withSub ? 0.6 : 0.5);
         const c = withSub ? Math.max(wM, wS) : wM;
         const hs = withSub ? subSize() * 1.2 : 0;
         const gp = withSub ? size * 0.1 : 0;
@@ -566,7 +569,16 @@ function Label3DInner(props: Label3DProps) {
       if (off !== s.subOff && s.hasSub) (s.subOff = off), api.layout();
       e.live = false;
     }
-    if (e) e.drawn = false;
+    if (e) {
+      e.drawn = false;
+      // (re)appearing: note when (newest decision labels win), and show right away instead of waiting for a pass
+      const on = s.cur > 0.004 && o.visible;
+      if (on && !s.on) {
+        e.born = performance.now();
+        if (e.kind === "decision") (e.show = 1), (s.dc = 1);
+      }
+      s.on = on;
+    }
     if (s.cur <= 0.004 || !o.visible) {
       b.visible = false;
       return;

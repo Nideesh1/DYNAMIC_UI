@@ -3,10 +3,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { useSceneConfig } from "./config";
 import { HUD_LAYOUT_EVENT } from "./kit/fit";
 import "./hud.css";
-import { startLiveRun, useRunAvailable, useRunWorkflows } from "./useSceneSetup";
+import { sendApproval, startLiveRun, useApproveAvailable, useRunAvailable, useRunWorkflows } from "./useSceneSetup";
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
-import { getInstance, isDone, isLive, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
+import { decisionTint } from "./kit/DecisionGlyph";
+import { decisionText, getInstance, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -47,6 +48,12 @@ export function describe(e: WorldEvent): string {
       return `mcp server ${e.server} online`;
     case "skill":
       return e.status === "start" ? `${short(e.id)} · skill: ${e.name}` : `${short(e.id)} · skill: ${e.name} done`;
+    case "decision":
+      return `${short(e.id)} · ${decisionText(e)} · ${Math.round(e.ms)}ms${e.why ? ` · ${e.why}` : ""}`;
+    case "decision_stats":
+      return `${short(e.id)} · ${e.n} decisions in ${Math.round(e.window_ms)}ms`;
+    case "order":
+      return `${short(e.id)} · ${orderText(e)}${e.reason ? ` · ${e.reason}` : ""}`;
     case "final":
       return `final answer · ${shortRun(e.run_id)}`;
     case "chat":
@@ -63,8 +70,30 @@ function chipState(run: Run, s: string): [string, string] {
   return w ? ["waiting", `${s}: ${waitLabel(w)}`] : [run.steps[s], `${s}: ${run.steps[s]}`];
 }
 
+/** order accent: buy / yes green, sell / no red, rejected / cancelled grey */
+export const orderColor = (o: { side: string; status: string }) =>
+  o.status === "rejected" || o.status === "cancelled" ? "#94a3b8" : o.side === "sell" || o.side === "no" ? "#fb7185" : "#4ade80";
+
+/** 60 s decision-rate sparkline (per-second samples), inline SVG */
+function Sparkline({ data }: { data: number[] }) {
+  if (data.length < 2) return null;
+  const max = Math.max(...data, 1);
+  const W = 60, H = 14;
+  const pts = data.map((v, k) => `${((k + 60 - data.length) / 59) * W},${H - 1 - (v / max) * (H - 2)}`).join(" ");
+  return (
+    <svg className="hud-spark" width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** decision accent: noul yes green / no red, choice + score cyan */
+export const decisionColor = (d: { kind: string; result: string; p?: number }) => decisionTint(d);
+
 function colorOf(e: WorldEvent) {
   if (e.type === "skill") return SKILL_COLOR;
+  if (e.type === "decision") return decisionColor(e);
+  if (e.type === "order") return orderColor(e);
   const id = "id" in e ? e.id : e.type === "message" ? e.from_id : null;
   const inst = id ? world.instances.get(id) : null;
   if (inst) return TYPE_COLOR[inst.type];
@@ -113,7 +142,9 @@ const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 function HudPanels({ title, subtitle, onClose, inset, children }: { title: string; subtitle: string; selected?: string | null; onClose?: () => void; inset?: ReactNode; children?: ReactNode }) {
   const { embedded, scope, run: runFilter } = useSceneConfig();
   const canRun = useRunAvailable();
+  const canApprove = useApproveAvailable();
   const w = useWorld();
+  const lastDec = w.ticker.find((e): e is Extract<WorldEvent, { type: "decision" }> => e.type === "decision");
   const [, tick] = useState(0);
   const [info, setInfo] = useState(false); // the theme legend lives behind the (i) toggle
   const [side, setSide] = useState(loadSide);
@@ -249,6 +280,30 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
                   <b>{graph}</b> graph
                 </span>
               )}
+              {w.stats.decisions > 0 && w.rate.perS > 2 && (
+                <span
+                  className={`hud-stat hud-dec-hv${w.rate.deny > 0.05 ? " is-deny" : ""}`}
+                  title={`decisions per second (last 60 s)\n${w.stats.decisions} decisions in total\n${[...w.decisionProviders].map(([p, v]) => `${p}: ${v.n}`).join("\n")}`}
+                >
+                  <b>{Math.round(w.rate.perS)}/s</b> · deny {(w.rate.deny * 100).toFixed(w.rate.deny < 0.1 ? 1 : 0)}% · {Math.round(w.rate.p50)}/{Math.round(w.rate.p95)} ms
+                  <Sparkline data={w.rate.spark} />
+                </span>
+              )}
+              {w.stats.decisions > 0 && w.rate.perS <= 2 && (
+                <span
+                  key={w.stats.decisions} // re-mounts on every decision: the chip pulses once
+                  className={`hud-stat hud-dec${lastDec && isDeny(lastDec) ? " is-deny" : ""}`}
+                  title={[...w.decisionProviders].map(([p, v]) => `${p}: ${v.n} · avg ${Math.round(v.ms / v.n)} ms`).join("\n")}
+                >
+                  <b>{w.stats.decisions}</b> decisions · avg {Math.round(w.stats.decisionMs / w.stats.decisions)} ms
+                </span>
+              )}
+              {w.orders.n > 0 && (
+                <span className="hud-stat" title={`orders: ${w.orders.n} · paper ${w.orders.paper} · rejected/cancelled ${w.orders.rejected}`}>
+                  orders <b>{w.orders.n}</b>
+                  {w.orders.paper > 0 && w.orders.paper === w.orders.n ? " (paper)" : w.orders.paper > 0 ? ` (${w.orders.paper} paper)` : ""}
+                </span>
+              )}
               {w.stats.mcpCalls > 0 && (
                 <span className="hud-stat" title="MCP calls">
                   <b>{w.stats.mcpCalls}</b> MCP
@@ -314,6 +369,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
         </div>
       </aside>
 
+      {w.mode === "live" && canApprove && <ApprovalTray rail={side.collapsed} />}
       {children}
     </>
   );
@@ -365,11 +421,12 @@ function EventLog() {
           <>
             <i />
             {e.type === "skill" && <b className="hs-skill">{e.status === "start" ? "skill" : "skill done"}</b>}
+            {e.type === "decision" && <b className="hs-dec">{isDeny(e) ? "deny" : e.kind}</b>}
             <span>{describe(e)}</span>
           </>
         );
         return (
-          <li key={`${e.ts}-${e.type}-${i}`} className={e.type === "skill" ? "is-skill" : undefined} style={{ ["--c" as string]: colorOf(e) }}>
+          <li key={`${e.ts}-${e.type}-${i}`} className={e.type === "skill" ? "is-skill" : e.type === "decision" ? (isDeny(e) ? "is-dec is-deny" : "is-dec") : undefined} style={{ ["--c" as string]: colorOf(e) }}>
             {id ? (
               <button onClick={() => selectInstance(id)} title="Inspect agent">
                 {body}
@@ -481,6 +538,99 @@ export function RunButton() {
       <button onClick={run} disabled={busy} title={wf?.topic || undefined}>{busy ? "Starting…" : "▶ Run agents"}</button>
       {msg && <span>{msg}</span>}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ live: optional POST /live/approve
+
+/** A live agent waiting on a human (the wait contract's reason, e.g. "approval", "human approval yes 12"). */
+export function needsHuman(i: Instance): boolean {
+  return isLive(i) && i.status === "waiting" && !!i.wait && /human|approv/i.test(i.wait.reason);
+}
+
+type Verdict = "approving" | "rejecting" | "approved" | "rejected" | "gone" | "error";
+/** per wait (agent id + reason + deadline), shared by the tray and the Selected panel; a new wait starts clean */
+const verdicts = new Map<string, Verdict>();
+const verdictSubs = new Set<() => void>();
+const waitKey = (i: Instance) => `${i.id}|${i.wait?.reason}|${i.wait?.until}`;
+
+async function decide(i: Instance, approve: boolean) {
+  const k = waitKey(i);
+  const set = (v: Verdict) => {
+    verdicts.set(k, v);
+    if (verdicts.size > 500) verdicts.delete(verdicts.keys().next().value as string);
+    verdictSubs.forEach((f) => f());
+  };
+  set(approve ? "approving" : "rejecting");
+  const r = await sendApproval(i.run, i.id, approve);
+  set(r === "ok" ? (approve ? "approved" : "rejected") : r);
+}
+
+const VERDICT_TEXT: Record<Verdict, string> = {
+  approving: "approving…", rejecting: "rejecting…", approved: "approved · resuming…", rejected: "rejected · resuming…",
+  gone: "no longer waiting", error: "failed, try again",
+};
+
+/** Approve / Reject for one waiting agent; after a click, its state until the wait clears (from the event stream). */
+function ApproveButtons({ i, compact }: { i: Instance; compact?: boolean }) {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const f = () => bump((x) => x + 1);
+    verdictSubs.add(f);
+    return () => void verdictSubs.delete(f);
+  }, []);
+  const v = verdicts.get(waitKey(i));
+  const locked = v !== undefined && v !== "error";
+  return (
+    <div className={`hud-approve${compact ? " is-compact" : ""}`} data-verdict={v}>
+      {!locked && (
+        <>
+          <button className="ha-yes" onClick={() => decide(i, true)} title={`Approve: ${i.wait?.reason}`}>
+            Approve
+          </button>
+          <button className="ha-no" onClick={() => decide(i, false)} title={`Reject: ${i.wait?.reason}`}>
+            Reject
+          </button>
+        </>
+      )}
+      {v && <span role="status">{VERDICT_TEXT[v]}</span>}
+    </div>
+  );
+}
+
+const TRAY_MAX = 3;
+
+/** Bottom-left "needs you" tray: agents waiting on a human, soonest deadline first, each with Approve / Reject. */
+function ApprovalTray({ rail }: { rail: boolean }) {
+  const w = useWorld();
+  const waiting = [...w.instances.values()].filter(needsHuman).sort((a, b) => (a.wait!.until || Infinity) - (b.wait!.until || Infinity));
+  if (!waiting.length) return null;
+  const now = Date.now();
+  return (
+    <section className={`hud hud-approvals${rail ? " is-rail" : ""}`} aria-label="Agents waiting on you">
+      <h4>
+        Needs you <em>{waiting.length}</em>
+      </h4>
+      <ul>
+        {waiting.slice(0, TRAY_MAX).map((i) => {
+          const left = i.wait!.until ? Math.max(0, Math.round((i.wait!.until - now) / 1000)) : null;
+          return (
+            <li key={i.id} style={{ ["--c" as string]: TYPE_COLOR[i.type] }}>
+              <button className="ha-who" onClick={() => selectInstance(i.id)} title={`${i.name} · ${shortRun(i.run)}\n${waitLabel(i.wait!)}`}>
+                <i />
+                <b>{i.name}</b>
+                <span>
+                  {i.wait!.reason}
+                  {left !== null && ` · ${left}s`}
+                </span>
+              </button>
+              <ApproveButtons i={i} compact />
+            </li>
+          );
+        })}
+      </ul>
+      {waiting.length > TRAY_MAX && <p>+{waiting.length - TRAY_MAX} more waiting (Agents → waiting)</p>}
+    </section>
   );
 }
 
@@ -622,6 +772,7 @@ function runWaitText(run: Run): string {
 
 function AgentDetail({ i }: { i: Instance }) {
   const w = useWorld();
+  const canApprove = useApproveAvailable() && w.mode === "live";
   const run = w.runs.get(i.run);
   const chips = run?.hasSteps ? stepChips(run) : null;
   const parent = getInstance(i.parent);
@@ -635,10 +786,13 @@ function AgentDetail({ i }: { i: Instance }) {
       <div className="ap-status" data-status={isLive(i) ? i.status : "done"}>
         {isLive(i) ? (i.status === "waiting" && i.wait ? waitLabel(i.wait) : i.status) : `finished (${i.status})`} · alive {age(i)}
       </div>
+      {canApprove && needsHuman(i) && <ApproveButtons i={i} />}
       <dl className="ap-stats">
         <div>
           <dt>tokens</dt>
-          <dd>{(i.tokens / 1000).toFixed(1)}k</dd>
+          <dd title="prompt + completion tokens; cached = prompt-cache reads, already counted in the prompt">
+            {(i.tokens / 1000).toFixed(1)}k{i.tokensCached > 0 ? ` (${(i.tokensCached / 1000).toFixed(1)}k cached)` : ""}
+          </dd>
         </div>
         <div>
           <dt>LLM calls</dt>
@@ -699,6 +853,45 @@ function AgentDetail({ i }: { i: Instance }) {
           </div>
         </section>
       )}
+      {i.hv && (
+        <section>
+          <h4>Decision rate {hvActive(i) ? "" : "(quiet)"}</h4>
+          <p className="ap-hv">{haloText(i.hv)} · p95 {Math.round(i.hv.p95)}ms</p>
+          <div className="ap-hv-bar" title="outcome mix (smoothed)">
+            {i.hv.seg.map((f, k) =>
+              f > 0.005 ? <span key={k} style={{ flexGrow: f, background: HALO_COLORS[k] }} title={`${segName(k)} ${Math.round(f * 100)}%`} /> : null,
+            )}
+          </div>
+        </section>
+      )}
+      {i.orders.length > 0 && (
+        <section>
+          <h4>Orders</h4>
+          <ul className="ap-decisions">
+            {[...i.orders].reverse().map((o, k) => (
+              <li key={k} className={o.status === "rejected" || o.status === "cancelled" ? "is-strike" : undefined} style={{ ["--c" as string]: orderColor(o) }} title={o.reason || o.instrument}>
+                <b>{o.dry_run ? "paper" : o.status}</b>
+                <span>{orderText(o)}</span>
+                <em>{o.instrument}</em>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {i.decisions.length > 0 && (
+        <section>
+          <h4>{i.hv ? "Interesting decisions" : "Decisions"}</h4>
+          <ul className="ap-decisions">
+            {[...i.decisions].reverse().map((d, k) => (
+              <li key={k} className={isDeny(d) ? "is-deny" : undefined} style={{ ["--c" as string]: decisionColor(d) }} title={d.options?.map((o) => `${o.name} ${Math.round(o.p * 100)}%`).join("\n") || d.question}>
+                <b>{d.why || d.kind}</b>
+                <span>{decisionText(d)}</span>
+                <em>{Math.round(d.ms)}ms</em>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {pending.length > 0 && (
         <section>
           <h4>Waiting on MCP</h4>
@@ -731,4 +924,13 @@ function AgentDetail({ i }: { i: Instance }) {
       </section>
     </div>
   );
+}
+
+/** halo category label: route slots show the route result name */
+function segName(k: number): string {
+  const c = HALO_CATS[k];
+  if (c.startsWith("r") && c.length === 2) {
+    for (const [name, slot] of routeSlots) if (`r${slot}` === c) return name;
+  }
+  return c === "yes" ? "check yes" : c === "no" ? "check no" : c;
 }

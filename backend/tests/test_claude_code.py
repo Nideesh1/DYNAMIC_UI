@@ -233,3 +233,18 @@ def test_run_label_distinguishes_sessions():
     a, b = run_label("/x/repo", "a3f2c9e1", 1_700_000_000_000), run_label("/x/repo", "b71d00aa", 1_700_000_000_000)
     assert a.startswith("Claude Code · repo · a3f2 · ") and b.startswith("Claude Code · repo · b71d · ") and a != b
     assert run_label("") == "Claude Code"
+
+
+def test_subagent_started_before_a_server_restart_is_adopted_on_its_next_event():
+    hub = Hub()
+    t = 1_000_000
+    hub.ingest_hook(hook("UserPromptSubmit", prompt="x"), t)  # fresh server: never saw this subagent's start
+    old = ("ag-old", "general-purpose")
+    hub.ingest_hook(tool("PreToolUse", "Bash", "tu-9", agent=old, command="ls"), t + 100)
+    spawns = [e for e in hub.buffer if e["type"] == "spawn"]
+    assert [s["agent"] for s in spawns] == ["claude", "general-purpose"]
+    assert spawns[1]["parent_id"] == spawns[0]["id"] and spawns[1]["subagent"]
+    assert any(e["type"] == "tool" and e["id"] == spawns[1]["id"] for e in hub.buffer)
+    hub.ingest_hook(hook("SubagentStop", agent_id="ag-old"), t + 200)  # a finished one is not adopted again
+    hub.ingest_hook(tool("PreToolUse", "Bash", "tu-10", agent=old, command="ls"), t + 300)
+    assert len([e for e in hub.buffer if e["type"] == "spawn"]) == 2

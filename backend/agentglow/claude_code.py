@@ -207,11 +207,19 @@ class _Session:
     # swept on session end/idle so an abandoned background item (hook never arrives) can't leak forever
     closing: dict = field(default_factory=dict)  # agent_id -> (deadline, status, reason): close unless SubagentStop
     revivable: OrderedDict = field(default_factory=OrderedDict)  # agent_id -> _Agent closed by a silence rule
+    llm_seen: OrderedDict = field(default_factory=OrderedDict)  # llm_request span ids already turned into `llm`
     transcript: str = ""  # main session transcript (title records)
     custom_title: str = ""  # latest /rename title seen
     ai_title: str = ""  # latest auto title seen
     title_at: int | None = None  # last title check
     title_sig: tuple = ()  # (size, mtime) of the transcript at that check
+
+
+def _usage(a: dict) -> tuple[int, int, int]:
+    """`claude_code.llm_request` usage -> (tokens_in, cache reads, cache writes). AgentGlow convention: `tokens_in` =
+    ALL prompt tokens (uncached input + cache writes + cache reads); cache reads/writes are subsets of it."""
+    cached, written = int(a.get("cache_read_tokens") or 0), int(a.get("cache_creation_tokens") or 0)
+    return int(a.get("input_tokens") or 0) + written + cached, cached, written
 
 
 @dataclass
@@ -262,6 +270,9 @@ class ClaudeCodeAdapter:
             self._spawn_sub(s, *s.held.pop(str(aid)), now, out)
         if aid and str(aid) in s.revivable and ev != "SubagentStart":  # closed on silence but alive after all
             self._revive(s, str(aid), now, out)
+        if (aid and ev not in ("SubagentStart", "SubagentStop") and str(aid) not in s.agents
+                and str(aid) not in s.named):  # started before this server saw it (e.g. a restart): adopt it
+            self._spawn_sub(s, p, _meta(p.get("agent_transcript_path")), now, now, out)
         if aid and str(aid) in s.agents:
             s.agents[str(aid)].last = now
         if ev == "UserPromptSubmit":  # a /rename shows on the next prompt; the first run gets the title too
@@ -849,11 +860,13 @@ class ClaudeCodeAdapter:
     def _llm_event(run_id: str, agent_id: str, sp: dict) -> dict:
         a = sp.get("attributes") or {}
         t0, t1 = sp.get("start_time_ms") or 0, sp.get("end_time_ms") or sp.get("start_time_ms") or 0
-        ev = {"type": "llm", "run_id": run_id, "id": agent_id,
-              "tokens_in": int(a.get("input_tokens") or 0) + int(a.get("cache_creation_tokens") or 0),
+        tin, cached, written = _usage(a)
+        ev = {"type": "llm", "run_id": run_id, "id": agent_id, "tokens_in": tin,
               "tokens_out": int(a.get("output_tokens") or 0), "latency_ms": max(0, t1 - t0), "ts": t1}
-        if int(a.get("cache_read_tokens") or 0):
-            ev["tokens_cached"] = int(a["cache_read_tokens"])
+        if cached:
+            ev["tokens_cached"] = cached
+        if written:
+            ev["tokens_cache_write"] = written
         return ev
 
     @staticmethod
@@ -889,7 +902,11 @@ class ClaudeCodeAdapter:
             ag = ag or (turn.main if turn else None)
             if ag is not None:
                 ag.last = now
-            if ag is not None and not ag.closed:
+            sid = str(sp.get("span_id") or "")
+            if ag is not None and not ag.closed and sid not in s.llm_seen:  # an OTLP retry re-delivers the batch
+                s.llm_seen[sid] = None
+                while len(s.llm_seen) > MAX_DONE_IDS:
+                    s.llm_seen.popitem(last=False)
                 out.append(self._llm_event(ag.turn.run_id, ag.span["span_id"], sp))
         elif kind == "tool" and a.get("tool_name") in AGENT_TOOLS:
             tid = str(a.get("tool_use_id") or "")
@@ -946,9 +963,9 @@ class ClaudeCodeAdapter:
                 ct.exec_aid[sp["parent_span_id"]] = aid
             self._live(out, tr, sp["span_id"], parent["span_id"], str(a.get("model") or "llm"), t0, t1, {
                 "openinference.span.kind": "LLM", "llm.model_name": str(a.get("model") or ""),
-                "gen_ai.usage.input_tokens": int(a.get("input_tokens") or 0) + int(a.get("cache_creation_tokens") or 0),
-                "gen_ai.usage.output_tokens": int(a.get("output_tokens") or 0),
-                "gen_ai.usage.cache_read_input_tokens": int(a.get("cache_read_tokens") or 0)}, status)
+                "gen_ai.usage.input_tokens": _usage(a)[0], "gen_ai.usage.output_tokens": int(a.get("output_tokens") or 0),
+                "gen_ai.usage.cache_read_input_tokens": int(a.get("cache_read_tokens") or 0),
+                "gen_ai.usage.cache_creation_input_tokens": int(a.get("cache_creation_tokens") or 0)}, status)
             return
         name = str(a.get("tool_name") or "tool")
         sub = ct.subs.get(ct.exec_aid.get(self.exec_of.get(sp["span_id"], ""), "")) if name in AGENT_TOOLS else None

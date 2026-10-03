@@ -204,6 +204,15 @@ class Agent(_Span):
     def skill(self, name: str) -> "Tool":
         return skill(name, parent=self)
 
+    def decision(self, kind: str, question: str, **kw: Any) -> "Decision":
+        return decision(kind, question, parent=self, **kw)
+
+    def decided(self, kind: str, question: str, result: Any, p: float | None = None, **kw: Any) -> None:
+        decided(kind, question, result, p, parent=self, **kw)
+
+    def order(self, side: str, qty: float, price: float | None = None, **kw: Any) -> None:
+        order(side, qty, price, parent=self, **kw)
+
     def agent(self, name: str, final: bool | None = None, task: str | None = None) -> "Agent":
         return Agent(name, final=final, task=task, parent=self)
 
@@ -227,6 +236,61 @@ class Tool(_Span):
 
     def result(self, value: Any) -> None:
         self.set("output.value", _preview(value))
+
+
+DECISION_KINDS = ("choice", "score", "noul")
+MAX_OPTIONS = 5
+
+
+def _options(options: Any) -> str | None:
+    """{name: p} / [(name, p)] / [{"name", "p"}] → JSON list of up to MAX_OPTIONS {name, p}, sorted by p desc."""
+    if not options:
+        return None
+    items = options.items() if isinstance(options, dict) else options
+    rows = []
+    for it in items:
+        name, p = (it.get("name"), it.get("p")) if isinstance(it, dict) else it
+        try:
+            rows.append({"name": str(name), "p": round(min(1.0, max(0.0, float(p))), 4)})
+        except (TypeError, ValueError):
+            continue
+    rows.sort(key=lambda r: -r["p"])
+    return json.dumps(rows[:MAX_OPTIONS]) if rows else None
+
+
+class Decision(_Span):
+    """A fast structured decision (Jev / Laya Choice, Score, Noul, or an LLM-as-judge fallback). Span name
+    `decision <kind>`; latency = span duration. Set the outcome with `.record(...)` before the block ends."""
+
+    def __init__(self, kind: str, question: str, result: Any = None, p: float | None = None, options: Any = None,
+                 provider: str = "llm", purpose: str | None = None, target: str | None = None,
+                 parent: _Span | None = None, start_ns: int | None = None, important: bool = False) -> None:
+        kind = str(kind).lower()
+        super().__init__(f"decision {kind}", {"agentglow.decision": kind, "agentglow.decision.question": question,
+                                              "agentglow.decision.provider": provider,
+                                              "agentglow.decision.purpose": purpose,
+                                              "agentglow.decision.target": target,
+                                              "agentglow.decision.important": True if important else None},
+                         parent=parent, start_ns=start_ns)
+        self.kind = kind
+        self._attrs.update(self._outcome(result, p, options))
+
+    def _outcome(self, result: Any, p: float | None, options: Any) -> dict:
+        out = {}
+        if result is not None:
+            out["agentglow.decision.result"] = ("yes" if result else "no") if isinstance(result, bool) else str(result)
+        if p is not None:
+            out["agentglow.decision.p"] = min(1.0, max(0.0, float(p)))
+        opts = _options(options)
+        if opts:
+            out["agentglow.decision.options"] = opts
+        return out
+
+    def record(self, result: Any, p: float | None = None, options: Any = None, target: str | None = None) -> None:
+        """The outcome: `result` = chosen option / score level / True|False|"yes"|"no" (noul); `p` = probability of
+        that result (0..1); `options` = {name: p} (choice / score distribution, top 5 kept)."""
+        for k, v in {**self._outcome(result, p, options), "agentglow.decision.target": target}.items():
+            self.set(k, v)
 
 
 # ---------------------------------------------------------------------- public helpers
@@ -270,6 +334,44 @@ def skill(name: str, parent: _Span | None = None) -> Tool:
     """`with agentglow.skill("summarize"):` - the current agent uses a skill (a tool span with `agentglow.skill`:
     a skill badge on the agent while the block runs). Only the name is recorded."""
     return Tool(name, None, parent=parent, extra={"agentglow.skill": name})
+
+
+def decision(kind: str, question: str, result: Any = None, p: float | None = None, options: Any = None,
+             provider: str = "llm", purpose: str | None = None, target: str | None = None,
+             parent: _Span | None = None, important: bool = False) -> Decision:
+    """`with agentglow.decision("choice", "route", provider="jev", purpose="route") as d: ...; d.record("haiku", 0.92,
+    {"haiku": 0.92, "sonnet": 0.07})` - a fast structured decision by the current agent (kind: choice | score | noul;
+    purpose: route | guard | check; target: e.g. the tool being gated). Latency = the block's duration.
+    `question` is a short name (scrubbed, max 80 chars): do not put PHI/PII in it. `important=True`: always shown
+    individually, even when the agent decides so often that its decisions are aggregated (high-volume mode)."""
+    return Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, important=important)
+
+
+def decided(kind: str, question: str, result: Any, p: float | None = None, options: Any = None, provider: str = "llm",
+            purpose: str | None = None, target: str | None = None, latency_ms: float = 0,
+            parent: _Span | None = None, important: bool = False) -> None:
+    """Record one finished decision (backdated by `latency_ms`), e.g. after `jev.noul(...)` returned."""
+    start = None
+    if latency_ms:  # backdate, but never before the enclosing span started (keeps ended-span replay ordered)
+        around = parent.span if parent is not None else trace.get_current_span()
+        start = max(time.time_ns() - int(latency_ms * 1e6), getattr(around, "start_time", None) or 0)
+    Decision(kind, question, result, p, options, provider, purpose, target, parent=parent, start_ns=start,
+             important=important).start().end()
+
+
+ORDER_STATUSES = ("would_place", "placed", "filled", "rejected", "cancelled")
+
+
+def order(side: str, qty: float, price: float | None = None, status: str = "would_place", instrument: str | None = None,
+          dry_run: bool = True, reason: str | None = None, parent: _Span | None = None) -> None:
+    """Record one order action of the current agent (a finished `order <side>` span with `agentglow.event=order`):
+    side buy | sell | yes | no; status would_place | placed | filled | rejected | cancelled; `dry_run=True` (default)
+    = paper. `instrument` / `reason` are short labels (scrubbed): do not put PHI/PII in them."""
+    side = str(side).lower()
+    _Span(f"order {side}", {"agentglow.event": "order", "agentglow.order.side": side, "agentglow.order.qty": qty,
+                            "agentglow.order.price": price, "agentglow.order.status": status,
+                            "agentglow.order.instrument": instrument, "agentglow.order.dry_run": bool(dry_run),
+                            "agentglow.order.reason": reason}, parent=parent).start().end()
 
 
 def current_agent() -> Agent | None:

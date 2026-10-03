@@ -16,6 +16,7 @@ from datetime import timedelta
 
 from . import config  # noqa: F401  (must be first: Hatchet env)
 
+from deepagents.profiles.provider import apply_provider_profile
 from hatchet_sdk import Context, Hatchet
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
@@ -38,15 +39,19 @@ class Plan(BaseModel):
     questions: list[str] = Field(description="2-4 concrete research questions about the topic")
 
 
-def make_model() -> BaseChatModel:
-    """Chat model from AGENT_MODEL (e.g. google_genai:gemini-3.8-flash, openai:gpt-5-mini, anthropic:claude-sonnet-5-5).
-    Low temperature / low thinking for Gemini only; other providers use their defaults."""
-    provider = MODEL.split(":", 1)[0] if ":" in MODEL else ""
-    kwargs: dict = {}
-    if provider == "google_genai":
-        kwargs = {"temperature": 0.2, "thinking_level": "low"}
-    # anthropic / openai: defaults (current Claude and OpenAI reasoning models take no custom temperature)
-    return init_chat_model(MODEL, **kwargs)
+def make_model(spec: str | None = None) -> BaseChatModel:
+    """Model object for `spec` or AGENT_MODEL, only where one is needed (with_structured_output, per-call model swaps,
+    the decide judge). Same provider profiles as create_deep_agent(model="<provider>:<model>") (see config.py)."""
+    spec = spec or MODEL
+    return init_chat_model(spec, **apply_provider_profile(spec))
+
+
+def structured_model(schema: type[BaseModel], spec: str | None = None):
+    """make_model(spec).with_structured_output(schema). Bedrock Mantle does not offer native structured outputs on
+    every model (e.g. Claude Haiku 4.5), so Mantle specs use tool calling, which every Mantle chat model supports."""
+    spec = spec or MODEL
+    kw = {"method": "function_calling"} if spec.startswith("bedrock_mantle_") else {}
+    return make_model(spec).with_structured_output(schema, **kw)
 
 
 agent_smoke = hatchet.workflow(name=WORKFLOW, input_validator=BriefInput)
@@ -74,7 +79,7 @@ async def plan(input: BriefInput, ctx: Context) -> dict:
     step_span(input.topic)
     # A bare structured LLM call isn't an agent to any instrumentation, so name it one.
     with tracer.start_as_current_span("planner", attributes={"agentglow.agent": "planner", "agentglow.run.topic": input.topic}):
-        planner = make_model().with_structured_output(Plan)
+        planner = structured_model(Plan)
         p: Plan = await planner.ainvoke(
             "You plan research for a short business brief. Data available: a knowledge graph of companies, products, customers, "
             "regions, teams and incidents, plus an analytics MCP server (warehouse metrics, Spark jobs, customer records).\n"

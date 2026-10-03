@@ -42,8 +42,8 @@ Hatchet workflow `incident_triage` (`app/incident.py`) runs on the same worker a
 |---|---|---|
 | `triage` | **triage_lead** loads the `runbook` deepagents skill (`app/agent_fs/skills/runbook/SKILL.md`) | AgentGlow skill event |
 | `logs` | **logs_hunter** (runs in parallel with `code`) | `observability` MCP server (:8201) → Loki / Prometheus / PagerDuty |
-| `code` | **code_sleuth** + subagent **dep_mapper** | `github` MCP server (:8202) → GitHub API; FalkorDB service dependency graph |
-| `review` | **reviewer**: attempt 1 always rejects the diagnosis (agent fails), Hatchet retries once and it passes | - |
+| `code` | **code_sleuth** + subagent **dep_mapper**; it is told to call `rollback_deploy`, which a **guard** decision blocks | `github` MCP server (:8202) → GitHub API; FalkorDB service dependency graph |
+| `review` | **reviewer**: a **check** decision asks whether the verdict is grounded in the evidence; no → the agent fails and Hatchet retries the step (retries=1). Attempt 1 is also rejected when the check passes while `DEMO_FORCE_FIRST_REVIEW_FAIL=1` (default), so the demo always shows one retry | - |
 | `postmortem` | **postmortem_writer** drafts a short postmortem (final answer) | - |
 
 Trigger it (the churn brief stays the default when `workflow` is omitted):
@@ -64,7 +64,7 @@ fans out under a concurrency limit, waits on a human, and sleeps between email r
 | Step | Agents | Touches |
 |---|---|---|
 | `inventory` | **procurement_analyst** pulls every contract and writes it to the graph | `erp` MCP server (:8203) → SAP / Coupa; FalkorDB writes (`Vendor` -`IN_CATEGORY`-> `Category`) |
-| `analyze` | one child run of `vendor_category` per spend category (10), each with its own **&lt;category&gt;_analyst**; Hatchet concurrency **3 per run**, so the categories queue and drain 3 at a time | FalkorDB reads; `erp` (scorecards, renewals) |
+| `analyze` | one child run of `vendor_category` per spend category (10), each with its own **&lt;category&gt;_analyst**; Hatchet concurrency **3 per run**, so the categories queue and drain 3 at a time. A **router** decision first picks the analyst's model (small or large) | FalkorDB reads; `erp` (scorecards, renewals) |
 | `approval` | **durable** task: `ctx.aio_wait_for` the user event `vendor:approve` for this run, or auto-approves after `APPROVAL_TIMEOUT_S` (default 30 min) | - |
 | `negotiate` | **durable** task: **negotiator** drafts and sends outreach, then `ctx.aio_sleep_for(DEMO_SLEEP_S)` between 3 rounds (stands in for days) | `email` MCP server (:8204) → Exchange |
 | `report` | **plan_writer** writes the consolidation plan (final answer) | FalkorDB write (`Plan` -`CONSOLIDATES`-> `Vendor`) |
@@ -80,7 +80,7 @@ curl -X POST localhost:8101/live/run -H 'content-type: application/json' \
   -d '{"topic": "Consolidate Q3 SaaS vendors under $2M spend", "workflow": "vendor"}'   # or the HUD picker
 docker compose exec worker uv run python trigger.py --vendor                            # or from the CLI
 
-# when the approval step shows "waiting on approval":
+# when the approval step shows "waiting on approval": the HUD's Approve / Reject buttons on the approver, or
 curl -X POST localhost:8300/approve                                     # approves every vendor run waiting
 curl -X POST localhost:8300/approve -H 'content-type: application/json' \
   -d '{"run_id": "<hatchet run id>", "approver": "cfo", "note": "go"}'  # one run
@@ -88,9 +88,97 @@ docker compose exec worker uv run python trigger.py --approve [<run id>]
 ```
 
 The trigger service listens on `127.0.0.1:8300` (`POST /approve` pushes the Hatchet event `vendor:approve` with
-`{"run_id": "<id>" | "*"}`; the approval task matches its own run id or `*`). An approval sent before the run reaches
+`{"run_id": "<id>" | "*", "approve"?: false}`; the approval task matches its own run id or `*`; a rejected program
+skips negotiation). An approval sent before the run reaches
 the `approval` step is not remembered: approve once it is waiting. Timings: `DEMO_SLEEP_S` (default 20) and
 `APPROVAL_TIMEOUT_S` (default 1800) in `.env` or the shell.
+
+## Trading desk (paper, fast)
+
+Hatchet workflow `trading_desk` (`app/trading.py`, synthetic markets in `app/markets.py`) is a fast **paper** trading
+desk on made-up weather event contracts (YES pays 100c if it rains in NYC, ...; the shape of event-contract exchanges
+like Kalshi). It shows the other end of the spectrum from vendor consolidation: tens of fast decisions per second,
+with the slow deepagents thinking branching off only when it is worth it. HUD picker: **Trading desk (paper, fast)**.
+
+| Step | Runs as | What it does |
+|---|---|---|
+| `open_session` | task | session state + `DESK_MARKETS` synthetic markets with toy order books |
+| `run_markets` | task, agent **desk** | fans out one child run of `market_watch` per market (`aio_run_many`, all concurrent) and watches desk risk once a second: a simulated feed outage every `DESK_OUTAGE_EVERY_S` trips the **kill switch** |
+| `market_watch` | **durable** child task, one agent per market (`rain-nyc`, `temp-chi-hi`, ...) | `DESK_TICKS` ticks of `DESK_TICK_S`, plain Python: step the book, then ONE batched Jev call per tick (`quote_sane`, `should_rethink` (route, cooldown), `act\|watch\|skip` or `should_close` (route)), then the code guards, `safe_without_human` (guard, needs >= 0.8) and the paper order. Forced stop-loss in code |
+| `form_view` | child task, deepagents **analyst** + **weather** subagent | when `should_rethink` says so: reads the market's snapshot / price history (tools) and the weather model (subagent), returns a typed `FairView` (fair probability); the market trades on the latest view, its quant signal until then |
+| (human gate) | durable wait inside `market_watch` | below the safe threshold: `ctx.aio_wait_for` the `desk:approve` event for that market run, auto-approves after `DESK_HUMAN_TIMEOUT_S`. Only that market waits: every market is its own run |
+| `place_order` | child task | `agentglow.order(..., dry_run=True)`: status `would_place` (guard / human rejections are `rejected` orders with the reason) |
+| `close_session` | task | the session summary with paper P&L (final answer) |
+
+Code guards (provider `code`, purpose `guard`; a deny is marked important so it always shows): kill switch, daily
+loss cap, settlement lock, spread, slippage, max contracts, depth %, bucket/day cap, stop-loss, feed fresh. In
+AgentGlow the market agents get **decision halos** (rate, deny %, latency), denies and human gates pop out
+individually, analyst runs branch off as subagents, orders pop as chips, and it all stays ONE run.
+
+The tick sleep is a plain `asyncio.sleep`: a durable `ctx.aio_sleep_for` per tick would cost an engine round trip
+and an event-log entry per market per second for nothing (the tick state is in memory). Waits worth making durable
+(a human) use `ctx.aio_wait_for`.
+
+```bash
+curl -X POST localhost:8101/live/run -H 'content-type: application/json' \
+  -d '{"topic": "Trade today'"'"'s weather markets (paper)", "workflow": "desk"}'      # or the HUD picker
+docker compose exec worker uv run python trigger.py --desk                              # or from the CLI
+curl -X POST localhost:8300/approve -H 'content-type: application/json' \
+  -d '{"workflow": "desk"}'                                  # approve every waiting desk gate ("approve": false rejects)
+```
+
+Or click a market agent waiting on "human approval" in the UI: Approve / Reject (AgentGlow's POST /live/approve →
+`AGENTGLOW_APPROVE_WEBHOOK` = this trigger's `/approve`, which pushes `desk:approve` for that market's own run). Set
+`DESK_HUMAN_TIMEOUT_S=120` to give yourself time to click.
+
+| Env | Default | |
+|---|---|---|
+| `DESK_MARKETS` | 12 | markets (one durable child run + agent each) |
+| `DESK_TICKS` / `DESK_TICK_S` | 60 / 1.0 | session length: ticks per market, seconds per tick |
+| `DESK_THINK_COOLDOWN_S` | 30 | per market: no new analyst run sooner than this |
+| `DESK_MAX_ANALYSTS` | 3 | analyst runs at once per session (Hatchet concurrency + an in-process check, so they never queue) |
+| `DESK_HUMAN_TIMEOUT_S` | 8 | human gate auto-approves after this |
+| `DESK_OUTAGE_EVERY_S` | 45 | simulated feed outage (6 s) that trips the kill switch; 0 = never |
+| `JEV_MAX_RPS` | 5 | hard cap on real Jev requests per second per worker |
+
+**Jev cost guard.** Every market asks its tick's questions in one Jev request (`decide.batch`), and a token bucket
+caps real Jev requests at `JEV_MAX_RPS` per worker process: anything over it (and everything when `TYPESAFE_API_KEY`
+is not set) is answered by `jev-sim`, a free local stub in `app/markets.py`, and shows `provider=jev-sim`. So the
+desk can tick as fast as you like and the Jev bill is bounded at `JEV_MAX_RPS * 3600` requests per hour (18k/h at
+the default). LLM cost is bounded by the analyst cooldown and `DESK_MAX_ANALYSTS`.
+
+**Paper only.** Synthetic markets, a toy order book, simulated fills and P&L. Nothing here connects to an exchange or
+places a real order; it is a demo of orchestration and observability, not trading advice.
+
+## Decisions (route / guard / check)
+
+Both demos make fast structured decisions through `app/decide.py`: `choice(question, options, state)`,
+`noul(question, state)` (yes/no with P(yes)) and `score(question, levels, state)`. Each call is one OTel span with
+the AgentGlow decision contract (`agentglow.decision` = `choice` | `noul` | `score`, plus `.question`, `.result`,
+`.p`, `.options`, `.provider`, `.purpose`, `.target`; see `docs/SPEC.md`, "Decisions"), so AgentGlow draws it on the
+agent that made it, with its result, probability and latency (the span's duration).
+
+| Where | Kind / purpose | Question | Effect |
+|---|---|---|---|
+| `vendor_category` | `choice` / route | which model for this analyst? (`small` / `large`, from the category's vendor count and spend) | the analyst runs on the chosen model: small = `claude-haiku-4-5`, `gpt-5-mini`, `gemini-3.5-flash-lite`, Mantle `openai.gpt-oss-20b` or Mantle `anthropic.claude-haiku-4-5` by `AGENT_MODEL`'s provider (`ROUTER_SMALL_MODEL` overrides), large = `AGENT_MODEL` |
+| `code` (code_sleuth) | `noul` / guard, target `rollback_deploy` | safe to run without a human? | p(safe) < 0.5 → the call is blocked: the agent gets `blocked by guardrail ...` and the tool never runs (`GuardRiskyTools` middleware in `app/incident.py`) |
+| `review` (reviewer) | `noul` / check | diagnosis grounded in evidence? | no → the reviewer fails and Hatchet retries the step (`GroundedCheck` middleware) |
+
+**Provider.** With `TYPESAFE_API_KEY` set, decisions go to TypeSafe's Jev through
+[`langchain-typesafe`](https://docs.langchain.com/oss/python/integrations/providers/typesafe)'s `TypeSafeClassifier`
+(`Noul` / `Choice` / `Score` questions, calibrated probabilities; `TYPESAFE_BASE_URL` overrides the endpoint) and the
+spans say `provider=jev`. Without it they fall back to an LLM judge: `DECIDE_MODEL` (default `AGENT_MODEL`) with
+pydantic structured output returning the answer and a self-reported probability, `provider=llm`. Same shapes, same
+spans; the judge's probability is not calibrated and it is slower.
+
+```bash
+echo 'TYPESAFE_API_KEY=...' >> .env          # key from https://console.typesafe.ai/settings/keys
+docker compose up -d --build worker          # the worker is the only service that decides
+```
+
+The guard and router follow the shape of langchain-typesafe's experimental `AutoModeMiddleware` (blocks risky tool
+calls with a Noul) and `ModelRouterMiddleware` (a Choice over models). The demo uses its own small middleware and
+calls instead, so the same code runs with or without a TypeSafe key and every decision is traced for AgentGlow.
 
 ## Run with docker compose (repo root)
 
@@ -139,6 +227,28 @@ Models are built with LangChain `init_chat_model(AGENT_MODEL)`, so any of these 
 | `google_genai:gemini-3.8-flash` (default) | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
 | `openai:<model>` e.g. `openai:gpt-5-mini` | `OPENAI_API_KEY` |
 | `anthropic:claude-sonnet-5-5` | `ANTHROPIC_API_KEY` |
+| `bedrock_mantle_openai:<model>` / `bedrock_mantle_anthropic:<model>` | `AWS_BEARER_TOKEN_BEDROCK` or AWS credentials, `AWS_REGION` |
 
-Gemini runs with `thinking_level=low` and temperature 0.2; Anthropic and OpenAI run with provider defaults.
+Agents get the spec string (`create_deep_agent(model=AGENT_MODEL)`) and deepagents builds the model through its provider profiles:
+OpenAI uses the Responses API (deepagents' built-in `openai` profile), Gemini runs with `thinking_level=low` and temperature 0.2
+(one `register_provider_profile` call in `app/config.py`), Anthropic runs with provider defaults.
 The legacy `OBS_MODEL=<gemini model>` is still honored when `AGENT_MODEL` is unset.
+
+### Bedrock Mantle
+
+[Amazon Bedrock Mantle](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html)
+(`https://bedrock-mantle.<region>.api.aws`) serves OpenAI-compatible and Anthropic Messages APIs. `langchain-aws`
+adds two `init_chat_model` providers for it, so it is just another `AGENT_MODEL`:
+
+```bash
+AWS_BEARER_TOKEN_BEDROCK=...   # Bedrock API key; or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (short-term keys are minted)
+AWS_REGION=us-east-1           # picks the Mantle endpoint (default us-east-1)
+AGENT_MODEL=bedrock_mantle_openai:openai.gpt-5.6-luna            # GPT on Mantle: Responses API
+# AGENT_MODEL=bedrock_mantle_openai:openai.gpt-oss-120b          # open-weight: Chat Completions
+# AGENT_MODEL=bedrock_mantle_anthropic:anthropic.claude-sonnet-5
+DECIDE_MODEL=bedrock_mantle_openai:openai.gpt-oss-20b            # optional: cheaper LLM judge for decisions
+```
+
+`app/config.py` registers a provider profile per Mantle provider that passes `region_name`; `ChatOpenAIMantle` itself
+uses the Responses API for `openai.gpt-*` models. Structured output (planner, decision judge) goes through tool calling
+on Mantle, since not every Mantle model supports native structured outputs.

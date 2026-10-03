@@ -3,6 +3,7 @@
   recent_deploys  → GitHub API
   commit_diff     → GitHub API
   code_owners     → GitHub API
+  rollback_deploy → GitHub API (risky: a production change; the worker guards it with a decision, see app/incident.py)
 Canned-but-plausible data (a config change that raised client retries shipped at 14:03), realistic latency.
 
 Run: uv run python -m app.github_mcp_server
@@ -22,6 +23,7 @@ BACKENDS = {
     "recent_deploys": ("GitHub API", "api"),
     "commit_diff": ("GitHub API", "api"),
     "code_owners": ("GitHub API", "api"),
+    "rollback_deploy": ("GitHub API", "api"),
 }
 RESOURCES = resources(BACKENDS)
 
@@ -64,6 +66,14 @@ async def code_owners(path: str) -> dict:
         await latency(0.3, 1.0)
         team = "Payment Integrity" if "payment" in path.lower() else "Platform"
         return {"path": path, "owners": [team], "last_editors": ["dkim", "aokafor"]}
+
+
+@mcp.tool()
+async def rollback_deploy(sha: str, service: str = "checkout-service", reason: str = "") -> dict:
+    """Roll back a PRODUCTION deploy: redeploys the commit before `sha` for `service`. Mitigates a bad deploy fast."""
+    with backend_span(SERVER, "rollback_deploy", BACKENDS):
+        await latency(0.8, 2.0)
+        return {"service": service, "rolled_back": sha, "status": "rollback started", "reason": reason}
 
 
 if __name__ == "__main__":
