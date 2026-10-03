@@ -1097,7 +1097,7 @@ class Prims:
                 v = _num(f.get(k))
                 if v is not None:
                     ev[k] = int(v)
-            edge = next(((fr, to) for (fr, to, tp) in reversed(list(self.m.svc.edge_at)) if tp == topic), None)
+            edge = next(((k[0], k[1]) for k in reversed(list(self.m.svc.edge_at)) if len(k) == 3 and k[2] == topic), None)
             if edge:
                 ev["from_id"], ev["to_id"] = edge
             out.append(ev)
