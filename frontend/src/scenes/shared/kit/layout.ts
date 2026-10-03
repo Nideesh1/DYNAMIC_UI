@@ -476,10 +476,10 @@ function otherRunSpan(r: KitRun) {
 }
 /** screen angle (x right, y down) from a services run towards the stage centre (the agent runs); left when alone */
 function svcInward(a: KitAgent) {
-  const r = a.run;
-  const x = a2(r.target), y = b2(r.target);
-  if (kit.runs.size < 2 || x * x + y * y < 1e-4) return Math.PI;
-  return Math.atan2(y, -x);
+  // (from its slot on the ring of runs, not its target: services beside one agent run sit a bit below the line)
+  if (kit.runs.size < 2) return Math.PI;
+  const t = a.run.targetAngle;
+  return Math.atan2(Math.sin(t), -Math.cos(t));
 }
 /** of two services, the one on the agent-run side: it drives an agent run or consumes the other's topic */
 function svcInner(a: KitAgent) {
@@ -587,6 +587,11 @@ function layoutRuns() {
     r.index = i;
     r.count = order.length;
     P.run(i, ctx, slot);
+    if (order.length === 2 && r.run?.workflow === "services" && Math.abs(slot.a) > 1e-3) {
+      // services beside an agent run: a bit below the centre line, so the agents' tethers to the MCP servers (level
+      // with the core) pass above the services group instead of through its topic edge and labels
+      slot.b -= Math.abs(Math.sin(slot.angle)) * r.hv + Math.abs(Math.cos(slot.angle)) * r.hu + 1.5;
+    }
     planePoint(slot.a, slot.b, r.target);
     r.targetAngle = slot.angle;
   }
