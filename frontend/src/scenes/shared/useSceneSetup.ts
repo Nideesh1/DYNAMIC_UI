@@ -199,15 +199,15 @@ export function useApproveAvailable(): boolean {
 }
 
 /** Approve / reject what an agent waits on (POST /live/approve). "ok", "gone" (409: nothing waiting there any more) or
- * "error". The wait clearing itself arrives through the event stream. */
-export async function sendApproval(runId: string, agentId: string, approve: boolean): Promise<"ok" | "gone" | "error"> {
+ * "error". `note`: optional text forwarded to the app's webhook. The wait clearing itself arrives through the event stream. */
+export async function sendApproval(runId: string, agentId: string, approve: boolean, note?: string): Promise<"ok" | "gone" | "error"> {
   const source = conn?.source ?? "";
   const auth = conn?.auth ?? {};
   try {
     const r = await fetch(`${source}/live/approve`, {
       method: "POST",
       headers: { ...authHeaders(auth), "content-type": "application/json" },
-      body: JSON.stringify({ run_id: runId, agent_id: agentId, approve }),
+      body: JSON.stringify({ run_id: runId, agent_id: agentId, approve, ...(note ? { note: note.slice(0, 500) } : {}) }),
     });
     if (r.status === 404 || r.status === 405) setApproveAvailable(false);
     if (r.status === 401 || r.status === 403) setUnauthorized(true);

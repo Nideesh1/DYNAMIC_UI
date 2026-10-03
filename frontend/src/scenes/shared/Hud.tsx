@@ -1,5 +1,5 @@
 /** Shared glass HUD for every scene: top bar (title, mode, theme, live totals) + right sidebar (Agents | Events | Selected). */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useSceneConfig } from "./config";
 import { HUD_LAYOUT_EVENT } from "./kit/fit";
 import "./hud.css";
@@ -7,9 +7,10 @@ import { sendApproval, startLiveRun, useApproveAvailable, useRunAvailable, useRu
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
 import { decisionTint } from "./kit/DecisionGlyph";
+import { haloHover } from "./kit/HighVolume";
 import { fmtMs, gaugeText, jobStateText, metricText } from "./prims";
 import { PrimDetail } from "./PrimPanel";
-import { STALE_TEXT, decisionText, getInstance, jobText, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
+import { STALE_TEXT, decisionText, getInstance, jobText, haltedNow, isStale, kindBadge, providerBadge, whyBadge, haloLatency, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -186,6 +187,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const canRun = useRunAvailable();
   const canApprove = useApproveAvailable();
   const w = useWorld();
+  const drawerId = useDrawer();
   const lastDec = w.ticker.find((e): e is Extract<WorldEvent, { type: "decision" }> => e.type === "decision");
   const halt = haltedNow();
   const [, tick] = useState(0);
@@ -428,6 +430,9 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
       </aside>
 
       {w.mode === "live" && canApprove && <ApprovalTray rail={side.collapsed} />}
+      <DeepLinkFocus />
+      {drawerId && getInstance(drawerId) && <ApprovalDrawer id={drawerId} rail={side.collapsed} canApprove={w.mode === "live" && canApprove} embedded={embedded} />}
+      <HaloTip />
       {children}
     </>
   );
@@ -601,9 +606,10 @@ export function RunButton() {
 
 // ------------------------------------------------------------------ live: optional POST /live/approve
 
-/** A live agent waiting on a human (the wait contract's reason, e.g. "approval", "human approval yes 12"). */
+/** A live agent waiting on a human: an `approval()` wait (kind "approval"), or a wait whose reason says so ("approval",
+ * "human approval yes 12"). */
 export function needsHuman(i: Instance): boolean {
-  return isLive(i) && i.status === "waiting" && !!i.wait && /human|approv/i.test(i.wait.reason);
+  return isLive(i) && i.status === "waiting" && !!i.wait && (i.wait.kind === "approval" || /human|approv/i.test(i.wait.reason));
 }
 
 type Verdict = "approving" | "rejecting" | "approved" | "rejected" | "gone" | "error";
@@ -612,7 +618,7 @@ const verdicts = new Map<string, Verdict>();
 const verdictSubs = new Set<() => void>();
 const waitKey = (i: Instance) => `${i.id}|${i.wait?.reason}|${i.wait?.until}`;
 
-async function decide(i: Instance, approve: boolean) {
+async function decide(i: Instance, approve: boolean, note?: string) {
   const k = waitKey(i);
   const set = (v: Verdict) => {
     verdicts.set(k, v);
@@ -625,7 +631,7 @@ async function decide(i: Instance, approve: boolean) {
     const v = verdicts.get(k);
     if (v && v !== "error" && v !== "gone") (verdicts.delete(k), verdictSubs.forEach((f) => f()));
   }, VERDICT_TIMEOUT_MS);
-  const r = await sendApproval(i.run, i.id, approve);
+  const r = await sendApproval(i.run, i.id, approve, note);
   if (verdicts.has(k)) set(r === "ok" ? (approve ? "approved" : "rejected") : r);
 }
 const VERDICT_TIMEOUT_MS = 10_000;
@@ -634,8 +640,16 @@ const AUTO_DUE_MS = 10_000;
 function deadlineText(i: Instance, now: number): [string, "due" | "overdue" | ""] {
   const until = i.wait?.until;
   if (!until) return ["", ""];
-  if (now < until) return [`${Math.round((until - now) / 1000)}s`, ""];
+  if (now < until) return [leftText(until - now), ""];
   return now - until < AUTO_DUE_MS ? ["auto-approve due", "due"] : ["overdue", "overdue"];
+}
+
+/** `45s` / `29m 40s` / `2h 05m` */
+function leftText(ms: number): string {
+  const t = Math.round(ms / 1000);
+  if (t < 60) return `${t}s`;
+  if (t < 3600) return `${Math.floor(t / 60)}m ${String(t % 60).padStart(2, "0")}s`;
+  return `${Math.floor(t / 3600)}h ${String(Math.floor((t % 3600) / 60)).padStart(2, "0")}m`;
 }
 
 const VERDICT_TEXT: Record<Verdict, string> = {
@@ -644,7 +658,7 @@ const VERDICT_TEXT: Record<Verdict, string> = {
 };
 
 /** Approve / Reject for one waiting agent; after a click, its state until the wait clears (from the event stream). */
-function ApproveButtons({ i, compact }: { i: Instance; compact?: boolean }) {
+function ApproveButtons({ i, compact, note, keys }: { i: Instance; compact?: boolean; note?: string; keys?: boolean }) {
   const [, bump] = useState(0);
   useEffect(() => {
     const f = () => bump((x) => x + 1);
@@ -657,15 +671,289 @@ function ApproveButtons({ i, compact }: { i: Instance; compact?: boolean }) {
     <div className={`hud-approve${compact ? " is-compact" : ""}`} data-verdict={v}>
       {!locked && (
         <>
-          <button className="ha-yes" onClick={() => decide(i, true)} title={`Approve: ${i.wait?.reason}`}>
+          <button className="ha-yes" onClick={() => decide(i, true, note)} title={`Approve: ${i.wait?.title || i.wait?.reason}${keys ? " (A)" : ""}`}>
             Approve
           </button>
-          <button className="ha-no" onClick={() => decide(i, false)} title={`Reject: ${i.wait?.reason}`}>
+          <button className="ha-no" onClick={() => decide(i, false, note)} title={`Reject: ${i.wait?.title || i.wait?.reason}${keys ? " (R)" : ""}`}>
             Reject
           </button>
         </>
       )}
       {v && <span role="status">{VERDICT_TEXT[v]}</span>}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ approval details drawer
+/** the agent whose wait the details drawer shows (null = closed); opening it also selects the agent in 3D */
+const drawer = { id: null as string | null, subs: new Set<() => void>() };
+export function openDrawer(id: string | null) {
+  if (id) selectInstance(id);
+  if (drawer.id === id) return;
+  drawer.id = id;
+  drawer.subs.forEach((f) => f());
+}
+function useDrawer(): string | null {
+  return useSyncExternalStore(
+    (f) => (drawer.subs.add(f), () => void drawer.subs.delete(f)),
+    () => drawer.id,
+    () => null,
+  );
+}
+
+/** link to AgentGlow focused on this run + agent (`?run=<id>&agent=<id>`, other params kept) */
+export function deepLink(i: Pick<Instance, "run" | "id">, href = location.href): string {
+  const u = new URL(href);
+  u.searchParams.set("run", i.run);
+  u.searchParams.set("agent", i.id);
+  return u.toString();
+}
+
+/** `?agent=<id>` (standalone app): select that agent once it shows up; open its drawer while it waits on a human */
+function DeepLinkFocus() {
+  const { embedded } = useSceneConfig();
+  const w = useWorld();
+  const want = useRef(embedded || typeof location === "undefined" ? null : new URLSearchParams(location.search).get("agent"));
+  useEffect(() => {
+    const id = want.current;
+    const i = id ? getInstance(id) : undefined;
+    if (!id || !i) return;
+    want.current = null;
+    if (needsHuman(i)) openDrawer(id);
+    else selectInstance(id);
+  }, [w.ticker[0]]);
+  return null;
+}
+
+type CtxRow = { k: string; badge: string; text: string; ts: number; color?: string; deny?: boolean };
+/** the agent's last few decisions, tool / MCP calls and orders, newest first (from the world state) */
+function recentContext(i: Instance, n = 6): CtxRow[] {
+  const rows: CtxRow[] = [];
+  i.decisions.slice(-5).forEach((d, k) =>
+    rows.push({ k: `d${k}`, badge: isDeny(d) ? "DENY" : kindBadge(d.kind), text: `${decisionText(d)} · ${Math.round(d.ms)}ms`, ts: d.ts, color: decisionColor(d), deny: isDeny(d) }),
+  );
+  i.orders.slice(-3).forEach((o, k) => rows.push({ k: `o${k}`, badge: o.dry_run ? "paper" : o.status, text: `${orderText(o)} ${o.instrument}`, ts: o.ts, color: orderColor(o) }));
+  let calls = 0;
+  for (const e of i.recent) {
+    if (calls >= 5) break;
+    if (e.type === "tool") rows.push({ k: `t${calls++}`, badge: "tool", text: e.tool, ts: e.ts });
+    else if (e.type === "mcp" && e.phase === "call") rows.push({ k: `m${calls++}`, badge: "MCP", text: `${e.server} · ${e.tool}`, ts: e.ts });
+  }
+  return rows.sort((a, b) => b.ts - a.ts).slice(0, n);
+}
+
+const pct = (p: number) => `${Math.round(p * 100)}%`;
+const detailValue = (v: string | number | boolean) => (typeof v === "boolean" ? (v ? "yes" : "no") : String(v));
+const RESOLVED_CLOSE_MS = 4000;
+
+/** Side drawer for one waiting agent: what it waits on, why (the triggering decision), the app's details, recent
+ * context, the deadline, Approve / Reject with a note, "Open in app" and "Copy link". The scene keeps running. */
+function ApprovalDrawer({ id, rail, canApprove, embedded }: { id: string; rail: boolean; canApprove: boolean; embedded: boolean }) {
+  const w = useWorld();
+  const ref = useRef<HTMLElement>(null);
+  const [note, setNote] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [, bump] = useState(0);
+  const last = useRef<Instance["wait"]>(null);
+  useEffect(() => {
+    const t = setInterval(() => bump((x) => x + 1), 1000);
+    const f = () => bump((x) => x + 1);
+    verdictSubs.add(f);
+    return () => (clearInterval(t), void verdictSubs.delete(f));
+  }, []);
+  useEffect(() => {
+    setNote("");
+    setCopied(false);
+    ref.current?.focus({ preventScroll: true });
+  }, [id]);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && openDrawer(null);
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, []);
+  const i = getInstance(id)!;
+  const waiting = needsHuman(i);
+  if (waiting) last.current = i.wait;
+  const wt = waiting ? i.wait! : last.current;
+  useEffect(() => {
+    if (waiting) return;
+    const t = setTimeout(() => drawer.id === id && openDrawer(null), RESOLVED_CLOSE_MS); // resolved: close soon
+    return () => clearTimeout(t);
+  }, [waiting, id]);
+  const run = w.runs.get(i.run);
+  const stale = isStale(run);
+  const [left, late] = !waiting ? ["", ""] : stale ? [STALE_TEXT, "overdue"] : deadlineText(i, Date.now());
+  const v = wt ? verdicts.get(`${i.id}|${wt.reason}|${wt.until}`) : undefined;
+  const locked = v !== undefined && v !== "error";
+  const ctx = recentContext(i);
+  const b = wt?.because;
+  const onKey = (e: ReactKeyboardEvent) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === "TEXTAREA" || tag === "INPUT" || e.metaKey || e.ctrlKey || e.altKey || !waiting || !canApprove || stale || locked) return;
+    if (e.key === "a" || e.key === "A") (e.preventDefault(), decide(i, true, note));
+    else if (e.key === "r" || e.key === "R") (e.preventDefault(), decide(i, false, note));
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(deepLink(i));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt("Copy this link", deepLink(i));
+    }
+  };
+  const title = wt?.title || wt?.reason || "waiting";
+  return (
+    <aside
+      ref={ref}
+      tabIndex={-1}
+      onKeyDown={onKey}
+      className={`hud hud-drawer${rail ? " is-rail" : ""}`}
+      role="dialog"
+      aria-label={`Waiting on you: ${title}`}
+      style={{ ["--c" as string]: TYPE_COLOR[i.type] }}
+    >
+      <header className="hd-head">
+        <div>
+          <p className="hd-kicker">{waiting ? (wt?.kind === "approval" || /human|approv/i.test(wt?.reason ?? "") ? "needs your approval" : "waiting") : "resolved"}</p>
+          <h3>{title}</h3>
+        </div>
+        <button className="hd-close" onClick={() => openDrawer(null)} aria-label="Close details (Esc)" title="Close (Esc)">
+          ×
+        </button>
+      </header>
+      <button className="hd-who" onClick={() => selectInstance(i.id)} title="Select in the scene">
+        <i />
+        <b>{i.name}</b>
+        <span>{run?.topic ?? shortRun(i.run)}</span>
+      </button>
+      <div className={`hd-deadline${late ? ` is-${late}` : !waiting && (v === "approved" || v === "approving") ? " is-due" : ""}`} role="status">
+        {!waiting ? (v ? VERDICT_TEXT[v] : "no longer waiting") : left ? (late ? left : `deadline in ${left}`) : "no deadline"}
+      </div>
+      <section>
+        <h4>Why</h4>
+        {b ? (
+          <div className={`hd-why${b.result === "no" ? " is-deny" : ""}`}>
+            <p>
+              <b>{kindBadge(b.kind)}</b> {b.question} → <em>{b.result}</em>
+              {b.p !== undefined && <> · p {pct(b.p)}</>}
+            </p>
+            <dl className="hd-dl">
+              {b.threshold !== undefined && (
+                <div>
+                  <dt>threshold</dt>
+                  <dd>{b.threshold <= 1 ? pct(b.threshold) : b.threshold}</dd>
+                </div>
+              )}
+              {b.provider && (
+                <div>
+                  <dt>decided by</dt>
+                  <dd>{providerBadge(b.provider)}</dd>
+                </div>
+              )}
+              {b.ms !== undefined && (
+                <div>
+                  <dt>latency</dt>
+                  <dd>{Math.round(b.ms)} ms</dd>
+                </div>
+              )}
+              {b.purpose && (
+                <div>
+                  <dt>purpose</dt>
+                  <dd>
+                    {b.purpose}
+                    {b.target ? ` · ${b.target}` : ""}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        ) : (
+          <p className="hd-reason">waiting on {wt?.reason ?? "a human"}</p>
+        )}
+      </section>
+      {wt?.details && Object.keys(wt.details).length > 0 && (
+        <section>
+          <h4>Details</h4>
+          <dl className="hd-dl hd-details">
+            {Object.entries(wt.details).map(([k, val]) => (
+              <div key={k}>
+                <dt>{k}</dt>
+                <dd title={detailValue(val)}>{detailValue(val)}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+      {ctx.length > 0 && (
+        <section>
+          <h4>Recent</h4>
+          <ul className="ap-decisions">
+            {ctx.map((r) => (
+              <li key={r.k} className={r.deny ? "is-deny" : undefined} style={r.color ? { ["--c" as string]: r.color } : undefined}>
+                <b>{r.badge}</b>
+                <span>{r.text}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <footer className="hd-foot">
+        {waiting && canApprove && !stale && (
+          <>
+            {!locked && (
+              <textarea
+                className="hd-note"
+                value={note}
+                maxLength={500}
+                rows={2}
+                placeholder="Note (optional, sent with your decision)"
+                onChange={(e) => setNote(e.target.value)}
+                aria-label="Note sent with your decision"
+              />
+            )}
+            <ApproveButtons i={i} note={note.trim() || undefined} keys />
+            {!locked && <p className="hd-keys">A approve · R reject · Esc close</p>}
+          </>
+        )}
+        <div className="hd-links">
+          {wt?.url && (
+            <a href={wt.url} target="_blank" rel="noopener noreferrer">
+              Open in app ↗
+            </a>
+          )}
+          {!embedded && (
+            <button onClick={copy} title="Link to AgentGlow focused on this run and agent">
+              {copied ? "Link copied" : "Copy link"}
+            </button>
+          )}
+        </div>
+      </footer>
+    </aside>
+  );
+}
+
+/** hover tooltip of a halo label: its latency (p50 / p95, in flight), which the label itself leaves out */
+function HaloTip() {
+  const id = useSyncExternalStore(
+    (f) => (haloHover.subs.add(f), () => void haloHover.subs.delete(f)),
+    () => haloHover.id,
+    () => null,
+  );
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  useEffect(() => {
+    if (!id) return;
+    const move = (e: PointerEvent) => setPos({ x: e.clientX, y: e.clientY });
+    window.addEventListener("pointermove", move);
+    return () => window.removeEventListener("pointermove", move);
+  }, [id]);
+  const i = id ? getInstance(id) : undefined;
+  if (!i?.hv || !pos.x) return null;
+  return (
+    <div className="hud-halotip" style={{ left: pos.x + 14, top: pos.y + 14 }} role="tooltip">
+      <b>{i.name}</b> {haloText(i.hv)}
+      <br />
+      {haloLatency(i.hv)}
     </div>
   );
 }
@@ -694,13 +982,16 @@ function ApprovalTray({ rail }: { rail: boolean }) {
           const [left, late] = stale ? [STALE_TEXT, "overdue" as const] : deadlineText(i, now);
           return (
             <li key={i.id} style={{ ["--c" as string]: TYPE_COLOR[i.type] }}>
-              <button className="ha-who" onClick={() => selectInstance(i.id)} title={`${i.name} · ${shortRun(i.run)}\n${waitLabel(i.wait!)}`}>
+              <button className="ha-who" onClick={() => openDrawer(i.id)} title={`${i.name} · ${shortRun(i.run)}\n${waitLabel(i.wait!)}\nclick for details`}>
                 <i />
                 <b>{i.name}</b>
                 <span>
-                  {i.wait!.reason}
+                  {i.wait!.title || i.wait!.reason}
                   {left && (late ? <em className={`ha-late is-${late}`}> · {left}</em> : ` · ${left}`)}
                 </span>
+              </button>
+              <button className="ha-details" onClick={() => openDrawer(i.id)} aria-label={`Details: ${i.wait!.title || i.wait!.reason}`}>
+                Details
               </button>
               {!stale && <ApproveButtons i={i} compact />}
             </li>
@@ -872,7 +1163,14 @@ function AgentDetail({ i }: { i: Instance }) {
       <div className="ap-status" data-status={isLive(i) ? i.status : "done"}>
         {isLive(i) ? (i.status === "waiting" && i.wait ? waitLabel(i.wait) : statusText(i)) : `finished (${i.status})`} · alive {age(i)}
       </div>
-      {canApprove && needsHuman(i) && <ApproveButtons i={i} />}
+      {canApprove && needsHuman(i) && (
+        <div className="ap-approve-row">
+          <ApproveButtons i={i} />
+          <button className="ha-details" onClick={() => openDrawer(i.id)}>
+            Details
+          </button>
+        </div>
+      )}
       <dl className="ap-stats">
         <div>
           <dt>tokens</dt>
@@ -956,7 +1254,7 @@ function AgentDetail({ i }: { i: Instance }) {
       {i.hv && (
         <section>
           <h4>{i.hv.unit ? `Traffic${i.svcN ? ` · ${i.svcN} handled${i.svcErr ? `, ${i.svcErr} errors` : ""}` : ""}` : "Decision rate"} {hvActive(i) ? "" : "(quiet)"}</h4>
-          <p className="ap-hv">{haloText(i.hv)} · p95 {Math.round(i.hv.p95)}ms</p>
+          <p className="ap-hv">{haloText(i.hv)} · {haloLatency(i.hv)}</p>
           <div className="ap-hv-bar" title="outcome mix (smoothed)">
             {i.hv.seg.map((f, k) =>
               f > 0.005 ? <span key={k} style={{ flexGrow: f, background: HALO_COLORS[k] }} title={`${segName(k)} ${Math.round(f * 100)}%`} /> : null,

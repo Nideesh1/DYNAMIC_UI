@@ -28,11 +28,12 @@ export type InstanceStatus = "spawning" | "thinking" | "waiting" | "done" | "fai
 export type WorldEvent =
   | { type: "run"; run_id: string; status: "started" | "renamed" | "completed" | "failed"; topic: string; workflow: string; ts: number }
   // "waiting": the step is paused in a wait (approval, durable sleep, ...); `reason` = what it waits on, `until` = epoch ms
-  | { type: "step"; run_id: string; step: StepName; status: "running" | "waiting" | "done" | "failed"; reason?: string; until?: number; ts: number }
+  // declared waits also carry the drawer fields (WaitExtra: kind "approval", title, details, url, because)
+  | ({ type: "step"; run_id: string; step: StepName; status: "running" | "waiting" | "done" | "failed"; reason?: string; until?: number; ts: number } & WaitExtra)
   // `job`: a long-running request of the service `parent_id` (docs/SPEC.md "Backend services"), open since `since` (epoch ms)
   | { type: "spawn"; run_id: string; id: string; agent: string; parent_id: string | null; subagent?: boolean; job?: boolean; since?: number; ts: number }
   | { type: "exit"; run_id: string; id: string; status: "done" | "failed"; ts: number }
-  | { type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; reason?: string; until?: number; ts: number }
+  | ({ type: "agent"; run_id: string; id: string; status: "thinking" | "waiting"; reason?: string; until?: number; ts: number } & WaitExtra)
   // tokens_in = ALL prompt tokens (cached included); tokens_cached / tokens_cache_write are subsets of it, never added
   | { type: "llm"; run_id: string; id: string; tokens_in: number; tokens_out: number; tokens_cached?: number; tokens_cache_write?: number; latency_ms: number; ts: number }
   // `failed`: a publish that raised (backend services): the comet fizzles out instead of arriving
@@ -49,7 +50,7 @@ export type WorldEvent =
   // (ordinal level) or noul (yes / no); p = probability of `result`, options = top 5 {name, p}, ms = latency
   // `hv`: sent while the agent is in high-volume mode (its decisions are aggregated in `decision_stats`); `why` = what
   // made it interesting (important | deny | flip | low_p)
-  | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; scope?: string; ms: number; ts: number; hv?: boolean; why?: string }
+  | { type: "decision"; run_id: string; id: string; kind: DecisionKind; question: string; result: string; p?: number; options?: { name: string; p: number }[]; provider: string; purpose?: string; target?: string; scope?: string; threshold?: number; ms: number; ts: number; hv?: boolean; why?: string }
   // high-volume mode: one per agent per ~1 s window (docs/SPEC.md "Decisions" > "High volume")
   | { type: "decision_stats"; run_id: string; id: string; window_ms: number; n: number; by_purpose: DecisionStatsByPurpose; p50_ms: number; p95_ms: number; providers: Record<string, number>; ts: number }
   // backend services (docs/SPEC.md "Backend services"): a request / handled message on the service agent `id`;
@@ -70,6 +71,10 @@ export type WorldEvent =
   | PrimWorldEvent;
 
 export type DecisionKind = "choice" | "score" | "noul";
+/** The decision that triggered a wait (docs/SPEC.md "Human approval"): a summary of its `decision` event. */
+export type WaitBecause = { id?: string; kind: string; question: string; result: string; p?: number; provider?: string; purpose?: string; target?: string; threshold?: number; ms?: number; ts?: number };
+/** A declared wait's drawer fields (`agentglow.wait.*`): `kind` "approval" = a human approval ("Needs you"). */
+export type WaitExtra = { kind?: string; title?: string; details?: Record<string, string | number | boolean>; url?: string; because?: WaitBecause };
 export type DecisionStatsByPurpose = {
   route?: { n: number; results: Record<string, number> };
   guard?: { n: number; allow: number; deny: number };
@@ -110,13 +115,22 @@ export function haloMix(h: HvStats | null, now = performance.now()): number {
 }
 /** the agent is in high-volume mode now (recent decision_stats) */
 export const hvActive = (i: Instance, now = performance.now()) => !!i.hv && now - i.hv.at < HV_QUIET_MS + HV_FADE_MS;
-/** `jev 42/s · 3% deny · p50 38ms`; a service: `42 req/s · 2% 5xx · p50 18ms` (`msg/s · err` for a consumer) */
+/** The halo label: rate + error / deny share (only when > 0): `jev 42/s · 3% deny`; a service: `42 req/s · 2% errors`
+ * (`msg/s` for a consumer). Latency lives in the Selected panel and the label's hover tooltip (`haloLatency`). */
 export function haloText(h: HvStats): string {
   const r = h.rate >= 10 ? Math.round(h.rate) : Math.round(h.rate * 10) / 10;
+  const share = haloShare(h);
+  return `${h.unit ? `${r} ${h.unit}/s` : `${h.provider} ${r}/s`}${share ? ` · ${share}` : ""}`;
+}
+/** `3% deny` / `2% errors` / "" when none */
+export function haloShare(h: HvStats): string {
   const d = h.deny * 100;
-  const dt = `${d > 0 && d < 1 ? "<1" : Math.round(d)}%`;
-  if (h.unit) return `${r} ${h.unit}/s · ${dt} ${h.unit === "req" ? "5xx" : "err"} · ${h.inflight ? `${h.inflight} in flight` : `p50 ${Math.round(h.p50)}ms`}`;
-  return `${h.provider} ${r}/s · ${dt} deny · p50 ${Math.round(h.p50)}ms`;
+  if (!(d > 0)) return "";
+  return `${d < 1 ? "<1" : Math.round(d)}% ${h.unit ? "errors" : "deny"}`;
+}
+/** `p50 38ms · p95 120ms` (+ `· 3 in flight` for a service) */
+export function haloLatency(h: HvStats): string {
+  return `p50 ${Math.round(h.p50)}ms · p95 ${Math.round(h.p95)}ms${h.inflight ? ` · ${h.inflight} in flight` : ""}`;
 }
 /** `2m14s` / `38s` / `1h05m` */
 export function elapsedText(ms: number): string {
@@ -289,7 +303,17 @@ export type Instance = {
   prim?: PrimState;
 };
 /** A declared wait: what it waits on ("approval", "sleep", an event key) and its deadline / wake-up (epoch ms, 0 = none). */
-export type Wait = { reason: string; until: number };
+export type Wait = { reason: string; until: number } & WaitExtra;
+/** reason / until + the drawer fields of a waiting `step` / `agent` event */
+export function waitOf(ev: { reason?: string; until?: number } & WaitExtra): Wait {
+  const w: Wait = { reason: ev.reason || "wait", until: ev.until ?? 0 };
+  if (ev.kind) w.kind = ev.kind;
+  if (ev.title) w.title = ev.title;
+  if (ev.details) w.details = ev.details;
+  if (ev.url) w.url = ev.url;
+  if (ev.because) w.because = ev.because;
+  return w;
+}
 /** one skill on one agent; startAt / endAt (performance.now()) drive its sigil ring (endAt 0 while active) */
 export type SkillUse = { active: boolean; count: number; last: number; startAt: number; endAt: number };
 /** Skill sigil timing (ms): fade in, minimum time shown after a start (Claude Code skills are instantaneous tool
@@ -710,7 +734,7 @@ export function apply(ev: WorldEvent) {
       const was = r.steps[ev.step];
       const status = ev.status === "waiting" ? "running" : ev.status; // waiting = running but paused
       r.steps[ev.step] = status; // a retry just overwrites: failed → running → done
-      if (ev.status === "waiting") r.waits[ev.step] = { reason: ev.reason || "wait", until: ev.until ?? 0 };
+      if (ev.status === "waiting") r.waits[ev.step] = waitOf(ev);
       else delete r.waits[ev.step];
       if (status === "done") r.lastDone = ev.step;
       if (status === "running" && was !== "running") {
@@ -796,7 +820,7 @@ export function apply(ev: WorldEvent) {
       const i = world.instances.get(ev.id);
       if (i) {
         i.status = ev.status;
-        i.wait = ev.status === "waiting" && ev.reason ? { reason: ev.reason, until: ev.until ?? 0 } : null;
+        i.wait = ev.status === "waiting" && ev.reason ? waitOf(ev) : null;
       }
       if (ev.status === "thinking") {
         world.focus = ev.id;

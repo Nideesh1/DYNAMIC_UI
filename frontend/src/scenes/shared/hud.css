@@ -241,9 +241,58 @@
 .hud-approvals .ha-who b { color: #e2e8f0; font-weight: 650; white-space: nowrap; }
 .hud-approvals .ha-who span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fbbf24; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .hud-approvals p { margin: 6px 0 0; font-size: 11px; color: #64748b; }
+.hud-approvals .ha-details, .ap-approve-row .ha-details { all: unset; cursor: pointer; flex: none; font-size: 11px; color: #cbd5e1; padding: 3px 8px; border-radius: 999px; border: 1px solid rgba(148, 163, 255, 0.28); }
+.hud-approvals .ha-details:hover, .ap-approve-row .ha-details:hover, .hud-approvals .ha-details:focus-visible { border-color: #818cf8; color: #f1f5f9; }
+.ap-approve-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ap-approve-row .ha-details { margin-top: 8px; }
+/* approval details drawer (left of the sidebar; the scene keeps running behind it) */
+.hud-drawer { top: 64px; max-height: calc(100% - 76px); right: calc(var(--hud-side, 320px) + 24px); width: 360px; max-width: calc(100% - var(--hud-side, 320px) - 48px); z-index: 11; display: flex; flex-direction: column; gap: 10px; padding: 14px 14px 12px; box-sizing: border-box; overflow-y: auto; font-size: 12px; outline: none; background: rgba(10, 14, 26, 0.78); border-color: rgba(245, 158, 11, 0.45); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), 0 0 22px rgba(245, 158, 11, 0.1); animation: hd-in 0.18s ease-out; }
+.hud-drawer.is-rail { --hud-side: 40px; }
+@keyframes hd-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .hud-drawer { animation: none; } }
+.hud-drawer .hd-head { display: flex; align-items: flex-start; gap: 8px; }
+.hud-drawer .hd-head > div { flex: 1; min-width: 0; }
+.hud-drawer .hd-kicker { margin: 0 0 2px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #fcd34d; }
+.hud-drawer h3 { margin: 0; font-size: 15px; font-weight: 700; line-height: 1.3; color: #f1f5f9; overflow-wrap: anywhere; }
+.hud-drawer .hd-close { all: unset; cursor: pointer; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; font-size: 17px; color: #94a3b8; }
+.hud-drawer .hd-close:hover, .hud-drawer .hd-close:focus-visible { color: #f1f5f9; background: rgba(148, 163, 255, 0.14); }
+.hud-drawer .hd-who { all: unset; cursor: pointer; display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 2px 4px; margin: -2px -4px; border-radius: 6px; }
+.hud-drawer .hd-who:hover { background: rgba(148, 163, 255, 0.1); }
+.hud-drawer .hd-who i { flex: 0 0 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); align-self: center; }
+.hud-drawer .hd-who b { color: #e2e8f0; white-space: nowrap; }
+.hud-drawer .hd-who span { color: #94a3b8; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-drawer .hd-deadline { align-self: flex-start; font-size: 11px; font-variant-numeric: tabular-nums; color: #fde68a; padding: 2px 9px; border-radius: 999px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); }
+.hud-drawer .hd-deadline.is-due { color: #86efac; background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.35); }
+.hud-drawer .hd-deadline.is-overdue { color: #fbbf24; font-weight: 650; }
+.hud-drawer section h4 { margin: 0 0 5px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; }
+.hud-drawer .hd-why { border-left: 2px solid #5eead4; padding: 2px 0 2px 8px; }
+.hud-drawer .hd-why.is-deny { border-left-color: #fb7185; }
+.hud-drawer .hd-why p { margin: 0 0 4px; color: #e2e8f0; line-height: 1.4; }
+.hud-drawer .hd-why p b { font-size: 9px; letter-spacing: 0.06em; color: #94a3b8; margin-right: 2px; }
+.hud-drawer .hd-why p em { font-style: normal; font-weight: 700; color: #5eead4; }
+.hud-drawer .hd-why.is-deny p em { color: #fda4af; }
+.hud-drawer .hd-reason { margin: 0; color: #fbbf24; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.hud-drawer .hd-dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; font-size: 11px; }
+.hud-drawer .hd-dl div { display: contents; }
+.hud-drawer .hd-dl dt { color: #64748b; }
+.hud-drawer .hd-dl dd { margin: 0; color: #e2e8f0; font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-drawer .hd-details dd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.hud-drawer .ap-decisions { margin: 0; }
+.hud-drawer .hd-foot { display: grid; gap: 8px; padding-top: 4px; border-top: 1px solid rgba(148, 163, 255, 0.12); }
+.hud-drawer .hd-note { width: 100%; box-sizing: border-box; resize: vertical; min-height: 38px; margin-top: 8px; padding: 6px 8px; font: inherit; font-size: 12px; color: #e2e8f0; background: rgba(3, 5, 11, 0.55); border: 1px solid rgba(148, 163, 255, 0.22); border-radius: 8px; outline: none; }
+.hud-drawer .hd-note:focus { border-color: #818cf8; }
+.hud-drawer .hud-approve { margin-top: 0; }
+.hud-drawer .hd-keys { margin: 0; font-size: 10px; color: #64748b; }
+.hud-drawer .hd-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.hud-drawer .hd-links a, .hud-drawer .hd-links button { all: unset; cursor: pointer; font-size: 11px; color: #c7d2fe; padding: 3px 9px; border-radius: 999px; border: 1px solid rgba(148, 163, 255, 0.28); }
+.hud-drawer .hd-links a:hover, .hud-drawer .hd-links button:hover, .hud-drawer .hd-links a:focus-visible, .hud-drawer .hd-links button:focus-visible { border-color: #818cf8; color: #f1f5f9; }
+/* halo label hover: its latency */
+.hud-halotip { position: fixed; z-index: 30; pointer-events: none; padding: 5px 8px; border-radius: 8px; font-size: 11px; line-height: 1.45; color: #cbd5e1; background: rgba(10, 14, 26, 0.88); border: 1px solid rgba(148, 163, 255, 0.22); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hud-halotip b { color: #f1f5f9; }
 @container agscene (max-width: 719px) {
   .scene-root .hud-approvals { max-width: calc(100% - 76px); padding: 6px 8px; }
   .scene-root .hud-approvals .ha-who span { display: none; }
+  .scene-root .hud-drawer { left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; max-width: none; max-height: 72%; }
 }
 /* generic primitives (prims.ts, PrimPanel.tsx) */
 .hud-rejected { color: #fde68a; }

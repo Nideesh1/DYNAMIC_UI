@@ -5,8 +5,9 @@
  *    outside the agent whose thickness / brightness follow its decision rate (log scale) and whose arc is split by
  *    outcome (allow green, deny red, check yes teal / no amber, route results in 4 accent colours, other grey), with a
  *    slow spark running round it. Smoothed in world.ts (EMA), fades when the agent goes quiet (haloMix).
- *  - <HaloLabel>: `jev 42/s · 3% deny · p50 38ms` above the agent (a backend service from `service_stats`:
- *    `42 req/s · 2% 5xx · p50 18ms`), re-texted at most ~4x/s and only when it changes.
+ *  - <HaloLabel>: `jev 42/s · 3% deny` above the agent (a backend service from `service_stats`: `feed · 42 req/s`,
+ *    `· 2% errors` only with errors): rate + share only, re-texted at most ~4x/s and only when it changes. Latency
+ *    (p50 / p95, in flight) is in the Selected panel and in the label's hover tooltip (`haloHover`, Hud's HaloTip).
  *  - <OrderChip>: a small ticket popping out of the agent for ORDER_LIFE_MS: green BUY/YES, red SELL/NO,
  *    `YES 3 @ 42c`, dashed outline + `paper` when dry_run, grey with a strike-through when rejected / cancelled.
  *
@@ -17,7 +18,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../Label3D";
-import { flashMix, HALO_CATS, HALO_COLORS, haloMix, hash01, ORDER_LIFE_MS, orderText, presence, world, type OrderUse } from "../world";
+import { flashMix, HALO_CATS, HALO_COLORS, haloMix, hash01, ORDER_LIFE_MS, orderText, presence, selectInstance, world, type OrderUse } from "../world";
 import { fit } from "./fit";
 import { labels } from "./labels";
 import { kit, reduced, type KitAgent } from "./state";
@@ -204,10 +205,19 @@ export function HaloLabel({ agent, radius, height }: { agent: KitAgent; radius: 
   return on ? <HaloLabelOn agent={agent} radius={radius} height={height} /> : null;
 }
 
+/** The halo label under the pointer (agent id, or null): the HUD shows its latency in a tooltip. */
+export const haloHover = { id: null as string | null, subs: new Set<() => void>() };
+function setHaloHover(id: string | null) {
+  if (haloHover.id === id) return;
+  haloHover.id = id;
+  haloHover.subs.forEach((f) => f());
+}
+
 function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: number; height: number }) {
   const g = useRef<THREE.Group>(null);
   const l = useRef<Label3DHandle>(null);
   const st = useMemo(() => ({ at: 0, key: "", vis: 0, setAt: 0 }), []);
+  useEffect(() => () => void (haloHover.id === agent.id && setHaloHover(null)), [agent.id]);
   useFrame(({ camera, size: vp }) => {
     const h = agent.inst.hv;
     const o = g.current;
@@ -226,25 +236,23 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
       const r = h.rate >= 10 ? `${Math.round(h.rate)}` : `${Math.round(h.rate * 10) / 10}`;
       const d = h.deny * 100;
       const dn = d > 0 && d < 1 ? "<1" : `${Math.round(d)}`;
-      const p50 = `${Math.round(h.p50)}`;
       const reps = h.unit && (h.instances ?? 1) > 1 ? `×${h.instances} · ` : "";
-      const key = `${h.provider}|${h.unit}|${r}|${dn}|${p50}|${reps}|${h.inflight ?? 0}|${svc}`;
+      const key = `${h.provider}|${h.unit}|${r}|${dn}|${reps}|${svc}`;
       // (re-applied every few seconds: a text set before the label's mesh mounted would otherwise stay empty)
       if (l.current && (key !== st.key || now - st.setAt > 3000)) {
         st.key = key;
         st.setAt = now;
-        // a backend service (world `service_stats`): `42 req/s · 2% 5xx · p50 18ms`
-        // a service: `feed · 12 msg/s · p50 4ms` (`· 2% err` only with errors), `×2` replicas
+        // rate + error / deny share (only when > 0): `feed · 1.6 req/s · 3% errors`, `jev 2.3/s · 5% deny`, `×2`
+        // replicas; latency is in the hover tooltip and the Selected panel
         l.current?.setText([
           ...(svc ? [{ text: `${agent.inst.name} · `, color: TEXT }] : []),
           ...(reps ? [{ text: reps, color: BADGE }] : []),
           { text: h.unit ? `${r} ` : `${h.provider} `, color: h.unit ? TEXT : BADGE },
           { text: h.unit ? `${h.unit}/s` : `${r}/s`, color: h.unit ? BADGE : TEXT },
-          ...(svc && d === 0 ? [] : [
+          ...(d > 0 ? [
             { text: " · ", color: DIM },
-            { text: `${dn}% ${h.unit === "req" ? "5xx" : h.unit ? "err" : "deny"}`, color: d >= 1 ? RED : DIM },
-          ]),
-          h.inflight ? { text: ` · ${h.inflight} in flight`, color: "#fbbf24" } : { text: ` · p50 ${p50}ms`, color: DIM },
+            { text: `${dn}% ${h.unit ? "errors" : "deny"}`, color: d >= 1 ? RED : DIM },
+          ] : []),
         ]);
       }
     }
@@ -259,7 +267,9 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
   });
   return (
     <group ref={g} visible={false}>
-      <Label3D ref={l} text="" color="#5eead4" textColor={TEXT} size={HL.size} pxRange={HL.px} anchorY="bottom" plate="none" font="mono" opacity={0} fadeMs={0} glow={1} renderOrder={25} declutter="skill" fit />
+      <Label3D ref={l} text="" color="#5eead4" textColor={TEXT} size={HL.size} pxRange={HL.px} anchorY="bottom" plate="none" font="mono" opacity={0} fadeMs={0} glow={1} renderOrder={25} declutter="skill" fit
+        onClick={(e) => g.current?.visible && (e.stopPropagation(), selectInstance(agent.id))}
+        onHover={(over) => setHaloHover(over && g.current?.visible ? agent.id : null)} />
     </group>
   );
 }
