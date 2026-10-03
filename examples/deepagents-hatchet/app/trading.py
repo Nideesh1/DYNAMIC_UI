@@ -2,13 +2,15 @@
 exchange), orchestrated by Hatchet, with deepagents doing the slow thinking and fast Jev gates doing the rest.
 No exchange connection anywhere: every order is `dry_run` (would_place / rejected).
 
-  open_session   task: session state + N synthetic markets with toy order books (app/markets.py)
-  run_markets    task: the `desk` agent fans out one CHILD run of `market_watch` per market (aio_run_many) and
-                 watches desk risk meanwhile: a simulated feed outage (once per session by default, DESK_OUTAGE_EVERY_S)
-                 trips the kill switch. Desk-wide guards are `scope="global"` decisions: AgentGlow shows ONE halted
+  open_session   task: session state + N synthetic markets (app/markets.py)
+  run_markets    task: subscribes the markets at the `feed` service (app/feed.py), which streams one tick per market
+                 per DESK_TICK_S to the Redis stream `mkt:tick` (the worker's FastStream consumer, app/ingest.py,
+                 keeps the latest tick per market); then the `desk` agent fans out one CHILD run of `market_watch` per market (aio_run_many) and
+                 watches desk risk meanwhile: stale ticks (the feed's simulated outage, once per session by default,
+                 DESK_OUTAGE_EVERY_S on the feed) trip the kill switch. Desk-wide guards are `scope="global"` decisions: AgentGlow shows ONE halted
                  desk instead of a red X on every market
   market_watch   DURABLE child task, one per market, ticking every DESK_TICK_S for DESK_TICKS ticks. Each tick, plain
-                 Python: step the synthetic book -> ONE batched Jev call (app/decide.batch: quote_sane,
+                 Python: apply the feed's latest tick (a rolled contract settles our position) -> ONE batched Jev call (app/decide.batch: quote_sane,
                  should_rethink, act|watch|skip or should_close; rate capped at JEV_MAX_RPS, overflow -> local
                  jev-sim) -> code guards (kill switch, daily loss cap, settlement lock, spread, slippage, max
                  contracts, depth, bucket cap: provider "code", purpose "guard") -> Jev safe_without_human (>= 0.8)
@@ -19,9 +21,10 @@ No exchange connection anywhere: every order is `dry_run` (would_place / rejecte
                  DESK_MAX_ANALYSTS per session: Hatchet concurrency + an in-process check so they never queue): a
                  deepagents `analyst` (AGENT_MODEL) with market tools and a `weather` subagent returns a typed
                  FairView; the market trades on the latest view (until then on its quant signal). Its tools use the
-                 `market_data` MCP server (order book, tick history, forecast: app/market_mcp_server.py) and the
-                 FalkorDB graph (correlated markets: read; the view: write)
-  place_order    child task: the paper order (agentglow.order(..., dry_run=True))
+                 `market_data` MCP server (order book from Redis, tick history from the feed, the forecast API:
+                 app/market_mcp_server.py) and the FalkorDB graph (correlated markets: read; the view: write)
+  place_order    child task: the paper order (agentglow.order(..., dry_run=True)), filled on paper by the feed
+                 (POST /orders: orders, fills and positions in Postgres, the live position in Redis)
   close_session  task: P&L summary (agentglow.final)
 
 Why the tick sleep is plain asyncio.sleep and not ctx.aio_sleep_for: a durable sleep is an engine round trip plus a
@@ -30,8 +33,8 @@ nothing: the tick state is in memory and a replay would re-simulate it anyway. T
 durable (a human, minutes to hours in real life) use ctx.aio_wait_for.
 
 Desk-wide numbers (P&L for the daily loss cap, contracts per topic bucket) live in an in-process registry: every
-market of a session runs on this worker. With several workers, keep them in Redis instead (the feed outage is
-deterministic from the session start, so the kill switch needs no shared state).
+market of a session runs on this worker. With several workers, keep them in Redis instead (feed staleness is seen
+by every consumer of `mkt:tick`, so the kill switch needs no shared state).
 """
 import asyncio
 import os
@@ -47,14 +50,15 @@ import agentglow
 from hatchet_sdk import ConcurrencyExpression, ConcurrencyLimitStrategy, Context, DurableContext
 from hatchet_sdk.conditions import SleepCondition, UserEventCondition, or_
 from langchain_core.tools import tool
+import httpx
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from pydantic import BaseModel, Field
 
-from . import decide, loopwatch
+from . import decide, ingest, loopwatch
 from . import market_mcp_server as market_mcp
 from .config import MODEL
-from .markets import QUESTIONS, TOPICS, Limits, Market, Position, bucket, feed_ok, guards, sim_p
+from .markets import QUESTIONS, TOPICS, Limits, Market, Position, bucket, guards, sim_p
 from .workflow import hatchet, text_of
 
 WORKFLOW = "trading_desk"
@@ -64,7 +68,7 @@ TICKS = int(os.environ.get("DESK_TICKS", "60"))
 TICK_S = float(os.environ.get("DESK_TICK_S", "1.0"))
 THINK_COOLDOWN_S = float(os.environ.get("DESK_THINK_COOLDOWN_S", "30"))
 HUMAN_TIMEOUT_S = float(os.environ.get("DESK_HUMAN_TIMEOUT_S", "8"))
-OUTAGE_EVERY_S = float(os.environ.get("DESK_OUTAGE_EVERY_S", "0"))   # 0 = once per session, < 0 = never
+FEED_URL = os.environ.get("FEED_URL", "http://localhost:8400")
 MAX_ANALYSTS = int(os.environ.get("DESK_MAX_ANALYSTS", "3"))
 SAFE_THRESHOLD = 0.8
 LIMITS = Limits()
@@ -86,12 +90,21 @@ def desk_pnl(sid: str) -> float:
     return sum(_desk(sid)["pnl"].values())
 
 
-def feed_fresh(started_at: float) -> bool:
-    return feed_ok(started_at, time.time(), OUTAGE_EVERY_S, session_s=TICKS * TICK_S)
+def feed_fresh(sid: str) -> bool:
+    """The feed's ticks for this session are recent (app/ingest.py)."""
+    return ingest.fresh(sid)
 
 
-def killed(sid: str, started_at: float) -> bool:
-    return not feed_fresh(started_at) or desk_pnl(sid) <= -LIMITS.daily_loss_cap
+def killed(sid: str) -> bool:
+    return not feed_fresh(sid) or desk_pnl(sid) <= -LIMITS.daily_loss_cap
+
+
+async def feed_call(method: str, path: str, **kw) -> dict:
+    """The feed service's HTTP API (subscribe / unsubscribe a session, paper orders)."""
+    async with httpx.AsyncClient(base_url=FEED_URL, timeout=5) as c:
+        r = await c.request(method, path, **kw)
+        r.raise_for_status()
+        return r.json()
 
 
 # desk-wide guards (AgentGlow `scope="global"`): a `no` halts every market, shown once on the desk
@@ -117,12 +130,11 @@ class ViewInput(BaseModel):
     session_id: str      # concurrency group: at most DESK_MAX_ANALYSTS analysts per session
     ticker: str
     snapshot: dict
-    history: list[float]
-    forecast_p: float
 
 
 class OrderInput(BaseModel):
     topic: str
+    session_id: str
     ticker: str
     side: str
     qty: int
@@ -167,12 +179,12 @@ async def open_session(input: DeskInput, ctx: Context) -> dict:
 
 
 # ---- run_markets: the desk + one child run per market ----------------------------------------------
-async def desk_monitor(d, sid: str, started_at: float, stats: Counter) -> None:
+async def desk_monitor(d, sid: str, stats: Counter) -> None:
     """Desk risk oversight once a second: feed health and the daily loss cap (code guards) drive the kill switch."""
     was = False
     while True:
         await asyncio.sleep(1.0)
-        feed = feed_fresh(started_at)
+        feed = feed_fresh(sid)
         loss = desk_pnl(sid) > -LIMITS.daily_loss_cap
         now = not (feed and loss)
         if now != was:  # the switch itself first: it names the halt on the desk
@@ -191,9 +203,13 @@ async def run_markets(input: DeskInput, ctx: Context) -> dict:
     s = ctx.task_output(open_session)
     sid = s["session_id"]
     _desk(sid)
+    # subscribe the session's markets at the feed now (its clock, incl. the outage, starts with the desk)
+    await feed_call("POST", "/sessions", json={"session_id": sid, "seed": s["seed"], "started_at": time.time(),
+                                               "session_s": TICKS * TICK_S, "markets": s["markets"]})
+    ingest.expect(sid)
     stats: Counter = Counter()
     async with agentglow.agent("desk", task=f"{len(s['markets'])} weather markets, paper only") as d:
-        mon = asyncio.create_task(desk_monitor(d, sid, s["started_at"], stats))
+        mon = asyncio.create_task(desk_monitor(d, sid, stats))
         try:
             runs = [market_watch.create_bulk_run_item(
                 input=MarketInput(topic=input.topic, session_id=sid, index=i, market=m, seed=s["seed"] * 100 + i,
@@ -254,7 +270,7 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
     async def order(side: str, qty: int, price: float, reason: str) -> None:
         if superseded():  # durable calls of a superseded invocation fail: no more orders
             return
-        await place_order.aio_run(OrderInput(topic=input.topic, ticker=m.ticker, side=side, qty=qty,
+        await place_order.aio_run(OrderInput(topic=input.topic, session_id=sid, ticker=m.ticker, side=side, qty=qty,
                                              price=round(price, 1), reason=reason), additional_metadata=here())
         st["orders"] += 1
 
@@ -277,9 +293,8 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
         try:
             if superseded():
                 return
-            v = await form_view.aio_run(ViewInput(topic=input.topic, session_id=sid, ticker=m.ticker, snapshot=snap,
-                                                  history=m.history[-30:], forecast_p=m.forecast(rng)),
-                                    additional_metadata=here())
+            v = await form_view.aio_run(ViewInput(topic=input.topic, session_id=sid, ticker=m.ticker, snapshot=snap),
+                                        additional_metadata=here())
             v = v.get("form_view", v)
             m.view, m.view_at = float(v["fair_p"]), time.time()
             st["views"] += 1
@@ -293,7 +308,7 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
         edge = s["edge_cents"]
         side = "yes" if edge > 0 else "no"
         want = int(abs(edge) * rng.uniform(4, 12))
-        qty, checks = guards(m, killed=killed(sid, input.started_at), desk_pnl=desk_pnl(sid),
+        qty, checks = guards(m, killed=killed(sid), desk_pnl=desk_pnl(sid),
                              bucket_used=desk["used"][bucket(m.ticker)], qty=want, edge_cents=edge, lim=LIMITS)
         for q, ok in checks:
             code(a, q, ok)
@@ -325,16 +340,21 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
         await order(side, qty, price, f"edge {edge:+.1f}c ({s['view_from']})")
 
     await asyncio.sleep(rng.uniform(0, TICK_S))  # de-sync the markets' ticks
+    await ingest.first_tick(sid, input.index)   # the feed's first tick for this market (else: trade on the snapshot)
+    seq = -1
     async with agentglow.agent(name, task=f"trade {bucket(m.ticker)} (paper)") as a:
         for tick in range(TICKS):
             if superseded():
                 a.say("stopped: the engine re-delivered this market (reassigned)")
                 break
             t0 = time.monotonic()
-            m.step(rng)
-            if m.secs_to_settle <= 0:
-                pnl = m.settle(rng)
-                a.say(f"settled ${pnl:+.2f}; rolled to {m.ticker}")
+            q = ingest.latest(sid, input.index)
+            if q is not None and q["seq"] != seq:   # a new tick from the feed (none during an outage)
+                seq = q["seq"]
+                old = m.ticker
+                pnl = m.apply(q)
+                if pnl is not None:
+                    a.say(f"{old} settled ${pnl:+.2f}; rolled to {m.ticker}")
             desk["pnl"][input.index] = m.realized + m.upnl()
             sig = m.signal(rng)
             s = m.state(sig)
@@ -344,7 +364,7 @@ async def market_watch(input: MarketInput, ctx: DurableContext) -> dict:
                 await close(a, "stop-loss")
                 s = m.state(sig)
 
-            if not feed_fresh(input.started_at):  # stale quotes: no gates, no orders
+            if not feed_fresh(sid):  # stale quotes: no gates, no orders
                 code(a, "feed fresh", False, target="quote")
             else:
                 busy = thinking is not None and not thinking.done()
@@ -443,9 +463,9 @@ async def market_tools() -> dict:
 
 
 async def analyst_for(v: ViewInput):
-    """A deep agent with tools over THIS market's synthetic data (built per run: the data is the run's input). The
-    numbers come from the run's input; the market_data MCP server shapes them (book, tick stats, forecast) and the
-    FalkorDB graph adds correlated markets and keeps the view."""
+    """A deep agent with tools over THIS market (built per run): the snapshot comes from the run's input, the
+    market_data MCP server reads the book (Redis), the tick history (feed) and the forecast API, and the FalkorDB
+    graph adds correlated markets and keeps the view."""
     from deepagents import create_deep_agent
 
     from opentelemetry import context
@@ -470,19 +490,17 @@ async def analyst_for(v: ViewInput):
     async def market_snapshot():
         """The market now: mid price (cents), spread, depth, our quant signal, seconds to settlement, open position, and
         the order book (3 levels each side) from the exchange feed."""
-        book = await via_mcp("order_book", {"ticker": v.ticker, "mid_cents": snap["mid_cents"],
-                                                "spread_cents": snap["spread_cents"], "depth": snap["depth"]})
-        return {**snap, "book": book}
+        return {**snap, "book": await via_mcp("order_book", {"ticker": v.ticker})}
 
     @tool
     async def price_history():
         """Recent price stats from the tick history: last mid, change, high / low, volatility (cents)."""
-        return await via_mcp("history", {"ticker": v.ticker, "mids": v.history})
+        return await via_mcp("history", {"ticker": v.ticker})
 
     @tool
     async def weather_forecast():
-        """The weather model's probability for this market's event (synthetic NWS forecast)."""
-        return await via_mcp("forecast", {"ticker": v.ticker, "model_p": v.forecast_p})
+        """The weather model's probability for this market's event (synthetic forecast API)."""
+        return await via_mcp("forecast", {"ticker": v.ticker})
 
     # graph tools: the FalkorDB client is blocking, so the query runs in a thread (never on the worker's event loop,
     # which also ticks every market and heartbeats Hatchet)
@@ -533,11 +551,16 @@ async def form_view(input: ViewInput, ctx: Context) -> dict:
 # ---- place_order: the paper order ------------------------------------------------------------------
 @hatchet.task(name="place_order", input_validator=OrderInput, execution_timeout=timedelta(seconds=30), retries=0)
 async def place_order(input: OrderInput, ctx: Context) -> dict:
-    """PAPER ONLY: records the order the desk would place. Never connects to an exchange."""
+    """PAPER ONLY: records the order the desk would place and books its paper fill at the feed (Postgres + Redis).
+    Never connects to an exchange."""
     step_span(input.topic)
     agentglow.order(input.side, input.qty, round(min(0.99, max(0.01, input.price / 100)), 3), status="would_place", instrument=input.ticker, dry_run=True,
                     reason=input.reason)
-    return {"status": "would_place", "dry_run": True, **input.model_dump(exclude={"topic"})}
+    try:
+        fill = await feed_call("POST", "/orders", json=input.model_dump(exclude={"topic"}))
+    except Exception as e:  # noqa: BLE001  (the paper ledger is best effort: the desk keeps its own book)
+        fill = {"status": "unbooked", "error": f"{type(e).__name__}"}
+    return {"status": "would_place", "dry_run": True, "fill": fill, **input.model_dump(exclude={"topic"})}
 
 
 # ---- close_session ---------------------------------------------------------------------------------
@@ -545,6 +568,11 @@ async def place_order(input: OrderInput, ctx: Context) -> dict:
 async def close_session(input: DeskInput, ctx: Context) -> dict:
     span = step_span(input.topic)
     s, r = ctx.task_output(open_session), ctx.task_output(run_markets)
+    try:
+        await feed_call("DELETE", f"/sessions/{s['session_id']}")
+    except Exception:  # noqa: BLE001  (the feed drops it on its own after the session's grace period)
+        pass
+    ingest.forget(s["session_id"])
     tot: Counter = Counter()
     for mk in r["markets"]:
         tot.update({k: v for k, v in mk.items() if isinstance(v, (int, float)) and k != "pnl"})

@@ -231,7 +231,7 @@ Optional span attributes make it richer: `agentglow.agent`, `agentglow.run.topic
 | [react-embed](examples/react-embed) | `<AgentScene/>` in a Vite + React app |
 | [claude-code](examples/claude-code) | watch **Claude Code** and its subagents in 3D via hooks (+ optional OTel traces for real token counts) - no code |
 | [deepagents-hatchet](examples/deepagents-hatchet) | the full stack: Hatchet + deepagents + MCP + FalkorDB, one `docker compose up` |
-| [deepagents-hatchet: trading desk](examples/deepagents-hatchet#trading-desk-paper-fast) | Hatchet-orchestrated paper trading desk on synthetic weather markets: one durable child run per market, fast rate-capped Jev gates as halos, deepagents analyst runs, durable human gates, kill switch, paper orders |
+| [deepagents-hatchet: trading desk](examples/deepagents-hatchet#flagship-trading-desk) | **flagship**: a whole trading backend + its agents in one scene: a FastAPI market `feed` streaming ticks over a Redis stream (FastStream) to a Hatchet worker, a paper trading desk (one durable child run per market, rate-capped Jev gates, deepagents analysts, human gates, kill switch), an MCP server with auto-discovered backends, Postgres / Redis paper fills |
 
 Every Python example takes `AGENT_MODEL` - e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, `google_genai:gemini-3.8-flash`.
 

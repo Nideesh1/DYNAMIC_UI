@@ -1,5 +1,6 @@
 """Synthetic weather event-contract markets for the trading_desk demo (app/trading.py). PAPER ONLY: made-up markets,
-a toy order book, no exchange connection anywhere.
+a toy order book, no exchange connection anywhere. The `feed` service (app/feed.py) steps the quotes and streams them
+as ticks; the desk keeps positions, views and P&L on its side (`Market.apply`).
 
 Prices are in cents (1..99), like a YES contract that pays 100 if the event happens (the shape of an event-contract
 exchange). Each market has a hidden true probability that drifts, a mid that slowly finds it, a spread
@@ -110,6 +111,32 @@ class Market:
 
     def upnl(self) -> float:
         return self.position.mark(self.mid) if self.position else 0.0
+
+    # ---- the feed (app/feed.py) owns the quotes; the desk applies its ticks
+    QUOTE = ("ticker", "true_p", "mid", "spread", "depth", "settles_at")
+
+    def quote(self) -> dict:
+        """This market's tick for the `mkt:tick` stream (true_p is the simulation's hidden truth: sim only)."""
+        return {k: getattr(self, k) for k in self.QUOTE}
+
+    def apply(self, q: dict) -> float | None:
+        """Apply a feed tick. If the feed rolled the contract, settle our position on the exchange's outcome first
+        (`q["prev"]` = {"ticker", "yes"} of the market's last settlement) and return its P&L, else None."""
+        pnl = None
+        if q["ticker"] != self.ticker:
+            prev = q.get("prev") or {}
+            yes = bool(prev.get("yes")) if prev.get("ticker") == self.ticker else self.true_p >= 0.5
+            pnl = 0.0
+            if self.position:
+                won = yes == (self.position.side == "yes")
+                pnl = ((100 if won else 0) - self.position.entry) * self.position.qty / 100
+                self.position = None
+            self.realized += pnl
+            self.view, self.view_at, self.history = None, 0.0, []
+        for k in self.QUOTE:
+            setattr(self, k, q[k])
+        self.history = (self.history + [round(self.mid, 1)])[-60:]
+        return pnl
 
     def settle(self, rng: random.Random) -> float:
         """Settle the open position (event resolves YES with prob true_p), then roll to a fresh contract."""

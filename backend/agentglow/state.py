@@ -174,10 +174,12 @@ class Hub:
         return f"{self.epoch}-{ev['seq']}" if "seq" in ev else None
 
     def counts(self, f: Filter = Filter()) -> dict:
+        # open_runs: agent runs only; the long-lived backend services run (never completes) is not "open work"
+        runs = [rid for rid, r in self.mapper.runs.items() if not r.service]
         if f.empty:
-            return {"subscribers": len(self.subs), "buffered": len(self.buffer), "open_runs": len(self.mapper.runs)}
+            return {"subscribers": len(self.subs), "buffered": len(self.buffer), "open_runs": len(runs)}
         return {"buffered": sum(1 for e in self.buffer if e.get("type") != "mcp_register" and f.match(e, self.scope_of)),
-                "open_runs": sum(1 for r in self.mapper.runs if f.match({"run_id": r}, self.scope_of))}
+                "open_runs": sum(1 for r in runs if f.match({"run_id": r}, self.scope_of))}
 
     def subscribe(self, f: Filter = Filter()) -> Sub:
         sub = Sub(f)

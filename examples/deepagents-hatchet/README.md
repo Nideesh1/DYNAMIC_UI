@@ -93,6 +93,32 @@ skips negotiation). An approval sent before the run reaches
 the `approval` step is not remembered: approve once it is waiting. Timings: `DEMO_SLEEP_S` (default 20) and
 `APPROVAL_TIMEOUT_S` (default 1800) in `.env` or the shell.
 
+## Flagship: trading desk
+
+The 0.4.0 flagship: a whole backend AND its agents in one scene, shaped like a real event-contract trading bot
+(inspired by exchanges like Kalshi; every market, ticker and fill here is synthetic, PAPER ONLY).
+
+```
+              feed (FastAPI :8400)  watch(app=, broker=)                  forecast stub (:8401, not instrumented)
+   exchange sim -> "exchange ws" frame -> Redis cache (book, history, wx)        ^
+        |                                  |   POST /orders -> Postgres `desk`   | GET /forecast
+        | XADD mkt:tick (FastStream)       |   (orders, fills, positions)        |
+        v                                  v                                     |
+   worker (Hatchet)  watch(broker=)   market_data MCP (:8205)  watch(mcp=) ------+--> redis (book), feed (history)
+   ingest consumer -> latest tick           ^  auto-discovered backends
+        |                                   |
+   trading_desk: desk -> market_watch x12 (Jev gates, code guards, human gates, kill switch) -> place_order -> feed
+                         \-> form_view: deepagents analyst + weather subagent -> market_data MCP, FalkorDB graph
+```
+
+What you'll see: the `feed` and `worker` **service agents** with request halos (`exchange ws`, `GET /history/{ticker}`,
+`POST /orders`; the worker's `mkt:tick` rate is aggregated, `12 req/s`), `mkt:tick` **comets** feed -> worker every
+tick, the feed's `redis` and `postgresql:desk` resources lighting up, the desk run with its market ring, decision
+halos, orders and human gates (HUD Approve / Reject), the `market_data` MCP server growing its backends (`redis`,
+`feed:8400`, `forecast:8401`) the first time an analyst calls it, FalkorDB graph reads / writes, and the kill switch:
+once per session the feed goes quiet for 6 s, the comets stop, the desk sees stale ticks and halts.
+Run it: `docker compose up -d --build`, then HUD picker **Trading desk (paper, fast)** (or the `curl` below).
+
 ## Trading desk (paper, fast)
 
 Hatchet workflow `trading_desk` (`app/trading.py`, synthetic markets in `app/markets.py`) is a fast **paper** trading
@@ -103,11 +129,11 @@ with the slow deepagents thinking branching off only when it is worth it. HUD pi
 | Step | Runs as | What it does |
 |---|---|---|
 | `open_session` | task | session state + `DESK_MARKETS` synthetic markets with toy order books |
-| `run_markets` | task, agent **desk** | fans out one child run of `market_watch` per market (`aio_run_many`, all concurrent) and watches desk risk once a second: a simulated feed outage (once per session by default, `DESK_OUTAGE_EVERY_S`) trips the **kill switch** |
-| `market_watch` | **durable** child task, one agent per market (`rain-nyc`, `temp-chi-hi`, ...) | `DESK_TICKS` ticks of `DESK_TICK_S`, plain Python: step the book, then ONE batched Jev call per tick (`quote_sane`, `should_rethink` (route, cooldown), `act\|watch\|skip` or `should_close` (route)), then the code guards, `safe_without_human` (guard, needs >= 0.8) and the paper order. Forced stop-loss in code |
-| `form_view` | child task, deepagents **analyst** + **weather** subagent | when `should_rethink` says so: reads the market's snapshot + order book and price history (`market_data` MCP server: Exchange feed, Tick history DB), the correlated markets (FalkorDB graph read) and the weather model (subagent: NWS forecast API via MCP), saves its view to the graph (write) and returns a typed `FairView` (fair probability); the market trades on the latest view, its quant signal until then |
+| `run_markets` | task, agent **desk** | subscribes the markets at the `feed` (`app/feed.py`: it steps the books and streams one tick per market per `DESK_TICK_S` to the Redis stream `mkt:tick`; the worker's FastStream consumer `app/ingest.py` keeps the latest), fans out one child run of `market_watch` per market (`aio_run_many`, all concurrent) and watches desk risk once a second: stale ticks (the feed's simulated outage, once per session by default, `DESK_OUTAGE_EVERY_S`) trip the **kill switch** |
+| `market_watch` | **durable** child task, one agent per market (`rain-nyc`, `temp-chi-hi`, ...) | `DESK_TICKS` ticks of `DESK_TICK_S`, plain Python: apply the feed's latest tick (a rolled contract settles the position), then ONE batched Jev call per tick (`quote_sane`, `should_rethink` (route, cooldown), `act\|watch\|skip` or `should_close` (route)), then the code guards, `safe_without_human` (guard, needs >= 0.8) and the paper order. Forced stop-loss in code |
+| `form_view` | child task, deepagents **analyst** + **weather** subagent | when `should_rethink` says so: reads the market's snapshot + order book and price history (`market_data` MCP server: Redis book cache, the feed's `/history`), the correlated markets (FalkorDB graph read) and the weather model (subagent: the forecast stub via MCP), saves its view to the graph (write) and returns a typed `FairView` (fair probability); the market trades on the latest view, its quant signal until then |
 | (human gate) | durable wait inside `market_watch` | below the safe threshold: `ctx.aio_wait_for` the `desk:approve` event for that market run, auto-approves after `DESK_HUMAN_TIMEOUT_S`. Only that market waits: every market is its own run |
-| `place_order` | child task | `agentglow.order(..., dry_run=True)`: status `would_place` (guard / human rejections are `rejected` orders with the reason) |
+| `place_order` | child task | `agentglow.order(..., dry_run=True)`: status `would_place` (guard / human rejections are `rejected` orders with the reason), paper-filled by the feed (`POST /orders`: Postgres `desk` orders / fills / positions, live position in Redis) |
 | `close_session` | task | the session summary with paper P&L (final answer) |
 
 Code guards (provider `code`, shown as `rule`, purpose `guard`; a deny is marked important so it always shows):
@@ -216,7 +242,9 @@ uv run python -m app.obs_mcp_server              # :8201/mcp (incident demo)
 uv run python -m app.github_mcp_server           # :8202/mcp (incident demo)
 uv run python -m app.erp_mcp_server              # :8203/mcp (vendor demo)
 uv run python -m app.email_mcp_server            # :8204/mcp (vendor demo)
-uv run python -m app.market_mcp_server           # :8205/mcp (trading desk demo)
+uv run python -m app.market_mcp_server           # :8205/mcp (trading desk; REDIS_URL, FEED_URL, FORECAST_URL)
+uv run python -m app.feed                        # :8400 trading desk feed (REDIS_URL, DESK_PG_DSN: a Postgres db `desk`)
+uv run python -m app.forecast_stub               # :8401 (REDIS_URL)
 uv run python -m app.worker
 uv run python trigger.py "Why is churn rising for Acme Corp?"
 ```
