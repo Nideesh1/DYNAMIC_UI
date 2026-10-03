@@ -116,6 +116,16 @@ export function haloMix(h: HvStats | null, now = performance.now()): number {
   if (t < HV_QUIET_MS) return inn;
   return Math.max(0, 1 - (t - HV_QUIET_MS) / HV_FADE_MS) * inn;
 }
+/** a backend service with no traffic for this long (ms) reads as idle: dimmed, label `feed · idle` */
+export const SVC_IDLE_MS = 30000;
+/** a top-level backend service agent (`svc:` id) */
+export const isSvc = (i: Instance) => !i.parent && i.id.startsWith("svc:");
+/** a backend service with no requests / messages in the last SVC_IDLE_MS (or none since it appeared) */
+export const svcIdle = (i: Instance, now = performance.now()) => isSvc(i) && now - (i.svcAt ?? i.bornAt) > SVC_IDLE_MS;
+/** record traffic on a service agent (no-op for other agents) */
+const svcTraffic = (i: Instance | undefined, now: number) => {
+  if (i && isSvc(i)) i.svcAt = now;
+};
 /** the agent is in high-volume mode now (recent decision_stats) */
 export const hvActive = (i: Instance, now = performance.now()) => !!i.hv && now - i.hv.at < HV_QUIET_MS + HV_FADE_MS;
 /** The halo label: rate + error / deny share (only when > 0): `jev 42/s · 3% deny`; a service: `42 req/s · 2% errors`
@@ -298,6 +308,8 @@ export type Instance = {
   /** backend service agent: requests / errors handled (from `service_stats`) */
   svcN?: number;
   svcErr?: number;
+  /** backend service agent: performance.now() of its last traffic (requests / messages in or out); see svcIdle */
+  svcAt?: number;
   /** a long-running request of a service shown as its subagent: started / ended (epoch ms, end 0 while open) */
   job?: { since: number; end: number };
   /** a job just ended: its halo flashes green (ok) / red (performance.now()) */
@@ -912,6 +924,8 @@ export function apply(ev: WorldEvent) {
       break;
     }
     case "message":
+      svcTraffic(world.instances.get(ev.from_id), now);
+      if (ev.to_id) svcTraffic(world.instances.get(ev.to_id), now);
       if (ev.from_id !== ev.to_id && ev.from_id.startsWith("svc:") && ev.to_id?.startsWith("svc:")) {
         const key = `${ev.from_id}|${ev.to_id}|${ev.text}`;
         const t = world.topics.get(key);
@@ -1055,6 +1069,7 @@ export function apply(ev: WorldEvent) {
       const i = world.instances.get(ev.id);
       if (ev.rejected) noteRejected(world, i, ev.status ? `${ev.status}` : "busy", now);
       if (!i) break;
+      svcTraffic(i, now);
       i.pulse = Math.max(i.pulse * Math.exp(-((now - i.pulseAt) / 1000) * 2.2), ev.error ? 1.2 : 0.7);
       i.pulseAt = now;
       if (ev.error && !ev.rejected) {
@@ -1070,6 +1085,7 @@ export function apply(ev: WorldEvent) {
       world.stats.errors += ev.errors;
       const i = world.instances.get(ev.id);
       if (!i) break;
+      if (ev.n > 0 || ev.inflight) svcTraffic(i, now);
       if (ev.inflight !== undefined && i.hv) i.hv.inflight = ev.inflight;
       if (ev.n <= 0) {
         // only long requests in flight: keep the halo (and its `N in flight` label) up

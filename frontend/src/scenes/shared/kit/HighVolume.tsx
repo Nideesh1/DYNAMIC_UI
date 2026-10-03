@@ -6,7 +6,7 @@
  *    outcome (allow green, deny red, check yes teal / no amber, route results in 4 accent colours, other grey), with a
  *    slow spark running round it. Smoothed in world.ts (EMA), fades when the agent goes quiet (haloMix).
  *  - <HaloLabel>: `jev 42/s · 3% deny` above the agent (a backend service from `service_stats`: `feed · 42 req/s`,
- *    `· 2% errors` only with errors): rate + share only, re-texted at most ~4x/s and only when it changes. Latency
+ *    `· 2% errors` only with errors; `feed · idle` after 30 s without traffic, world.svcIdle): rate + share only, re-texted at most ~4x/s and only when it changes. Latency
  *    (p50 / p95, in flight) is in the Selected panel and in the label's hover tooltip (`haloHover`, Hud's HaloTip).
  *  - <OrderChip>: a small ticket popping out of the agent for ORDER_LIFE_MS: green BUY/YES, red SELL/NO,
  *    `YES 3 @ 42c`, dashed outline + `paper` when dry_run, grey with a strike-through when rejected / cancelled.
@@ -18,7 +18,7 @@ import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Label3D, type Label3DHandle } from "../Label3D";
-import { flashMix, HALO_CATS, HALO_COLORS, haloMix, hash01, ORDER_LIFE_MS, orderText, presence, selectInstance, world, type OrderUse } from "../world";
+import { flashMix, HALO_CATS, HALO_COLORS, haloMix, hash01, isSvc, ORDER_LIFE_MS, orderText, presence, selectInstance, svcIdle, world, type OrderUse } from "../world";
 import { fit } from "./fit";
 import { labels } from "./labels";
 import { kit, reduced, type KitAgent } from "./state";
@@ -198,9 +198,11 @@ const RETEXT_MS = 250;
 
 /** Mounts the halo label on the agent's first decision_stats. */
 export function HaloLabel({ agent, radius, height }: { agent: KitAgent; radius: number; height: number }) {
-  const [on, setOn] = useState(() => !!agent.inst.hv);
+  // a backend service always has one (`feed · idle` before its first traffic)
+  const want = () => !!agent.inst.hv || (agent.depth === 0 && isSvc(agent.inst));
+  const [on, setOn] = useState(want);
   useFrame(() => {
-    if (!on && agent.inst.hv) setOn(true);
+    if (!on && want()) setOn(true);
   });
   return on ? <HaloLabelOn agent={agent} radius={radius} height={height} /> : null;
 }
@@ -221,17 +223,29 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
   useFrame(({ camera, size: vp }) => {
     const h = agent.inst.hv;
     const o = g.current;
-    if (!h || !o) return;
-    const now = performance.now();
-    // a backend service always shows its label (its name + traffic): the services group reads at a glance
+    // a backend service always shows its label (its name + traffic, or `feed · idle`): the services group reads at a glance
     const svc = agent.depth === 0 && agent.id.startsWith("svc:");
+    if ((!h && !svc) || !o) return;
+    const now = performance.now();
+    const idle = svc && (!h || svcIdle(agent.inst, now));
     const shown = svc || haloTop.has(agent.id) || world.selected === agent.id;
     st.vis += ((shown ? 1 : 0) - st.vis) * 0.15;
     const mix = (svc ? Math.max(0.75, haloMix(h, now)) : haloMix(h, now)) * presence(agent.inst, now) * (1 - 0.5 * agent.dim) * st.vis;
     o.visible = mix > 0.003;
     l.current?.setOpacity(Math.min(1, mix * 1.4) * 0.92, true);
     if (!o.visible) return;
-    if (now - st.at > RETEXT_MS) {
+    if (idle && now - st.at > RETEXT_MS) {
+      st.at = now;
+      // no traffic for a while (world.svcIdle): `feed · idle` until the next request / message
+      if (l.current && (st.key !== "idle" || now - st.setAt > 3000)) {
+        st.key = "idle";
+        st.setAt = now;
+        l.current.setText([
+          { text: `${agent.inst.name} · `, color: TEXT },
+          { text: "idle", color: DIM },
+        ]);
+      }
+    } else if (h && now - st.at > RETEXT_MS) {
       st.at = now;
       const r = h.rate >= 10 ? `${Math.round(h.rate)}` : `${Math.round(h.rate * 10) / 10}`;
       const d = h.deny * 100;
@@ -262,7 +276,7 @@ function HaloLabelOn({ agent, radius, height }: { agent: KitAgent; radius: numbe
     const dist = V1.distanceTo(camera.position) || 1;
     const wpp = pc.isPerspectiveCamera ? (2 * dist * Math.tan(THREE.MathUtils.degToRad(pc.fov) / 2)) / (pc.zoom * vp.height) : 0.01;
     // a service with a ring of tasks / jobs: the label goes above the ring (never across its spokes)
-    const top = h.unit && agent.rings && agent.kidsMax ? agent.ry * (1 + (agent.rings - 1) * 0.9 * agent.cell / Math.max(1e-3, agent.rx, agent.ry)) * fit.spread * (kit.plane === "xz" ? fit.foreshorten : 1) + radius * fit.scale * 0.9 : 0;
+    const top = h?.unit && agent.rings && agent.kidsMax ? agent.ry * (1 + (agent.rings - 1) * 0.9 * agent.cell / Math.max(1e-3, agent.rx, agent.ry)) * fit.spread * (kit.plane === "xz" ? fit.foreshorten : 1) + radius * fit.scale * 0.9 : 0;
     o.position.copy(V1).addScaledVector(CAM_UP, Math.max(R, top) + 5 * wpp);
   });
   return (

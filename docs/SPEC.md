@@ -658,7 +658,8 @@ themes can fizzle it; the HUD logs `api ✕ orders: publish failed`). Frontend: 
 an error flashes the service halo red; `service_stats` drives the same halo as `decision_stats` (arc: ok green, 5xx /
 errors red, 4xx amber) with the label `api · 42 req/s · 2% errors` (`msg/s` for a consumer; the error share only when
 > 0; latency and open requests in the Selected panel and the label's hover tooltip), always shown on a service (it is never one of the
-top-3 decision halo labels); `message` comets between two services draw a persistent edge labelled with the topic
+top-3 decision halo labels). A service with no requests / messages for 30 s (or none since it appeared) is quiet: dimmed
+like an idle run's agents and labelled `api · idle`; its next request / message brightens it and brings the rate back. `message` comets between two services draw a persistent edge labelled with the topic
 (`mkt:tick`, fading 15 s after its last message) with at most one bright comet per ~0.4 s, and a service node is a bit
 bigger than a run's root agent; the HUD counts `N req · M err`. A job (`spawn` with `job: true`) rings its service like
 any subagent, its name label shows the elapsed time from `since` (`mkt:tick · 2m14s`), its halo flashes green when it

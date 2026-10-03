@@ -11,7 +11,7 @@
 import * as THREE from "three";
 import { clusterOf, isExpanded, isRunExpanded, LOD_LANES, lod } from "../lod";
 import { alt, jit } from "../spread";
-import { IDLE_DIM, graphMix, graphShown, isDone, isIdle, mcpWanted, roleScale, world, type AgentType, type Instance } from "../world";
+import { IDLE_DIM, graphMix, graphShown, isDone, isIdle, mcpWanted, roleScale, svcIdle, world, type AgentType, type Instance } from "../world";
 import { fit, fitTick } from "./fit";
 import { radial, type LayoutPreset, type Point2, type PresetCtx, type Slot2 } from "./presets";
 import { kit, nextUid, planePoint, reduced, type KitAgent, type KitBackend, type KitMcp, type KitRun } from "./state";
@@ -799,8 +799,9 @@ export function kitTick(now = performance.now()) {
     const r = a.run;
     a.pos.copy(r.origin).addScaledVector(r.side, a.eu - r.cu).addScaledVector(r.axis, a.ev - r.cv);
     a.live.copy(a.pos);
-    // finished agents dim fully, an idle run's agents part way (server `run idle`)
-    const dw = isDone(a.inst) ? 1 : isIdle(a.run.run) ? IDLE_DIM : 0;
+    // finished agents dim fully, an idle run's agents part way (server `run idle`), and so does a backend service
+    // with no traffic for a while (world.svcIdle); it brightens again on its next request / message
+    const dw = isDone(a.inst) ? 1 : isIdle(a.run.run) || (a.depth === 0 && svcIdle(a.inst, now)) ? IDLE_DIM : 0;
     a.dim = reduced ? dw : a.dim + (dw - a.dim) * Math.min(1, dt / DIM_S);
   }
   for (const lane of activeLanes) {
@@ -853,6 +854,8 @@ export function kitExtents(visit: (p: THREE.Vector3, r: number) => void, agentRa
     // member is drawn (kidsMax never shrinks), so children coming and going never re-frame the camera
     const kids = a.depth === 1 && a.sibs >= RING_BIG && a.kidsMax > 0 ? (a.foot - FOOT) * fit.spread : 0;
     visit(a.target, agentRadius * a.scale + kids);
+    // the camera keeps the largest agent at a sane on-screen size (FitProfile.maxNode); leaving agents don't count
+    if (!a.inst.exitAt) fit.nodeR = Math.max(fit.nodeR, agentRadius * a.scale);
     // room for its decision label below and its halo label above (px-sized: world size at the fitted distance)
     const r = agentRadius * a.scale * 1.3;
     planePoint(a2(a.target), b2(a.target) - r - (LABEL_BELOW_PX * fit.wpp) / fit.foreshorten, _x);

@@ -18,6 +18,9 @@
  *              fit seen in it; zoom IN only when the gain is > IN_BAND and content has been stable IN_STABLE_MS,
  *              slowly (IN_MS). Between the bands nothing moves (hysteresis: no oscillation). Exiting agents keep
  *              counting until faded, so an exit never zooms in right away.
+ *   node cap   FitProfile.maxNode: never closer than the distance at which the largest agent's framed diameter is
+ *              that fraction of the viewport height (a lone service is not a sun filling half the screen). A floor
+ *              only: busy scenes are framed by their spread well beyond it.
  *   first      the first content after an empty scene is framed right away (zoom in or out, one OUT_MS move), so a
  *              run never stays small at the theme's start distance.
  *   clipped    content (or a framed label) that ends up under a HUD panel / off the canvas at the current framing
@@ -45,9 +48,18 @@ export type FitProfile = {
   maxRadius: number;
   /** breathing room around the framed content (multiplier) */
   margin: number;
+  /**
+   * largest on-screen agent: its framed diameter (2 * agentRadius * scale) never exceeds this fraction of the
+   * viewport height, so one or two nodes sit at a normal size with room around them instead of filling the screen.
+   * Only ever zooms OUT (a minimum camera distance); many agents are framed by their spread long before this binds.
+   */
+  maxNode: number;
 };
 
-export const DEFAULT_FIT: FitProfile = { nRef: 4, min: 0.6, max: 1.6, minRadius: 5, maxRadius: 80, margin: 1.12 };
+/** default FitProfile.maxNode: an agent's framed diameter is at most 8% of the viewport height */
+export const MAX_NODE_FRAC = 0.08;
+
+export const DEFAULT_FIT: FitProfile = { nRef: 4, min: 0.6, max: 1.6, minRadius: 5, maxRadius: 80, margin: 1.12, maxNode: MAX_NODE_FRAC };
 
 export const fit = {
   scale: 1,
@@ -70,6 +82,8 @@ export const fit = {
   cam: { want: 0, fit: 0, dist: 0, user: 1, points: 0 },
   /** how much of the free area the content's screen bounds fill [x, y] (debug / verification) */
   fill: [0, 0] as [number, number],
+  /** largest framed agent radius (world) seen by the last framing pass (kitExtents): drives FitProfile.maxNode */
+  nodeR: 0,
   /** world units per css px at the fitted camera distance (px-clamped labels: world size = px * wpp) */
   wpp: 0.05,
   /** screen shrink of a stage "up" (b) step: 1 for xy stages, |sin(elevation)| for a tilted xz ground plane */
@@ -380,6 +394,7 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
     B.n = 0;
     B.tgt.copy(tgt);
     B.tpp = (2 * tanH) / H;
+    fit.nodeR = 0;
     points(visit);
     visitLabelRects(now, visitLabel);
     const n = B.n;
@@ -401,6 +416,9 @@ export function FitCamera({ points, origin }: { points: (visit: (p: THREE.Vector
         }
         desired = THREE.MathUtils.clamp(hi, minD, maxD);
       } else desired = maxD;
+      // never so close that an agent gets huge (a lone service node as a sun filling half the screen): diameter
+      // 2r over a viewport height 2 * d * tanH stays <= maxNode. Only a floor: wide content already sits further out.
+      if (fit.nodeR > 0 && P.maxNode > 0) desired = Math.max(desired, Math.min(maxD, fit.nodeR / (tanH * P.maxNode)));
     }
     // content (or a label) outside the free area as framed now: under a HUD panel or off the canvas. Counts as
     // "needs zoom-out" (batched like any zoom-out), and the move re-centres the projection shift.
