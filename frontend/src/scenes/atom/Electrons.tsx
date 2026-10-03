@@ -284,9 +284,8 @@ export function Electron({ agent, selected, onSelect }: AgentSlotProps) {
     const u = m.field.uniforms;
     u.uP0.value.copy(s.par);
     u.uP2.value.copy(live);
-    // subagent trunk along the run's fan axis, then out to the child
-    if (sub) s.ctrl.copy(s.par).addScaledVector(agent.run.axis, 1.2 * fit.spread);
-    else bow(s.par, live, 1.4, s.ctrl);
+    // subagents encircle their parent: near-straight spokes; others bow
+    bow(s.par, live, sub ? 0.3 : 1.4, s.ctrl);
     u.uP1.value.copy(s.ctrl);
     const gl = easeInOut((now - inst.bornAt) / 900);
     u.uGrow.value = inst.parent && s.linkK > 0.01 ? gl : 0;

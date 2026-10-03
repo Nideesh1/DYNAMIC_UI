@@ -43,6 +43,17 @@ export type KitAgent = {
   sibs: number;
   /** most children this agent has had at once while visible (sibling fans never collapse while fading) */
   kidsMax: number;
+  /** its subagents' ring (layout.ts, unscaled local units): first ring radii, ring count, neighbour gap; its
+   *  footprint radius (itself + every ring below it) and its largest child's footprint */
+  rx: number;
+  ry: number;
+  rings: number;
+  cell: number;
+  foot: number;
+  kidFoot: number;
+  /** where its ring starts (fraction of a step) and the frame that was computed in (layout.ts) */
+  ringOff: number;
+  ringAt: number;
   /** set false after the first layout (pos snaps to target instead of easing) */
   fresh: boolean;
   /**
@@ -83,6 +94,10 @@ export type KitRun = {
   fresh: boolean;
   /** visible agents in this run (updated each layout pass) */
   members: number;
+  /** largest footprint radius of its top-level agents (layout.ts, unscaled): their spacing on the run line */
+  foot: number;
+  /** top-level agents drawn in it (layout.ts) */
+  tops: number;
   /** footprint scratch (internal) */
   u0: number;
   u1: number;

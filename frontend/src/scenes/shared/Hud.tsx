@@ -7,7 +7,7 @@ import { sendApproval, startLiveRun, useApproveAvailable, useRunAvailable, useRu
 import { collapseLanes, setShowAll, useLod } from "./lod";
 import { THEMES } from "../../themes";
 import { decisionTint } from "./kit/DecisionGlyph";
-import { decisionText, getInstance, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
+import { decisionText, getInstance, haltedNow, kindBadge, providerBadge, whyBadge, haloText, HALO_CATS, HALO_COLORS, hvActive, isDeny, isDone, isLive, orderText, routeSlots, selectInstance, stepChips, TYPE_COLOR, useWorld, waitLabel, waitSeconds, world, type Instance, type Run, type WorldEvent } from "./world";
 
 export const SCENES = THEMES; // theme nav = every registered theme
 
@@ -49,7 +49,7 @@ export function describe(e: WorldEvent): string {
     case "skill":
       return e.status === "start" ? `${short(e.id)} · skill: ${e.name}` : `${short(e.id)} · skill: ${e.name} done`;
     case "decision":
-      return `${short(e.id)} · ${decisionText(e)} · ${Math.round(e.ms)}ms${e.why ? ` · ${e.why}` : ""}`;
+      return `${short(e.id)} · ${decisionText(e)} · ${Math.round(e.ms)}ms${e.why ? ` · ${whyBadge(e.why)}` : ""}${e.scope === "global" ? " · desk-wide" : ""}`;
     case "decision_stats":
       return `${short(e.id)} · ${e.n} decisions in ${Math.round(e.window_ms)}ms`;
     case "order":
@@ -145,6 +145,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
   const canApprove = useApproveAvailable();
   const w = useWorld();
   const lastDec = w.ticker.find((e): e is Extract<WorldEvent, { type: "decision" }> => e.type === "decision");
+  const halt = haltedNow();
   const [, tick] = useState(0);
   const [info, setInfo] = useState(false); // the theme legend lives behind the (i) toggle
   const [side, setSide] = useState(loadSide);
@@ -280,10 +281,15 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
                   <b>{graph}</b> graph
                 </span>
               )}
+              {halt && (
+                <span className="hud-stat hud-halt" title={`desk-wide halt on ${halt.id ? short(halt.id) : "the desk"}: a global guard said no (${[...halt.qs].filter(([, no]) => no).map(([q]) => q).join(", ")}); its agents' own denies only flash their halos`}>
+                  <b>HALTED</b> · {halt.reason}
+                </span>
+              )}
               {w.stats.decisions > 0 && w.rate.perS > 2 && (
                 <span
-                  className={`hud-stat hud-dec-hv${w.rate.deny > 0.05 ? " is-deny" : ""}`}
-                  title={`decisions per second (last 60 s)\n${w.stats.decisions} decisions in total\n${[...w.decisionProviders].map(([p, v]) => `${p}: ${v.n}`).join("\n")}`}
+                  className={`hud-stat hud-dec-hv${w.rate.deny > 0.05 && !halt ? " is-deny" : ""}`}
+                  title={`decisions per second (last 60 s)\n${w.stats.decisions} decisions in total\n${[...w.decisionProviders].map(([p, v]) => `${providerBadge(p)}: ${v.n}`).join("\n")}`}
                 >
                   <b>{Math.round(w.rate.perS)}/s</b> · deny {(w.rate.deny * 100).toFixed(w.rate.deny < 0.1 ? 1 : 0)}% · {Math.round(w.rate.p50)}/{Math.round(w.rate.p95)} ms
                   <Sparkline data={w.rate.spark} />
@@ -293,7 +299,7 @@ function HudPanels({ title, subtitle, onClose, inset, children }: { title: strin
                 <span
                   key={w.stats.decisions} // re-mounts on every decision: the chip pulses once
                   className={`hud-stat hud-dec${lastDec && isDeny(lastDec) ? " is-deny" : ""}`}
-                  title={[...w.decisionProviders].map(([p, v]) => `${p}: ${v.n} · avg ${Math.round(v.ms / v.n)} ms`).join("\n")}
+                  title={[...w.decisionProviders].map(([p, v]) => `${providerBadge(p)}: ${v.n} · avg ${Math.round(v.ms / v.n)} ms`).join("\n")}
                 >
                   <b>{w.stats.decisions}</b> decisions · avg {Math.round(w.stats.decisionMs / w.stats.decisions)} ms
                 </span>
@@ -421,7 +427,7 @@ function EventLog() {
           <>
             <i />
             {e.type === "skill" && <b className="hs-skill">{e.status === "start" ? "skill" : "skill done"}</b>}
-            {e.type === "decision" && <b className="hs-dec">{isDeny(e) ? "deny" : e.kind}</b>}
+            {e.type === "decision" && <b className="hs-dec">{isDeny(e) ? "DENY" : kindBadge(e.kind)}</b>}
             <span>{describe(e)}</span>
           </>
         );
@@ -883,8 +889,8 @@ function AgentDetail({ i }: { i: Instance }) {
           <h4>{i.hv ? "Interesting decisions" : "Decisions"}</h4>
           <ul className="ap-decisions">
             {[...i.decisions].reverse().map((d, k) => (
-              <li key={k} className={isDeny(d) ? "is-deny" : undefined} style={{ ["--c" as string]: decisionColor(d) }} title={d.options?.map((o) => `${o.name} ${Math.round(o.p * 100)}%`).join("\n") || d.question}>
-                <b>{d.why || d.kind}</b>
+              <li key={k} className={isDeny(d) ? "is-deny" : undefined} style={{ ["--c" as string]: decisionColor(d) }} title={`${kindBadge(d.kind)} · ${providerBadge(d.provider)} · ${d.question}${d.options?.length ? "\n" + d.options.map((o) => `${o.name} ${Math.round(o.p * 100)}%`).join("\n") : ""}`}>
+                <b>{d.why ? whyBadge(d.why) : isDeny(d) ? "DENY" : kindBadge(d.kind)}</b>
                 <span>{decisionText(d)}</span>
                 <em>{Math.round(d.ms)}ms</em>
               </li>

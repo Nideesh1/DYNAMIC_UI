@@ -1160,7 +1160,7 @@ class Mapper:
         if opts:
             ev["options"] = opts
         ev["provider"] = decision_text(a.get(DECISION_KEY + ".provider"), 40) or "llm"
-        for k in ("purpose", "target"):
+        for k in ("purpose", "target", "scope"):
             v = decision_text(a.get(f"{DECISION_KEY}.{k}"), 40)
             if v:
                 ev[k] = v

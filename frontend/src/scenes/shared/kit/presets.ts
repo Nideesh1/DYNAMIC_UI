@@ -4,7 +4,7 @@
  * The kit maps the 2D plane onto the theme's stage plane ("xy" or "xz"), centres every run on its anchor,
  * scales spacing by fit.spread and frames the camera. A preset never sees instances; only counts and extents.
  *
- *   radial  runs on a ring around the centre, subagents fan outward (1 run = centred, fanning down).
+ *   radial  runs on a ring around the centre (1 run = centred); subagents encircle their parent (layout.ts rings).
  *           Stretched to the free area's aspect. neural, orbit, atom, constellation.
  *   drift   radial with looser spacing (themes add their own drift to `live`). flow.
  *
@@ -17,11 +17,11 @@ import { fit } from "./fit";
 export type LocalStyle = {
   /** spacing between top-level agents of a run along its side line (planner | researcher | writer) */
   topGap: number;
-  /** distance from a parent to its subagents along the run axis */
+  /** distance from a parent to its subagents (smallest ring radius, layout.ts) */
   fanLen: number;
-  /** lateral gap between sibling subagents ("spread") */
+  /** gap between sibling subagents (ring spacing is a multiple of it) */
   subGap: number;
-  /** "spread": siblings side by side in a fan; "stack": siblings one behind the other along the axis (spurs) */
+  /** legacy fan style: subagents are always laid out on rings round their parent now (kept for custom presets) */
   fan: "spread" | "stack";
   /** axis gap between stacked siblings ("stack") */
   stackGap: number;

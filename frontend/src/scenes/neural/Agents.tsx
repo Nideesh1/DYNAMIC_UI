@@ -101,9 +101,8 @@ export function Soma({ agent, onSelect }: AgentSlotProps) {
     const pp = inst.parent ? agentLive(inst.parent) : undefined;
     if (pp) s.p0.copy(pp), (s.p0set = true);
     else if (!s.p0set) s.p0.copy(live), (s.p0set = true);
-    // subagents: shared trunk along the run's fan axis, then branch out; others bow gently
-    if (isScout(inst.type) || inst.subagent) s.p1.copy(s.p0).addScaledVector(agent.run.axis, 1.7 * fit.spread);
-    else bowControl(s.p0, live, 0.6, s.p1);
+    // straight-ish spokes out of the parent (subagents encircle it), others bow gently
+    bowControl(s.p0, live, isScout(inst.type) || inst.subagent ? 0.25 : 0.6, s.p1);
 
     // ---- lifecycle
     const tb = (now - inst.bornAt) / 1000;

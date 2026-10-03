@@ -9,6 +9,10 @@
  * market agents are busy, so their decisions are aggregated into one `decision_stats` per agent per second and only
  * interesting ones (guard deny > route flip > low-confidence guard 0.4..0.6) are sent individually (`hv: true`, `why`),
  * at most CAP per second, best first, round-robin across agents. Desk agents decide rarely: individual events.
+ *
+ * Once per session (~HALT_AT_S in) the desk trips its kill switch for HALT_S: a desk-wide guard
+ * (`scope: "global"`, docs/SPEC.md "Decisions") that every market also reports while it lasts.
+ * URL knobs: `markets=12` (how many market agents, default 30), `halt=25` (seconds until the kill switch, 0 = never).
  */
 import { apply, setSimulated, type WorldEvent } from "./world";
 
@@ -22,6 +26,11 @@ const MARKETS = [
   "KXNBAGAME1", "KXNBAGAME2", "KXNHLGAME1", "KXMLBGAME1", "KXMLBGAME2", "KXNFLSPRD", "KXNBATOT", "KXNHLTOT", "KXMLBTOT", "KXWNBA1",
 ];
 const STRATS = ["hold", "quote", "take"];
+const HALT_S = 6;
+const knob = (k: string, d: number) => {
+  const v = typeof location !== "undefined" ? Number(new URLSearchParams(location.search).get(k) ?? NaN) : NaN;
+  return Number.isFinite(v) && v >= 0 ? v : d;
+};
 
 const rnd = Math.random;
 const r3 = (x: number) => Math.round(x * 1000) / 1000;
@@ -62,13 +71,16 @@ export function runHfSimulator(): () => void {
   const later = (ms: number, f: () => void) => timers.push(window.setTimeout(() => !stopped && f(), ms));
 
   // ---- spawn the desk and its market agents (staggered so the spawns read)
+  const nMarkets = Math.max(1, Math.min(MARKETS.length, Math.round(knob("markets", MARKETS.length))));
+  const haltAt = knob("halt", 25) * 1000;
+  let halted = false;
   const run = "hf-desk";
   const desk = `${run}:desk`;
-  emit({ type: "run", run_id: run, status: "started", topic: "Kalshi desk · 30 markets (paper)", workflow: "market_desk", ts: ts() });
+  emit({ type: "run", run_id: run, status: "started", topic: `Kalshi desk · ${nMarkets} markets (paper)`, workflow: "market_desk", ts: ts() });
   emit({ type: "spawn", run_id: run, id: desk, agent: "desk", parent_id: null, ts: ts() });
   emit({ type: "agent", run_id: run, id: desk, status: "thinking", ts: ts() });
   desks.push({ id: desk, run, next: performance.now() + 2000 + rnd() * 3000 });
-  MARKETS.forEach((m, j) => {
+  MARKETS.slice(0, nMarkets).forEach((m, j) => {
     later(300 + j * 90, () => {
       const id = `${run}:${m}`;
       emit({ type: "spawn", run_id: run, id, agent: m, parent_id: desk, subagent: true, ts: ts() });
@@ -91,6 +103,11 @@ export function runHfSimulator(): () => void {
     if (why) cands.push({ score: why === "deny" ? 3 : why === "flip" ? 2 : 1, ts: ts(), agent: m.id, ev: { type: "decision", run_id: m.run, id: m.id, ...body, ts: ts(), hv: true, why } });
   };
   const tickMarket = (m: Market) => {
+    if (halted) {
+      // stale feed: the market reports the desk-wide guard, nothing else
+      decide(m, { kind: "noul", question: "feed fresh", result: "no", p: 1, provider: "code", purpose: "guard", target: "quote", scope: "global", ms: 0 }, "deny");
+      return;
+    }
     // route: strategy, sticky; a flip now and then
     const flip = rnd() < 0.06;
     if (flip) m.strat = STRATS.filter((s) => s !== m.strat)[Math.floor(rnd() * 2)];
@@ -169,6 +186,12 @@ export function runHfSimulator(): () => void {
         const ok = rnd() < 0.85;
         emit({ type: "decision", run_id: d.run, id: d.id, kind: "noul", question: "exposure within limits?", result: ok ? "yes" : "no", p: r3(0.7 + rnd() * 0.29), provider: prov, purpose: "check", target: "desk book", ms, ts: ts() });
       }
+    }
+    // the kill switch: once, HALT_S long
+    const on = haltAt > 0 && now - t0 >= haltAt && now - t0 < haltAt + HALT_S * 1000;
+    if (on !== halted) {
+      halted = on;
+      emit({ type: "decision", run_id: run, id: desk, kind: "noul", question: "kill switch off", result: on ? "no" : "yes", p: 1, provider: "code", purpose: "guard", target: "all markets", scope: "global", ms: 0, ts: ts() });
     }
     if (now - lastFlush >= 1000) {
       lastFlush = now;

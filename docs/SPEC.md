@@ -207,7 +207,7 @@ SDK provider = no-op. Context in contextvars (asyncio tasks created inside inher
 | `graph(op, nodes, system="graph")` | `db <op>` | `db.system`, `agentglow.db.op`, `agentglow.graph.nodes` |
 | `skill(name)` / `Agent.skill(name)` | tool span `<name>` | as `tool` + `agentglow.skill=name` (skill badge on the current agent while the block runs) |
 | `decision(kind, question, result=None, p=None, options=None, provider="llm", purpose=None, target=None)` / `Agent.decision(...)` | `decision <kind>` | the "Decisions" attributes; `.record(result, p, options, target)` sets the outcome before the block ends; a bool `result` → `yes`/`no`; `options` = `{name: p}` or `[(name, p)]` |
-| `decided(kind, question, result, p, ..., latency_ms=0, important=False)` / `Agent.decided(...)` | `decision <kind>` (backdated) | one finished decision in one call; `important=True` sets `agentglow.decision.important` (also on `decision(...)`) |
+| `decided(kind, question, result, p, ..., latency_ms=0, important=False, scope=None)` / `Agent.decided(...)` | `decision <kind>` (backdated) | one finished decision in one call; `important=True` sets `agentglow.decision.important`, `scope="global"` sets `agentglow.decision.scope` (both also on `decision(...)`) |
 | `order(side, qty, price=None, status="would_place", instrument=None, dry_run=True, reason=None)` / `Agent.order(...)` | `order <side>` (finished at once) | the "Orders" attributes |
 | `@traced_agent(name)`, `@traced_tool(name, capture_args=False)` | per call | as `agent` / `tool`; args recorded only with `capture_args=True` |
 
@@ -229,9 +229,10 @@ duration) with these attributes (all set at start or by end; the event is emitte
 | `agentglow.decision.provider` | `jev` \| `laya` \| `llm` \| any short label (default `llm`) |
 | `agentglow.decision.purpose` | optional `route` \| `guard` \| `check` (or any short label) |
 | `agentglow.decision.target` | optional: the tool being gated, the model routed to, ... |
+| `agentglow.decision.scope` | optional `global`: a desk-wide guard (kill switch, daily loss cap, stale feed) that halts everything below the deciding agent, not just its own action |
 
 World event: `{"type": "decision", "run_id", "id": <owning agent instance id>, "kind", "question", "result", "p",
-"options"?, "provider", "purpose"?, "target"?, "ms", "ts"}` (`ms` = span duration, `p` rounded to 3 places (if missing: the result's option p, else omitted),
+"options"?, "provider", "purpose"?, "target"?, "scope"?, "ms", "ts"}` (`ms` = span duration, `p` rounded to 3 places (if missing: the result's option p, else omitted),
 `options` only when given). A decision span is not an agent, LLM or tool itself: an LLM-as-judge call nested inside it
 still pulses as an LLM turn of the same agent. Scrub: `question` secrets redacted, whitespace collapsed, max 80 chars;
 `result`, `provider`, `purpose`, `target` and option names the same, max 40 chars; `p` clamped to 0..1.
@@ -239,6 +240,18 @@ Python: `agentglow.decision(...)` / `agentglow.decided(...)` (Manual API). Front
 ~1.6 s) overlay on the agent in every theme: choice = a fan of option rays (winner bright, thickness ~ p); noul = a
 gate that flicks green or slams red (a `guard` `no` is a red X: `guard: deny <target> 97%`); score = a gauge arc. The
 HUD counts decisions (`N decisions · avg X ms`, per provider in the tooltip) and the agent panel lists recent ones.
+Display names (HUD, labels; the events keep the raw values): kind `noul` = YES/NO, `choice` = PICK, `score` = SCORE;
+provider `code` = rule; `why` important = key, flip = changed mind, low_p = unsure, deny = DENY.
+A guard deny's red X + shockwave is capped on screen (~45 px X, ~70 px shockwave) and plays one at a time: a deny while
+another one shows gets a small red X badge on its agent instead (no label) and flashes the agent's halo red.
+
+**Desk-wide guards (`scope: "global"`).** A guard with `scope` `global` (e.g. a trading desk's kill switch) is shown
+ONCE, as a halted state on the topmost agent that reports global guards (the desk): it turns red with a ring and a
+`HALTED · <reason>` banner (`N agents paused`), and the HUD shows a `HALTED · <reason>` chip. The reason is the
+question minus a trailing `off` / `ok` / `?` (an `important` deny's question wins: `kill switch off` -> `kill switch`).
+Agents below it that report the same guard (`feed fresh: no` per market) get no glyph: their halo flashes red. The halt
+ends when every global guard the owner said no to says yes again (or the owner / its run ends). Global decisions
+still count in the stats and are listed in the agent panel.
 
 ### High volume (backend `hv.py`)
 Long-lived agents can decide tens of times per second (e.g. 40 market agents gating every 1 s tick). Per-decision events
